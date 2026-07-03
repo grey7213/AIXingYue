@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>信息中心 · AI星月</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
+  <link rel="icon" href="/favicon.ico">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/app/assets/css/app.css">
+  <script type="module" src="/app/assets/js/hub-pages.js?v=20260626-ass12"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+</head>
+<body class="min-h-screen">
+  <div class="xy-stars-bg"></div>
+  <div class="xy-meteor"></div>
+
+  <div class="app-shell" x-data="infoPage()" x-init="init()" x-cloak>
+    <aside class="app-sidebar" data-app-sidebar></aside>
+    <main class="app-main">
+      <header class="app-topbar">
+        <h1 x-text="infoValue('info_topbar_title', '信息中心')">信息中心</h1>
+        <div class="grow"></div>
+        <a href="/download/ai-xingyue-latest.apk" class="xy-btn xy-btn-primary text-sm" x-text="infoValue('info_download_button_text', '下载 APK')">下载 APK</a>
+      </header>
+      <section class="app-page-pad max-w-5xl mx-auto space-y-5">
+        <div class="app-hero__panel">
+          <div class="app-hero__eyebrow" x-text="infoValue('info_eyebrow', 'AI星月 APK 同步状态')">AI星月 APK 同步状态</div>
+          <h2 class="app-hero__title whitespace-pre-line" x-text="infoValue('info_title', '网页与 APK\n同账号 · 同积分 · 同角色库。')">网页与 APK
+同账号 · 同积分 · 同角色库。</h2>
+          <p class="app-hero__copy" x-text="infoValue('info_copy', '当前站点保持本地库模式，角色封面走本站媒体缓存，不依赖上游可用性，国内访问也很顺畅。')">当前站点保持本地库模式，角色封面走本站媒体缓存，不依赖上游可用性，国内访问也很顺畅。</p>
+        </div>
+        <div class="stat-grid">
+          <div class="stat-card"><div class="num" x-text="stats?.apps?.upstream || 0"></div><div class="label" x-text="infoValue('info_stat_upstream_label', '上游本地化角色')">上游本地化角色</div></div>
+          <div class="stat-card"><div class="num" x-text="stats?.apps?.user || 0"></div><div class="label" x-text="infoValue('info_stat_user_label', '用户角色')">用户角色</div></div>
+          <div class="stat-card"><div class="num" x-text="stats?.favorites || 0"></div><div class="label" x-text="infoValue('info_stat_favorites_label', '你的收藏')">你的收藏</div></div>
+          <div class="stat-card"><div class="num" x-text="stats?.conversations || 0"></div><div class="label" x-text="infoValue('info_stat_conversations_label', '你的会话')">你的会话</div></div>
+        </div>
+      </section>
+    </main>
+    <nav class="app-bottom-nav" data-app-bottom-nav></nav>
+  </div>
+</body>
+</html>

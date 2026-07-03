@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>历史会话 · AI星月</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
+  <link rel="icon" href="/favicon.ico">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/app/assets/css/app.css">
+  <script type="module" src="/app/assets/js/hub-pages.js?v=20260626-ass12"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+</head>
+<body class="min-h-screen">
+  <div class="xy-stars-bg"></div>
+
+  <div class="app-shell" x-data="historiesPage()" x-init="init()" x-cloak>
+    <aside class="app-sidebar" data-app-sidebar></aside>
+    <main class="app-main">
+      <header class="app-topbar"><h1 x-text="appNavText('histories', '历史会话')">历史会话</h1><div class="grow"></div><a href="/app/" class="xy-btn xy-btn-primary text-sm" x-text="emptyText('histories_cta_text', '＋ 新对话')">＋ 新对话</a></header>
+      <section class="app-page-pad max-w-5xl mx-auto">
+        <div class="list-panel">
+          <template x-if="!loading && conversations.length === 0">
+            <div class="p-10 text-center text-violet-200/70">
+              <div x-text="emptyText('histories_empty_title', '还没有历史会话')">还没有历史会话</div>
+              <a href="/app/" class="xy-link mt-2 inline-flex" x-text="emptyText('histories_empty_hint', '去首页选个角色吧')">去首页选个角色吧</a>
+            </div>
+          </template>
+          <template x-for="c in conversations" :key="c.id">
+            <a class="list-row text-inherit no-underline" :href="`/app/chat.html?app_id=${encodeURIComponent(c.app_id || '')}`">
+              <img :src="c.app_icon || '/assets/img/apk/avatar.webp'" alt="" onerror="this.src='/assets/img/apk/avatar.webp'">
+              <div class="min-w-0">
+                <div class="title truncate" x-text="c.app_name || c.title || chatText('unnamed_conversation', '未命名会话')"></div>
+                <div class="meta truncate" x-text="c.last_message || chatText('continue_preview', '点击继续对话')"></div>
+              </div>
+              <div class="row-actions"><span class="xy-btn xy-btn-ghost text-xs" x-text="chatText('continue_preview', '继续')">继续</span></div>
+            </a>
+          </template>
+        </div>
+      </section>
+    </main>
+    <nav class="app-bottom-nav" data-app-bottom-nav></nav>
+  </div>
+</body>
+</html>

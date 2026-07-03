@@ -1,0 +1,300 @@
+// AI星月 用户面板 Alpine.js 应用
+import { api, getToken, setToken, clearAuth, getCachedUser, setCachedUser, formatDateTime, ApiError } from '/assets/js/api.js';
+
+function dashboard() {
+  return {
+    view: 'login',
+    loading: false,
+    toast: null,
+    toastTimer: null,
+    loggedIn: false,
+    user: null,
+    points: null,
+    balance: { free_points: 0, paid_points: 0, reward_points: 0, points: 0 },
+    deposit: null,
+    lastRefreshed: null,
+    isAdmin: false,
+    loginForm: { email: '', password: '' },
+    registerForm: { email: '', code: '', name: '', password: '' },
+    redeemCode: '',
+    sendingCode: false,
+    codeCountdown: 0,
+    countdownTimer: null,
+    siteSettings: null,
+
+    async init() {
+      await this.loadSiteSettings();
+      if (getToken()) {
+        const cached = getCachedUser();
+        if (cached) this.user = cached;
+        await this.loadProfile();
+      }
+    },
+
+    async loadSiteSettings() {
+      try {
+        const r = await api.siteSettings();
+        this.siteSettings = r?.data || r || null;
+        this.applyStaticDashboardCopy();
+      } catch {
+        this.siteSettings = null;
+      }
+    },
+
+    applyStaticDashboardCopy() {
+      if (!this.siteSettings || typeof document === 'undefined') return;
+      document.querySelectorAll('[data-dashboard-text]').forEach(el => {
+        const path = String(el.getAttribute('data-dashboard-text') || '').split('.');
+        if (path.length !== 2) return;
+        const value = this.siteSettings?.[path[0]]?.[path[1]];
+        if (value) el.textContent = value;
+      });
+    },
+
+    siteText(section, key, fallback = '') {
+      return this.siteSettings?.[section]?.[key] || fallback;
+    },
+
+    authText(key, fallback = '') {
+      return this.siteText('auth', key, fallback);
+    },
+
+    dashboardText(key, fallback = '') {
+      return this.siteText('dashboard', key, fallback);
+    },
+
+    depositText(key, fallback = '') {
+      return this.deposit?.[key] || this.siteText('deposit', key, fallback);
+    },
+
+    formatTemplate(template, values = {}) {
+      return String(template || '').replace(/\{(\w+)\}/g, (_, key) => values[key] ?? '');
+    },
+
+    dailyCheckinSubtitle() {
+      const points = parseInt(this.siteSettings?.rewards?.daily_points || 10, 10);
+      return this.formatTemplate(this.dashboardText('daily_points_template', '+{points} 积分'), { points });
+    },
+
+    paymentNote() {
+      return this.deposit?.aifadian_url
+        ? this.depositText('payment_note_available', '兑换码只能使用一次，请确认当前登录账号。')
+        : this.depositText('payment_note_unavailable', '购买链接暂未配置，请联系站长手动获取兑换码。');
+    },
+
+    showToast(message, type = 'info', duration = 2800) {
+      if (this.toastTimer) clearTimeout(this.toastTimer);
+      this.toast = { message, type };
+      this.toastTimer = setTimeout(() => { this.toast = null; }, duration);
+    },
+
+    formatDate(ts) {
+      if (!ts) return '-';
+      return formatDateTime(ts).split(' ')[0];
+    },
+
+    formatTime(ts) {
+      if (!ts) return '-';
+      return formatDateTime(ts);
+    },
+
+    async loadProfile() {
+      try {
+        const profile = await api.profile();
+        this.user = profile;
+        setCachedUser(profile);
+        this.loggedIn = true;
+        await this.refreshPoints();
+        await this.checkAdmin();
+      } catch (err) {
+        if (err instanceof ApiError && err.code === 401) {
+          clearAuth();
+          this.loggedIn = false;
+          this.isAdmin = false;
+          this.syncStore();
+        } else {
+          this.showToast(err.message || '加载用户信息失败', 'error');
+        }
+      }
+    },
+
+    async checkAdmin() {
+      // 静默探测 - 普通用户会得到 403，不显示报错
+      try {
+        await api.admin.whoami();
+        this.isAdmin = true;
+      } catch (err) {
+        this.isAdmin = false;
+      }
+      this.syncStore();
+    },
+
+    syncStore() {
+      // 同步管理员状态到 Alpine 全局 store，供顶栏读取
+      if (window.Alpine && window.Alpine.store) {
+        window.Alpine.store('user', { isAdmin: this.isAdmin, loggedIn: this.loggedIn });
+      }
+    },
+
+    async refreshPoints() {
+      try {
+        const result = await api.credits().catch(() => api.points());
+        const data = result.data || result;
+        this.balance = this.normalizeBalance(data.balance || data);
+        this.deposit = data.deposit || this.deposit;
+        this.points = this.balance.points;
+        this.lastRefreshed = Date.now();
+      } catch (err) {
+        this.showToast(this.dashboardText('points_failed_text', '获取积分失败'), 'error');
+      }
+    },
+
+    normalizeBalance(data) {
+      const b = data || {};
+      return {
+        free_points: parseInt(b.free_points || 0, 10),
+        paid_points: parseInt(b.paid_points || b.normal_points || b.regular_points || 0, 10),
+        reward_points: parseInt(b.reward_points || 0, 10),
+        points: parseInt(b.points || b.total_points || 0, 10),
+      };
+    },
+
+    openAifadian() {
+      const url = this.deposit?.aifadian_url;
+      if (url) {
+        window.open(url, '_blank', 'noopener,noreferrer');
+      } else {
+        this.showToast(this.dashboardText('aifadian_missing_text', this.depositText('support_text', '暂未配置爱发电购买链接，请联系站长获取兑换码')), 'error');
+      }
+    },
+
+    async doLogin() {
+      this.loading = true;
+      try {
+        const result = await api.login(this.loginForm.email.trim(), this.loginForm.password);
+        const token = result.data || result;
+        if (typeof token !== 'string') throw new Error(this.authText('login_invalid_response_text', '登录响应无效'));
+        setToken(token);
+        this.showToast(this.authText('login_success_text', '登录成功'), 'success');
+        await this.loadProfile();
+      } catch (err) {
+        this.showToast(err.message || this.authText('login_failed_text', '登录失败'), 'error');
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async sendCode() {
+      const email = this.registerForm.email.trim();
+      if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+        this.showToast(this.authText('invalid_email_text', '请输入正确的邮箱地址'), 'error');
+        return;
+      }
+      this.sendingCode = true;
+      try {
+        await api.sendEmailCode(email);
+        this.showToast(this.authText('code_sent_text', '验证码已发送，请查收邮件'), 'success');
+        this.codeCountdown = 60;
+        this.countdownTimer = setInterval(() => {
+          this.codeCountdown--;
+          if (this.codeCountdown <= 0) clearInterval(this.countdownTimer);
+        }, 1000);
+      } catch (err) {
+        this.showToast(err.message || this.authText('send_failed_text', '发送失败'), 'error');
+      } finally {
+        this.sendingCode = false;
+      }
+    },
+
+    async doRegister() {
+      this.loading = true;
+      try {
+        const result = await api.register(
+          this.registerForm.email.trim(),
+          this.registerForm.password,
+          this.registerForm.code.trim(),
+          this.registerForm.name.trim(),
+        );
+        const token = result.data || result;
+        if (typeof token !== 'string') throw new Error(this.authText('register_invalid_response_text', '注册响应无效'));
+        setToken(token);
+        this.showToast(this.authText('register_success_text', '注册成功，欢迎来到 AI星月'), 'success');
+        await this.loadProfile();
+      } catch (err) {
+        this.showToast(err.message || this.authText('register_failed_text', '注册失败'), 'error');
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    doLogout() {
+      clearAuth();
+      this.loggedIn = false;
+      this.user = null;
+      this.points = null;
+      this.isAdmin = false;
+      this.syncStore();
+      this.loginForm = { email: '', password: '' };
+      this.showToast(this.dashboardText('logout_success_text', '已退出登录'), 'info');
+    },
+
+    async redeemNow() {
+      const code = String(this.redeemCode || '').trim();
+      if (!code) {
+        this.showToast(this.dashboardText('redeem_empty_text', '请输入兑换码'), 'error');
+        return;
+      }
+      this.loading = true;
+      try {
+        const result = await api.redeemCode(code);
+        const data = result.data || result;
+        this.balance = this.normalizeBalance(data.balance || {});
+        this.points = this.balance.points;
+        this.redeemCode = '';
+        this.lastRefreshed = Date.now();
+        this.showToast(this.formatTemplate(this.dashboardText('redeem_success_template', '兑换成功 +{points} 星月币'), { points: data.points_added || 0 }), 'success');
+      } catch (err) {
+        this.showToast(err.message || this.dashboardText('redeem_failed_text', '兑换失败'), 'error');
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async doDailyCheckin() {
+      this.loading = true;
+      try {
+        const result = await api.claimDaily();
+        const points = result.points || result.data?.points;
+        if (points !== undefined) {
+          this.points = parseInt(points, 10);
+          this.lastRefreshed = Date.now();
+        }
+        await this.refreshPoints();
+        const added = parseInt(result.data?.points_added || 0, 10);
+        this.showToast(
+          added > 0
+            ? this.formatTemplate(this.dashboardText('checkin_success_template', '签到成功 +{points} 积分'), { points: added })
+            : this.dashboardText('checkin_repeat_text', '今日已经签到过了'),
+          added > 0 ? 'success' : 'info',
+        );
+      } catch (err) {
+        this.showToast(err.message || this.dashboardText('checkin_failed_text', '签到失败'), 'error');
+      } finally {
+        this.loading = false;
+      }
+    },
+  };
+}
+
+window.dashboard = dashboard;
+
+// Alpine.js 在 init 事件中正式启动前注册数据函数
+document.addEventListener('alpine:init', () => {
+  if (window.Alpine && typeof window.Alpine.data === 'function') {
+    window.Alpine.data('dashboard', dashboard);
+  }
+  if (window.Alpine && typeof window.Alpine.store === 'function') {
+    // 默认未登录、非管理员，loadProfile/checkAdmin 会通过 syncStore() 更新
+    window.Alpine.store('user', { isAdmin: false, loggedIn: false });
+  }
+});

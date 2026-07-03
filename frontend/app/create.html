@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>角色编辑器 · AI星月</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
+  <link rel="icon" href="/favicon.ico">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260626-toolbar">
+  <script type="module" src="/app/assets/js/create.js?v=20260701-template"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+</head>
+<body class="min-h-screen">
+  <div class="xy-stars-bg"></div>
+
+  <div class="app-shell" x-data="createPage()" x-init="init()" x-cloak>
+    <aside class="app-sidebar" data-app-sidebar></aside>
+
+    <main class="app-main">
+      <!-- 顶部工具栏 -->
+      <header class="editor-toolbar">
+        <a href="/app/my-apps.html" class="editor-toolbar__btn" :title="creatorText('back_title', '返回管理')">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+          <span x-text="creatorText('back_text', '返回')"></span>
+        </a>
+        <button class="editor-toolbar__btn is-danger" x-show="editingId" @click="remove" :title="creatorText('delete_title', '删除角色')">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m-9 0v14a2 2 0 002 2h6a2 2 0 002-2V6"/></svg>
+          <span x-text="creatorText('delete_text', '删除')"></span>
+        </button>
+        <div class="grow"></div>
+        <input type="file" accept=".json,.png,application/json,image/png" x-ref="importInput" @change="onImportFile" class="hidden" style="display:none">
+        <button class="editor-toolbar__btn" @click="triggerImport" :disabled="importing" :title="creatorText('import_title', '导入 SillyTavern 角色卡 JSON/PNG')">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v12m0 0l-4-4m4 4l4-4M5 20h14"/></svg>
+          <span x-text="importing ? creatorText('importing_text', '导入中…') : creatorText('import_text', '导入')"></span>
+        </button>
+        <button class="editor-toolbar__btn" x-show="editingId" @click="exportCard" :title="creatorText('export_title', '导出为 SillyTavern V2 JSON')">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 20V8m0 0l-4 4m4-4l4 4M5 4h14"/></svg>
+          <span x-text="creatorText('export_text', '导出')"></span>
+        </button>
+        <button class="editor-toolbar__btn" x-show="editingId" @click="exportCardPng" :title="creatorText('export_png_title', '导出为 SillyTavern PNG 角色卡')">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 14l2-2 2 2 3-4 3 5"/></svg>
+          <span>PNG</span>
+        </button>
+        <a class="editor-toolbar__btn" :href="editingId ? `/app/chat.html?app_id=${encodeURIComponent(editingId)}` : '#'" :class="{ 'opacity-50 cursor-not-allowed pointer-events-none': !editingId }" :title="creatorText('preview_title', '预览（保存后可用）')">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M1.5 12s4-7 10.5-7 10.5 7 10.5 7-4 7-10.5 7S1.5 12 1.5 12z"/><circle cx="12" cy="12" r="3" stroke-width="2"/></svg>
+          <span x-text="creatorText('preview_text', '预览')"></span>
+        </a>
+        <button class="editor-pill" :class="form.is_public ? 'is-public' : 'is-private'" @click="toggleVisibility" :title="form.is_public ? creatorText('public_title', '公开发布到探索页') : creatorText('private_title', '仅自己可见')">
+          <template x-if="form.is_public">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12h18M12 3a13 13 0 010 18M12 3a13 13 0 000 18"/></svg>
+          </template>
+          <template x-if="!form.is_public">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-7a2 2 0 00-2-2H6a2 2 0 00-2 2v7a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+          </template>
+          <span x-text="form.is_public ? creatorText('public_text', '公开') : creatorText('private_text', '私密')"></span>
+        </button>
+        <button class="editor-toolbar__primary" @click="submit" :disabled="loading || uploading || uploadingBg">
+          <template x-if="!loading">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 21v-8H7v8M7 3v5h8M5 21h14a2 2 0 002-2V7l-5-5H5a2 2 0 00-2 2v15a2 2 0 002 2z"/></svg>
+          </template>
+          <span x-show="!loading" x-text="creatorText('save_text', '保存')"></span>
+          <span x-show="loading" class="xy-loading"></span>
+        </button>
+      </header>
+
+      <template x-if="toast">
+        <div class="xy-toast" :class="`xy-toast-${toast.type}`" x-text="toast.message"></div>
+      </template>
+
+      <div class="editor-tip">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01"/></svg>
+        <div x-text="creatorText('tip_text', '填好标题、描述、封面就可以保存。模型由平台统一接入。')"></div>
+      </div>
+
+      <div class="editor-form">
+        <!-- 基础字段 -->
+        <div class="editor-field">
+          <label class="editor-field__label" x-text="creatorText('name_label', '标题')"></label>
+          <input class="xy-input" x-model="form.name" maxlength="48" :placeholder="creatorText('name_placeholder', '给你的角色起个名字')">
+          <div class="editor-field__counter"><span x-text="(form.name || '').length"></span>/48</div>
+        </div>
+
+        <div class="editor-field">
+          <label class="editor-field__label" x-text="creatorText('summary_label', '描述')"></label>
+          <div class="editor-field__hint" x-text="creatorText('summary_hint', '用于探索页卡片展示，控制在两三行内更易吸引点击。')"></div>
+          <textarea class="xy-input" style="min-height:90px" x-model="form.summary" maxlength="160" :placeholder="creatorText('summary_placeholder', '描述这个角色是谁，故事发生在哪...')"></textarea>
+          <div class="editor-field__counter"><span x-text="(form.summary || '').length"></span>/160</div>
+        </div>
+
+        <div class="editor-row-2">
+          <div class="editor-field">
+            <label class="editor-field__label" x-text="creatorText('tags_label', '标签')"></label>
+            <div class="editor-field__hint" x-text="creatorText('tags_hint', '用顿号或逗号分隔，最多 8 个。')"></div>
+            <input class="xy-input" x-model="form.tagsText" :placeholder="creatorText('tags_placeholder', '恋爱，校园，治愈')">
+          </div>
+          <div class="editor-field">
+            <label class="editor-field__label" x-text="creatorText('language_label', '语言')"></label>
+            <div class="editor-field__hint" x-text="creatorText('language_hint', '面向哪个语种的用户。')"></div>
+            <select class="xy-input" disabled>
+              <option x-text="creatorText('language_option', '中文')"></option>
+            </select>
+          </div>
+        </div>
+
+        <!-- 三个开关 -->
+        <div class="editor-row-2" style="grid-template-columns: repeat(3, minmax(0,1fr))">
+          <label class="editor-checkbox">
+            <input type="checkbox" x-model="form.nsfw">
+            <div class="editor-checkbox__text">
+              <div class="editor-checkbox__title" x-text="creatorText('nsfw_title', '包含 NSFW 内容')"></div>
+              <div class="editor-checkbox__hint" x-text="creatorText('nsfw_hint', '勾选后在探索页加分级标记。')"></div>
+            </div>
+          </label>
+          <label class="editor-checkbox">
+            <input type="checkbox" x-model="form.protected_prompt">
+            <div class="editor-checkbox__text">
+              <div class="editor-checkbox__title" x-text="creatorText('protect_title', '启用防护')"></div>
+              <div class="editor-checkbox__hint" x-text="creatorText('protect_hint', '防止用户套话提取系统提示词。')"></div>
+            </div>
+          </label>
+          <label class="editor-checkbox">
+            <input type="checkbox" x-model="form.anonymous">
+            <div class="editor-checkbox__text">
+              <div class="editor-checkbox__title" x-text="creatorText('anonymous_title', '匿名发布')"></div>
+              <div class="editor-checkbox__hint" x-text="creatorText('anonymous_hint', '仍可获得奖励，作者列显示匿名。')"></div>
+            </div>
+          </label>
+        </div>
+
+        <!-- 视觉素材 -->
+        <div class="editor-section-title" x-text="creatorText('media_section_title', '视觉素材')"></div>
+        <div class="editor-row-2">
+          <div class="editor-field">
+            <label class="editor-field__label" x-text="creatorText('cover_label', '封面图像')"></label>
+            <label class="editor-dropzone">
+              <input type="file" accept="image/*" @change="onCoverChange">
+              <template x-if="form.cover_url && !uploading">
+                <img class="editor-dropzone__preview" :src="form.cover_url" alt="封面">
+              </template>
+              <template x-if="!form.cover_url || uploading">
+                <div class="editor-dropzone__icon">
+                  <template x-if="!uploading">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 16.5V18a3 3 0 003 3h12a3 3 0 003-3v-1.5M16.5 8.25L12 3.75m0 0L7.5 8.25M12 3.75v12"/></svg>
+                  </template>
+                  <template x-if="uploading">
+                    <span class="xy-loading"></span>
+                  </template>
+                </div>
+              </template>
+              <div class="editor-dropzone__title" x-show="!form.cover_url || uploading" x-text="creatorText('cover_upload_title', '上传封面图像')"></div>
+              <div class="editor-dropzone__hint" x-show="!form.cover_url || uploading" style="white-space:pre-line" x-text="creatorText('cover_upload_hint', '拖放到此处，或点击浏览\n最大大小：5MB')"></div>
+              <div class="editor-dropzone__overlay">
+                <span class="editor-dropzone__overlay-text" x-text="creatorText('cover_overlay_text', '点击替换')"></span>
+              </div>
+            </label>
+            <input class="xy-input text-sm" x-model="form.cover_url" :placeholder="creatorText('cover_url_placeholder', '或粘贴图片 URL')">
+          </div>
+          <div class="editor-field">
+            <label class="editor-field__label" x-text="creatorText('bg_label', '背景图像')"></label>
+            <label class="editor-dropzone">
+              <input type="file" accept="image/*" @change="onBgChange">
+              <template x-if="form.bg_url && !uploadingBg">
+                <img class="editor-dropzone__preview" :src="form.bg_url" alt="背景">
+              </template>
+              <template x-if="!form.bg_url || uploadingBg">
+                <div class="editor-dropzone__icon">
+                  <template x-if="!uploadingBg">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 16.5V18a3 3 0 003 3h12a3 3 0 003-3v-1.5M16.5 8.25L12 3.75m0 0L7.5 8.25M12 3.75v12"/></svg>
+                  </template>
+                  <template x-if="uploadingBg">
+                    <span class="xy-loading"></span>
+                  </template>
+                </div>
+              </template>
+              <div class="editor-dropzone__title" x-show="!form.bg_url || uploadingBg" x-text="creatorText('bg_upload_title', '上传背景图像')"></div>
+              <div class="editor-dropzone__hint" x-show="!form.bg_url || uploadingBg" style="white-space:pre-line" x-text="creatorText('bg_upload_hint', '聊天页的角色背景\n最大大小：5MB')"></div>
+              <div class="editor-dropzone__overlay">
+                <span class="editor-dropzone__overlay-text" x-text="creatorText('bg_overlay_text', '点击替换')"></span>
+              </div>
+            </label>
+            <input class="xy-input text-sm" x-model="form.bg_url" :placeholder="creatorText('bg_url_placeholder', '或粘贴图片 URL')">
+          </div>
+        </div>
+
+        <!-- 提示词 -->
+        <div class="editor-section-title" x-text="creatorText('prompt_section_title', '角色提示词')"></div>
+
+        <div class="editor-field">
+          <label class="editor-field__label" x-text="creatorText('description_label', '角色设定')"></label>
+          <div class="editor-field__hint" x-text="creatorText('description_hint', '角色身份、性格、说话风格、互动边界。这是发给模型最重要的部分。支持 {{char}}/{{user}} 和 <% if %>/<%- getvar(&quot;x&quot;) %> 模板。')"></div>
+          <textarea class="xy-input" style="min-height:200px" x-model="form.description" :placeholder="creatorText('description_placeholder', '一个二十出头的少女剑客，话不多，却总能在关键时刻冒出几句温暖的玩笑...')"></textarea>
+        </div>
+
+        <div class="editor-row-2">
+          <div class="editor-field">
+            <label class="editor-field__label" x-text="creatorText('personality_label', '性格')"></label>
+            <div class="editor-field__hint" x-text="creatorText('personality_hint', '可选。角色的核心性格特质（对应酒馆 personality）。')"></div>
+            <textarea class="xy-input" style="min-height:110px" x-model="form.personality" :placeholder="creatorText('personality_placeholder', '傲娇、嘴硬心软、好奇心旺盛...')"></textarea>
+          </div>
+          <div class="editor-field">
+            <label class="editor-field__label" x-text="creatorText('scenario_label', '场景')"></label>
+            <div class="editor-field__hint" x-text="creatorText('scenario_hint', '可选。故事发生的背景设定（对应酒馆 scenario）。')"></div>
+            <textarea class="xy-input" style="min-height:110px" x-model="form.scenario" :placeholder="creatorText('scenario_placeholder', '一座漂浮在云海之上的古老书院，{{user}} 是新来的访客...')"></textarea>
+          </div>
+        </div>
+
+        <div class="editor-field">
+          <label class="editor-field__label" x-text="creatorText('opening_label', '开场白')"></label>
+          <div class="editor-field__hint" x-text="creatorText('opening_hint', '用户进入聊天看到的第一句话。建议带场景描写。支持 {{char}}/{{user}}、条件模板和 setvar/getvar。')"></div>
+          <textarea class="xy-input" style="min-height:110px" x-model="form.opening_statement" :placeholder="creatorText('opening_placeholder', '月色斜斜地洒进酒馆，她推门进来，剑鞘碰到门框，发出轻响...')"></textarea>
+        </div>
+
+        <div class="editor-field">
+          <label class="editor-field__label" x-text="creatorText('system_prompt_label', '主提示（系统）')"></label>
+          <div class="editor-field__hint" x-text="creatorText('system_prompt_hint', '可选。发给模型 system 通道的强化指令（对应酒馆 system_prompt），支持 Prompt Template 语法。')"></div>
+          <textarea class="xy-input" style="min-height:140px" x-model="form.pre_prompt" :placeholder="creatorText('system_prompt_placeholder', '你是一个文字 RPG 主持人，永远以第三人称叙述场景...')"></textarea>
+        </div>
+
+        <div class="editor-field">
+          <label class="editor-field__label" x-text="creatorText('example_label', '对话示例')"></label>
+          <div class="editor-field__hint" x-text="creatorText('example_hint', '可选。给模型示范角色的说话方式（对应酒馆 mes_example）。可用 {{user}}/{{char}}。')"></div>
+          <textarea class="xy-input" style="min-height:120px" x-model="form.mes_example" :placeholder="creatorText('example_placeholder', '{{user}}: 你今天看起来心情不错？\n{{char}}: 哼，被你看出来了……才、才没有呢！')"></textarea>
+        </div>
+
+        <!-- Prompt Manager（折叠） -->
+        <div class="editor-group" :class="{ 'is-open': expand.promptManager }">
+          <div class="editor-group__head" @click="expand.promptManager = !expand.promptManager">
+            <div class="editor-group__title">
+              <span class="editor-group__title-mark"></span>
+              <span x-text="creatorText('prompt_manager_title', 'Prompt Manager')"></span>
+              <span class="text-xs text-violet-300/60 font-normal" x-show="form.prompt_blocks.length" x-text="`（${form.prompt_blocks.length}）`"></span>
+            </div>
+            <svg class="editor-group__chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M6 9l6 6 6-6"/></svg>
+          </div>
+          <div class="editor-group__body" x-show="expand.promptManager">
+            <div class="editor-group__hint" x-text="creatorText('prompt_manager_hint', '按顺序管理可启停提示词块。System 前置、System 后置、历史后指令都支持 <% if %>、<% for %>、getvar/setvar 模板。')"></div>
+            <template x-for="(b, i) in form.prompt_blocks" :key="b.id || i">
+              <div class="form-panel !p-3" style="display:flex;flex-direction:column;gap:10px">
+                <div class="flex items-center justify-between gap-3">
+                  <label class="editor-checkbox" style="padding:4px 0;border:none;background:none">
+                    <input type="checkbox" x-model="form.prompt_blocks[i].enabled">
+                    <div class="editor-checkbox__text"><div class="editor-checkbox__title text-sm"><span x-text="creatorText('prompt_enable_title', '启用块')"></span> #<span x-text="i + 1"></span></div></div>
+                  </label>
+                  <button type="button" class="editor-toolbar__btn is-danger" @click="removePromptBlock(i)" x-text="creatorText('prompt_remove_text', '删除')"></button>
+                </div>
+                <div class="editor-row-2">
+                  <div class="editor-field">
+                    <label class="editor-field__label" x-text="creatorText('prompt_name_label', '名称')"></label>
+                    <input class="xy-input text-sm" x-model="form.prompt_blocks[i].name" :placeholder="creatorText('prompt_name_placeholder', '例如：回复风格')">
+                  </div>
+                  <div class="editor-field">
+                    <label class="editor-field__label" x-text="creatorText('prompt_position_label', '注入位置')"></label>
+                    <select class="xy-input text-sm" x-model="form.prompt_blocks[i].position">
+                      <option value="system_before" x-text="creatorText('prompt_position_system_before', 'System 前置')"></option>
+                      <option value="system_after" x-text="creatorText('prompt_position_system_after', 'System 后置')"></option>
+                      <option value="post_history" x-text="creatorText('prompt_position_post_history', '历史后指令')"></option>
+                    </select>
+                  </div>
+                </div>
+                <div class="editor-field">
+                  <label class="editor-field__label" x-text="creatorText('prompt_order_label', '顺序')"></label>
+                  <input class="xy-input text-sm" type="number" min="0" max="9999" x-model.number="form.prompt_blocks[i].order">
+                </div>
+                <textarea class="xy-input text-sm" style="min-height:100px" x-model="form.prompt_blocks[i].content" :placeholder="creatorText('prompt_content_placeholder', '写入提示词内容。示例：<% if (getvar(&quot;affinity&quot;,{defaults:0}) > 5) { %>更亲近<% } %>')"></textarea>
+              </div>
+            </template>
+            <div class="editor-row-2">
+              <button type="button" class="xy-btn xy-btn-ghost w-full justify-center" @click="addPromptBlock('system_before')" x-text="creatorText('prompt_add_system_before', '＋ System 前置')"></button>
+              <button type="button" class="xy-btn xy-btn-ghost w-full justify-center" @click="addPromptBlock('system_after')" x-text="creatorText('prompt_add_system_after', '＋ System 后置')"></button>
+            </div>
+            <button type="button" class="xy-btn xy-btn-ghost w-full justify-center" @click="addPromptBlock('post_history')" x-text="creatorText('prompt_add_post_history', '＋ 历史后指令块')"></button>
+          </div>
+        </div>
+
+        <!-- 备用开场白（折叠） -->
+        <div class="editor-group" :class="{ 'is-open': expand.greetings }">
+          <div class="editor-group__head" @click="expand.greetings = !expand.greetings">
+            <div class="editor-group__title">
+              <span class="editor-group__title-mark"></span>
+              <span x-text="creatorText('greetings_title', '备用开场白')"></span>
+              <span class="text-xs text-violet-300/60 font-normal" x-show="form.alternate_greetings.length" x-text="`（${form.alternate_greetings.length}）`"></span>
+            </div>
+            <svg class="editor-group__chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M6 9l6 6 6-6"/></svg>
+          </div>
+          <div class="editor-group__body" x-show="expand.greetings">
+            <div class="editor-group__hint" x-text="creatorText('greetings_hint', '额外的开场白。进入聊天后第一条消息可以左右切换（swipe）不同开场。')"></div>
+            <template x-for="(g, i) in form.alternate_greetings" :key="i">
+              <div class="editor-field" style="position:relative">
+                <label class="editor-field__label"><span x-text="creatorText('greeting_label_prefix', '备用开场白 #')"></span><span x-text="i + 1"></span></label>
+                <textarea class="xy-input" style="min-height:90px" x-model="form.alternate_greetings[i]" :placeholder="creatorText('greeting_placeholder', '另一种打开方式...')"></textarea>
+                <button type="button" class="editor-toolbar__btn is-danger" style="position:absolute;top:0;right:0" @click="removeGreeting(i)" x-text="creatorText('delete_text', '删除')"></button>
+              </div>
+            </template>
+            <button type="button" class="xy-btn xy-btn-ghost w-full justify-center" @click="addGreeting" x-text="creatorText('add_greeting_text', '＋ 添加备用开场白')"></button>
+          </div>
+        </div>
+
+        <!-- 世界书 / Lorebook（折叠） -->
+        <div class="editor-group" :class="{ 'is-open': expand.worldinfo }">
+          <div class="editor-group__head" @click="expand.worldinfo = !expand.worldinfo">
+            <div class="editor-group__title">
+              <span class="editor-group__title-mark"></span>
+              <span x-text="creatorText('world_title', '世界书 / Lorebook')"></span>
+              <span class="text-xs text-violet-300/60 font-normal" x-show="form.world_info.length" x-text="`（${form.world_info.length}）`"></span>
+            </div>
+            <svg class="editor-group__chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M6 9l6 6 6-6"/></svg>
+          </div>
+          <div class="editor-group__body" x-show="expand.worldinfo">
+            <div class="editor-group__hint" x-text="creatorText('world_hint', '设定条目支持关键词、常驻、模板变量和全局注入标记，如 [GENERATE:BEFORE]、[GENERATE:AFTER]、@@if、@INJECT。')"></div>
+            <template x-for="(e, i) in form.world_info" :key="i">
+              <div class="form-panel !p-3" style="display:flex;flex-direction:column;gap:8px">
+                <div class="flex items-center justify-between">
+                  <span class="text-xs text-violet-200/70"><span x-text="creatorText('world_entry_prefix', '条目 #')"></span><span x-text="i + 1"></span></span>
+                  <button type="button" class="editor-toolbar__btn is-danger" @click="removeWorldEntry(i)" x-text="creatorText('world_delete_text', '删除')"></button>
+                </div>
+                <div class="grid md:grid-cols-2 gap-2">
+                  <input class="xy-input text-sm" x-model="form.world_info[i].name" :placeholder="creatorText('world_name_placeholder', '条目名称')">
+                  <select class="xy-input text-sm" x-model="form.world_info[i].position">
+                    <option value="system" x-text="creatorText('world_position_system', '系统提示')"></option>
+                    <option value="depth" x-text="creatorText('world_position_depth', '按深度插入')"></option>
+                    <option value="post_history" x-text="creatorText('world_position_post_history', '历史后插入')"></option>
+                  </select>
+                </div>
+                <input class="xy-input text-sm" x-model="form.world_info[i].keysText" :placeholder="creatorText('world_keys_placeholder', '触发关键词，用逗号分隔（例：苏妲己，狐狸）')">
+                <input class="xy-input text-sm" x-model="form.world_info[i].secondaryKeysText" :placeholder="creatorText('world_secondary_keys_placeholder', '二级关键词，可选；启用选择性触发时需同时命中')">
+                <textarea class="xy-input text-sm" style="min-height:80px" x-model="form.world_info[i].content" :placeholder="creatorText('world_content_placeholder', '命中时注入的设定内容。可用 @@if getvar(&quot;flag&quot;)、[GENERATE:BEFORE] 或 @INJECT pos=0,role=system。')"></textarea>
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
+                  <label class="text-xs text-violet-200/70"><span x-text="creatorText('world_priority_label', '优先级')"></span>
+                    <input class="xy-input text-sm mt-1" type="number" x-model.number="form.world_info[i].priority">
+                  </label>
+                  <label class="text-xs text-violet-200/70"><span x-text="creatorText('world_order_label', '排序')"></span>
+                    <input class="xy-input text-sm mt-1" type="number" x-model.number="form.world_info[i].order">
+                  </label>
+                  <label class="text-xs text-violet-200/70"><span x-text="creatorText('world_depth_label', '插入深度')"></span>
+                    <input class="xy-input text-sm mt-1" type="number" min="0" max="20" x-model.number="form.world_info[i].depth">
+                  </label>
+                  <label class="text-xs text-violet-200/70"><span x-text="creatorText('world_probability_label', '触发概率 %')"></span>
+                    <input class="xy-input text-sm mt-1" type="number" min="0" max="100" x-model.number="form.world_info[i].probability">
+                  </label>
+                </div>
+                <div class="flex items-center gap-4">
+                  <label class="editor-checkbox" style="padding:4px 0;border:none;background:none">
+                    <input type="checkbox" x-model="form.world_info[i].enabled">
+                    <div class="editor-checkbox__text"><div class="editor-checkbox__title text-sm" x-text="creatorText('world_enabled_title', '启用')"></div></div>
+                  </label>
+                  <label class="editor-checkbox" style="padding:4px 0;border:none;background:none">
+                    <input type="checkbox" x-model="form.world_info[i].constant">
+                    <div class="editor-checkbox__text"><div class="editor-checkbox__title text-sm" x-text="creatorText('world_constant_title', '常驻注入')"></div></div>
+                  </label>
+                  <label class="editor-checkbox" style="padding:4px 0;border:none;background:none">
+                    <input type="checkbox" x-model="form.world_info[i].selective">
+                    <div class="editor-checkbox__text"><div class="editor-checkbox__title text-sm" x-text="creatorText('world_selective_title', '二级命中')"></div></div>
+                  </label>
+                  <label class="editor-checkbox" style="padding:4px 0;border:none;background:none">
+                    <input type="checkbox" x-model="form.world_info[i].recursive">
+                    <div class="editor-checkbox__text"><div class="editor-checkbox__title text-sm" x-text="creatorText('world_recursive_title', '递归扫描')"></div></div>
+                  </label>
+                </div>
+              </div>
+            </template>
+            <button type="button" class="xy-btn xy-btn-ghost w-full justify-center" @click="addWorldEntry" x-text="creatorText('add_world_text', '＋ 添加世界书条目')"></button>
+          </div>
+        </div>
+
+        <!-- 高级提示词（折叠） -->
+        <div class="editor-group" :class="{ 'is-open': expand.advanced }">
+          <div class="editor-group__head" @click="expand.advanced = !expand.advanced">
+            <div class="editor-group__title">
+              <span class="editor-group__title-mark"></span>
+              <span x-text="creatorText('advanced_title', '高级提示词')"></span>
+            </div>
+            <svg class="editor-group__chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M6 9l6 6 6-6"/></svg>
+          </div>
+          <div class="editor-group__body" x-show="expand.advanced">
+            <div class="editor-field">
+              <label class="editor-field__label" x-text="creatorText('post_history_label', '历史后指令')"></label>
+              <div class="editor-field__hint" x-text="creatorText('post_history_hint', '可选。插入在对话历史之后、紧贴生成前的指令（对应酒馆 post_history_instructions / 越狱位）。')"></div>
+              <textarea class="xy-input" style="min-height:100px" x-model="form.post_history_instructions" :placeholder="creatorText('post_history_placeholder', '保持角色一致，使用细腻的环境与心理描写...')"></textarea>
+            </div>
+            <div class="editor-field">
+              <label class="editor-field__label" x-text="creatorText('quick_replies_label', '快捷回复')"></label>
+              <div class="editor-field__hint" x-text="creatorText('quick_replies_hint', '聊天页会显示为可点击按钮，点击后直接作为用户消息发送。')"></div>
+              <template x-for="(q, i) in form.quick_replies" :key="q.id || i">
+                <div class="form-panel !p-3 mb-3" style="display:flex;flex-direction:column;gap:10px">
+                  <div class="flex items-center justify-between gap-3">
+                    <label class="editor-checkbox" style="padding:4px 0;border:none;background:none">
+                      <input type="checkbox" x-model="form.quick_replies[i].enabled">
+                      <div class="editor-checkbox__text"><div class="editor-checkbox__title text-sm"><span x-text="creatorText('quick_reply_enable_title', '启用快捷回复')"></span> #<span x-text="i + 1"></span></div></div>
+                    </label>
+                    <button type="button" class="editor-toolbar__btn is-danger" @click="removeQuickReply(i)" x-text="creatorText('delete_text', '删除')"></button>
+                  </div>
+                  <div class="editor-row-2">
+                    <input class="xy-input text-sm" x-model="form.quick_replies[i].label" :placeholder="creatorText('quick_reply_label_placeholder', '按钮文字')">
+                    <input class="xy-input text-sm" type="number" x-model.number="form.quick_replies[i].order" :placeholder="creatorText('quick_reply_order_placeholder', '顺序')">
+                  </div>
+                  <textarea class="xy-input text-sm" style="min-height:74px" x-model="form.quick_replies[i].message" :placeholder="creatorText('quick_reply_message_placeholder', '发送内容')"></textarea>
+                </div>
+              </template>
+              <button type="button" class="xy-btn xy-btn-ghost w-full justify-center" @click="addQuickReply" x-text="creatorText('add_quick_reply_text', '＋ 添加快捷回复')"></button>
+            </div>
+            <div class="editor-field">
+              <label class="editor-field__label" x-text="creatorText('regex_label', 'Regex 脚本')"></label>
+              <div class="editor-field__hint" x-text="creatorText('regex_hint', '按顺序对模型回复做正则替换，支持 flags：i / m / s。')"></div>
+              <template x-for="(s, i) in form.regex_scripts" :key="s.id || i">
+                <div class="form-panel !p-3 mb-3" style="display:flex;flex-direction:column;gap:10px">
+                  <div class="flex items-center justify-between gap-3">
+                    <label class="editor-checkbox" style="padding:4px 0;border:none;background:none">
+                      <input type="checkbox" x-model="form.regex_scripts[i].enabled">
+                      <div class="editor-checkbox__text"><div class="editor-checkbox__title text-sm"><span x-text="creatorText('regex_enable_title', '启用 Regex')"></span> #<span x-text="i + 1"></span></div></div>
+                    </label>
+                    <button type="button" class="editor-toolbar__btn is-danger" @click="removeRegexScript(i)" x-text="creatorText('delete_text', '删除')"></button>
+                  </div>
+                  <div class="editor-row-2">
+                    <input class="xy-input text-sm" x-model="form.regex_scripts[i].name" :placeholder="creatorText('regex_name_placeholder', '名称')">
+                    <input class="xy-input text-sm" x-model="form.regex_scripts[i].flags" :placeholder="creatorText('regex_flags_placeholder', 'flags')">
+                  </div>
+                  <input class="xy-input text-sm" x-model="form.regex_scripts[i].find" :placeholder="creatorText('regex_find_placeholder', '查找正则')">
+                  <textarea class="xy-input text-sm" style="min-height:74px" x-model="form.regex_scripts[i].replace" :placeholder="creatorText('regex_replace_placeholder', '替换为')"></textarea>
+                </div>
+              </template>
+              <button type="button" class="xy-btn xy-btn-ghost w-full justify-center" @click="addRegexScript" x-text="creatorText('add_regex_text', '＋ 添加 Regex')"></button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 默认模型设置（折叠） -->
+        <div class="editor-group" :class="{ 'is-open': expand.sampling }">
+          <div class="editor-group__head" @click="expand.sampling = !expand.sampling">
+            <div class="editor-group__title">
+              <span class="editor-group__title-mark"></span>
+              <span x-text="creatorText('model_section_title', '默认模型设置')"></span>
+            </div>
+            <svg class="editor-group__chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M6 9l6 6 6-6"/></svg>
+          </div>
+          <div class="editor-group__body" x-show="expand.sampling">
+            <div class="editor-group__hint" x-text="creatorText('model_hint', '玩家打开这张卡片时的默认模型与采样参数。这里只能选择站点模型，API Key 由后台统一管理。')"></div>
+            <div class="editor-field">
+              <label class="editor-field__label" x-text="creatorText('default_model_label', '默认模型')"></label>
+              <select class="xy-input" x-model="form.llm_model">
+                <template x-if="modelPresets.length === 0">
+                  <option value="" x-text="creatorText('default_model_option', '站点默认模型')"></option>
+                </template>
+                <template x-for="preset in modelPresets" :key="preset.id">
+                  <option :value="preset.id" x-text="`${preset.group || '模型'} · ${preset.label || preset.name} · ${preset.model}${preset.is_default ? ' · 默认' : ''}`"></option>
+                </template>
+              </select>
+            </div>
+            <div class="numfield-row">
+              <div class="numfield-cell">
+                <div class="label" x-text="creatorText('sampling_temperature_label', '温度')"></div>
+                <div class="hint" x-text="creatorText('sampling_temperature_hint', '控制随机性。更高 = 更有创意，更低 = 更专注。')"></div>
+                <div class="numfield">
+                  <button @click="bumpSampling('temperature', -0.1, 0, 2)">−</button>
+                  <input type="number" step="0.1" min="0" max="2" x-model.number="form.sampling.temperature">
+                  <button @click="bumpSampling('temperature', 0.1, 0, 2)">+</button>
+                </div>
+              </div>
+              <div class="numfield-cell">
+                <div class="label" x-text="creatorText('sampling_top_p_label', 'Top P')"></div>
+                <div class="hint" x-text="creatorText('sampling_top_p_hint', '核采样。控制令牌选择的多样性。')"></div>
+                <div class="numfield">
+                  <button @click="bumpSampling('top_p', -0.05, 0, 1)">−</button>
+                  <input type="number" step="0.05" min="0" max="1" x-model.number="form.sampling.top_p">
+                  <button @click="bumpSampling('top_p', 0.05, 0, 1)">+</button>
+                </div>
+              </div>
+              <div class="numfield-cell">
+                <div class="label" x-text="creatorText('sampling_presence_label', '存在惩罚')"></div>
+                <div class="hint" x-text="creatorText('sampling_presence_hint', '对新令牌进行惩罚。鼓励多样化的主题。')"></div>
+                <div class="numfield">
+                  <button @click="bumpSampling('presence_penalty', -0.1, -2, 2)">−</button>
+                  <input type="number" step="0.1" min="-2" max="2" x-model.number="form.sampling.presence_penalty">
+                  <button @click="bumpSampling('presence_penalty', 0.1, -2, 2)">+</button>
+                </div>
+              </div>
+              <div class="numfield-cell">
+                <div class="label" x-text="creatorText('sampling_frequency_label', '频率惩罚')"></div>
+                <div class="hint" x-text="creatorText('sampling_frequency_hint', '对重复令牌进行惩罚。减少重复。')"></div>
+                <div class="numfield">
+                  <button @click="bumpSampling('frequency_penalty', -0.1, -2, 2)">−</button>
+                  <input type="number" step="0.1" min="-2" max="2" x-model.number="form.sampling.frequency_penalty">
+                  <button @click="bumpSampling('frequency_penalty', 0.1, -2, 2)">+</button>
+                </div>
+              </div>
+              <div class="numfield-cell" style="grid-column: span 2">
+                <div class="label" x-text="creatorText('sampling_history_label', '历史长度')"></div>
+                <div class="hint" x-text="creatorText('sampling_history_hint', '要包含在上下文中的先前消息数。如果你只想预填采样参数，可以把模型留空。')"></div>
+                <div class="numfield">
+                  <button @click="bumpSampling('history_length', -1, 1, 80)">−</button>
+                  <input type="number" step="1" min="1" max="80" x-model.number="form.sampling.history_length">
+                  <button @click="bumpSampling('history_length', 1, 1, 80)">+</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 角色语音（折叠占位） -->
+        <div class="editor-group" :class="{ 'is-open': expand.voice }">
+          <div class="editor-group__head" @click="expand.voice = !expand.voice">
+            <div class="editor-group__title">
+              <span class="editor-group__title-mark"></span>
+              <span x-text="creatorText('voice_title', '角色语音')"></span>
+            </div>
+            <svg class="editor-group__chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M6 9l6 6 6-6"/></svg>
+          </div>
+          <div class="editor-group__body" x-show="expand.voice">
+            <div class="editor-group__hint" x-text="creatorText('voice_hint', '为对话中的文本转语音分配角色语音。')"></div>
+            <button class="xy-btn xy-btn-ghost w-full justify-center" disabled>
+              <span x-text="creatorText('voice_assign_text', '＋ 为角色分配语音（敬请期待）')"></span>
+            </button>
+            <p class="text-xs text-slate-500" x-text="creatorText('voice_note', '站点 TTS 服务接入中。这里上线后会有男声/女声/萌音等多种音色可选。')"></p>
+          </div>
+        </div>
+
+        <!-- 测试分享链接（折叠占位） -->
+        <div class="editor-group" :class="{ 'is-open': expand.share }">
+          <div class="editor-group__head" @click="expand.share = !expand.share">
+            <div class="editor-group__title">
+              <span class="editor-group__title-mark"></span>
+              <span x-text="creatorText('share_title', '测试分享链接')"></span>
+            </div>
+            <svg class="editor-group__chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M6 9l6 6 6-6"/></svg>
+          </div>
+          <div class="editor-group__body" x-show="expand.share">
+            <div class="editor-group__hint" x-text="creatorText('share_hint', '为私有卡片创建评测链接，让其他用户在不公开发布的情况下进行测试。')"></div>
+            <div class="editor-row-2" style="align-items:end">
+              <div class="editor-field">
+                <label class="editor-field__label" x-text="creatorText('share_duration_label', '有效时长')"></label>
+                <select class="xy-input" disabled>
+                  <option x-text="creatorText('share_duration_option', '7 天')"></option>
+                </select>
+              </div>
+              <button class="xy-btn xy-btn-ghost justify-center" disabled x-text="creatorText('share_button_text', '＋ 创建链接（敬请期待）')"></button>
+            </div>
+            <p class="text-xs text-slate-500" x-text="creatorText('share_note', '分享链接服务接入中。当前可以直接把卡片设为「公开」让其他用户在探索页找到。')"></p>
+          </div>
+        </div>
+
+        <div class="form-panel !p-4 text-xs text-violet-200/65 leading-relaxed flex items-start gap-3">
+          <svg class="w-4 h-4 flex-shrink-0 mt-0.5 text-cyan-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01"/></svg>
+          <div x-text="creatorText('bottom_note', '角色默认使用站点模型，API Key 由后台统一管理。保存后可以随时在「我的角色」里编辑或删除。')"></div>
+        </div>
+      </div>
+    </main>
+    <nav class="app-bottom-nav" data-app-bottom-nav></nav>
+  </div>
+</body>
+</html>

@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>创作工坊 · AI星月</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
+  <link rel="icon" href="/favicon.ico">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/app/assets/css/app.css">
+  <script type="module" src="/app/assets/js/hub-pages.js?v=20260626-ass12"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+</head>
+<body class="min-h-screen">
+  <div class="xy-stars-bg"></div>
+  <div class="xy-meteor"></div>
+
+  <div class="app-shell" x-data="workshopPage()" x-init="init()" x-cloak>
+    <aside class="app-sidebar" data-app-sidebar></aside>
+    <main class="app-main">
+      <header class="app-topbar">
+        <h1 x-text="appNavText('workshop', '创作工坊')">创作工坊</h1>
+        <div class="grow"></div>
+        <a href="/app/create.html" class="xy-btn xy-btn-primary text-sm" x-text="myText('new_role_text', '＋ 新建角色')">＋ 新建角色</a>
+      </header>
+      <section class="app-page-pad max-w-6xl mx-auto space-y-5">
+        <div class="app-hero__panel">
+          <div class="app-hero__eyebrow" x-text="emptyText('workshop_eyebrow', '创作者工具')">创作者工具</div>
+          <h2 class="app-hero__title whitespace-pre-line" x-text="emptyText('workshop_title', '把你的角色卡\\n送进 AI星月同库。')">把你的角色卡
+送进 AI星月同库。</h2>
+          <p class="app-hero__copy" x-text="emptyText('workshop_copy', '普通用户只需要填写设定、开场白和封面；模型 API 由站点后台统一配置，不必操心额度和 Key。')">普通用户只需要填写设定、开场白和封面；模型 API 由站点后台统一配置，不必操心额度和 Key。</p>
+        </div>
+        <div class="quick-grid !p-0">
+          <a class="quick-tile" href="/app/create.html"><strong x-text="emptyText('workshop_create_title', '新建角色')">新建角色</strong><span x-text="emptyText('workshop_create_copy', '从零捏一张角色卡')">从零捏一张角色卡</span></a>
+          <a class="quick-tile" href="/app/my-apps.html"><strong x-text="emptyText('workshop_my_roles_title', '我的角色')">我的角色</strong><span x-text="emptyText('workshop_my_roles_copy', '编辑公开状态与设定')">编辑公开状态与设定</span></a>
+          <a class="quick-tile" href="/admin.html"><strong x-text="emptyText('workshop_official_title', '官方角色')">官方角色</strong><span x-text="emptyText('workshop_official_copy', '管理员发布与维护')">管理员发布与维护</span></a>
+          <a class="quick-tile" href="/app/info.html"><strong x-text="emptyText('workshop_library_title', '角色库')">角色库</strong><span x-text="syncedLibraryText()"></span></a>
+        </div>
+        <div class="list-panel">
+          <template x-if="myApps.length === 0"><div class="p-8 text-center text-violet-200/70" x-text="emptyText('workshop_empty_title', '你还没有创建过角色，点击右上角去新建吧')">你还没有创建过角色，点击右上角去新建吧</div></template>
+          <template x-for="app in myApps" :key="app.id">
+            <a class="list-row text-inherit no-underline" :href="`/app/my-apps.html`">
+              <img :src="app.cover || '/assets/img/apk/avatar.webp'" alt="">
+              <div><div class="title truncate" x-text="app.name"></div><div class="meta truncate" x-text="app.summary || app.description || myText('summary_fallback', '自建角色')"></div></div>
+              <div class="row-actions"><span class="xy-btn xy-btn-ghost text-xs" x-text="myText('edit_text', '管理')">管理</span></div>
+            </a>
+          </template>
+        </div>
+      </section>
+    </main>
+    <nav class="app-bottom-nav" data-app-bottom-nav></nav>
+  </div>
+</body>
+</html>

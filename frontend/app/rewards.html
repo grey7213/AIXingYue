@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>每日奖励 · AI星月</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
+  <link rel="icon" href="/favicon.ico">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/app/assets/css/app.css">
+  <script type="module" src="/app/assets/js/hub-pages.js?v=20260627-billing-logo"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+</head>
+<body class="min-h-screen">
+  <div class="xy-stars-bg"></div>
+  <div class="xy-meteor"></div>
+
+  <div class="app-shell" x-data="rewardsPage()" x-init="init()" x-cloak>
+    <aside class="app-sidebar" data-app-sidebar></aside>
+    <main class="app-main">
+      <header class="app-topbar">
+        <h1 x-text="rewardsText('page_title', 'Credits')">Credits</h1>
+        <div class="grow"></div>
+        <button class="xy-btn xy-btn-primary text-sm" @click="openAifadian" x-text="depositText('button_text', '去爱发电购买')">去爱发电购买</button>
+      </header>
+      <section class="app-page-pad max-w-6xl mx-auto space-y-5">
+        <template x-if="message">
+          <div class="form-panel !py-3 text-sm" :class="messageType === 'success' ? 'text-emerald-200 border-emerald-400/30' : 'text-rose-200 border-rose-400/30'" x-text="message"></div>
+        </template>
+
+        <div class="grid lg:grid-cols-[1.35fr_.85fr] gap-4">
+          <div class="form-panel relative overflow-hidden">
+            <div class="absolute -top-16 -right-12 w-44 h-44 rounded-full bg-fuchsia-500/20 blur-3xl"></div>
+            <div class="relative">
+              <div class="flex items-start justify-between gap-4 mb-5">
+                <div>
+                  <div class="text-xs uppercase tracking-[0.18em] text-cyan-200/80" x-text="rewardsText('credits_eyebrow', 'AI Xingyue Credits')">AI Xingyue Credits</div>
+                  <div class="text-4xl md:text-5xl font-bold xy-gradient-text mt-2" x-text="balance.points.toLocaleString('zh-CN')"></div>
+                  <div class="text-sm text-slate-400 mt-2"><span x-text="deposit?.credits_name || '星月币'">星月币</span><span x-text="rewardsText('balance_suffix', '余额，网页与 APK 共用。')">余额，网页与 APK 共用。</span></div>
+                </div>
+                <button class="xy-btn xy-btn-ghost text-sm" @click="loadRewards" x-text="dashboardText('balance_refresh_text', '刷新')">刷新</button>
+              </div>
+              <div class="grid md:grid-cols-3 gap-3">
+                <div class="stat-card">
+                  <div class="num" x-text="balance.free_points.toLocaleString('zh-CN')"></div>
+                  <div class="label" x-text="dashboardText('balance_free_label', '免费') + rewardsText('balance_unit_suffix', '额度')">免费额度</div>
+                </div>
+                <div class="stat-card">
+                  <div class="num" x-text="balance.paid_points.toLocaleString('zh-CN')"></div>
+                  <div class="label" x-text="dashboardText('balance_paid_label', '充值') + rewardsText('balance_unit_suffix', '额度')">充值额度</div>
+                </div>
+                <div class="stat-card">
+                  <div class="num" x-text="balance.reward_points.toLocaleString('zh-CN')"></div>
+                  <div class="label" x-text="dashboardText('balance_reward_label', '奖励') + rewardsText('balance_unit_suffix', '额度')">奖励额度</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-panel">
+            <div class="text-white font-semibold mb-2" x-text="depositText('title', '兑换码')">兑换码</div>
+            <div class="text-sm text-slate-400 mb-4" x-text="depositText('description', '购买后复制兑换码到这里，到账后会写入充值额度。')">购买后复制兑换码到这里，到账后会写入充值额度。</div>
+            <div class="flex gap-2">
+              <input class="xy-input flex-1 uppercase font-mono" x-model="redeemInput" @keydown.enter="redeemNow" :placeholder="depositText('redeem_placeholder', 'XY-XXXX-XXXX-XXXX-XXXX')">
+              <button class="xy-btn xy-btn-primary shrink-0" @click="redeemNow" :disabled="busy">
+                <span x-show="!busy" x-text="depositText('redeem_button_text', '兑换')">兑换</span>
+                <span x-show="busy" class="xy-loading"></span>
+              </button>
+            </div>
+            <button class="xy-btn xy-btn-ghost w-full justify-center mt-3" @click="openAifadian" x-text="depositText('button_text', '去爱发电购买兑换码')">去爱发电购买兑换码</button>
+            <p class="text-xs text-slate-500 mt-3" x-text="paymentNote()"></p>
+          </div>
+        </div>
+
+        <div class="grid xl:grid-cols-[1fr_360px] gap-4">
+          <div class="space-y-4">
+          <div class="form-panel">
+            <div class="flex items-center justify-between mb-4">
+              <div>
+                <div class="text-white font-semibold" x-text="rewardsText('packages_title', '推荐套餐')">推荐套餐</div>
+                <div class="text-xs text-slate-500 mt-1" x-text="deposit?.rate_label || '1 CNY = 1000 星月币'"></div>
+              </div>
+              <button class="xy-btn xy-btn-ghost text-sm" @click="openAifadian" x-text="depositText('button_text', rewardsText('purchase_button_fallback', '购买'))">购买</button>
+            </div>
+            <div class="grid md:grid-cols-2 gap-3">
+              <template x-for="pkg in (deposit?.packages || [])" :key="pkg.id">
+                <button class="quick-tile text-left !p-4" @click="openAifadian">
+                  <div class="flex items-start justify-between gap-3">
+                    <strong x-text="pkg.label"></strong>
+                    <span class="xy-badge xy-badge-purple" x-text="`¥${pkg.price_cny}`"></span>
+                  </div>
+                  <span x-text="packagePoints(pkg) + ' 星月币'"></span>
+                  <div class="text-xs text-fuchsia-200 mt-2" x-show="pkg.bonus_rate"><span x-text="rewardsText('bonus_prefix', '含奖励 +')"></span><span x-text="pkg.bonus_rate"></span>%</div>
+                </button>
+              </template>
+            </div>
+          </div>
+
+          <div class="form-panel">
+            <div class="flex items-start justify-between gap-4 mb-4">
+              <div>
+                <div class="text-white font-semibold" x-text="depositText('subscriptions_title', '月度订阅')">月度订阅</div>
+                <div class="text-xs text-slate-500 mt-1" x-text="depositText('subscriptions_note', '订阅为月度额度包，不承诺无限使用；额度用完后可继续兑换积分包。')"></div>
+              </div>
+              <button class="xy-btn xy-btn-ghost text-sm shrink-0" @click="openAifadian" x-text="depositText('button_text', rewardsText('purchase_button_fallback', '购买'))">购买</button>
+            </div>
+            <div class="grid md:grid-cols-3 gap-3">
+              <template x-for="sub in (deposit?.subscriptions || [])" :key="sub.id">
+                <button class="quick-tile text-left !p-4" @click="openAifadian">
+                  <div class="flex items-start justify-between gap-3">
+                    <strong x-text="sub.label"></strong>
+                    <span class="xy-badge xy-badge-green" x-text="`¥${sub.price_cny}/${sub.period || '月'}`"></span>
+                  </div>
+                  <span x-text="packagePoints(sub) + ' 星月币/月'"></span>
+                  <div class="text-xs text-slate-400 mt-2" x-text="sub.description || ''"></div>
+                </button>
+              </template>
+            </div>
+          </div>
+          </div>
+
+          <div class="form-panel">
+            <div class="flex items-center justify-between gap-3 mb-4">
+              <div>
+                <div class="text-white font-semibold" x-text="rewards?.daily?.title || '每日奖励'"></div>
+                <div class="text-xs text-slate-500 mt-1" x-text="rewards?.daily?.description || '免费额度自动归入总余额。'"></div>
+              </div>
+              <button class="xy-btn xy-btn-primary text-sm" @click="claimDaily" :disabled="busy || rewards?.daily?.claimed" x-text="dailyClaimText()"></button>
+            </div>
+            <div class="space-y-2">
+              <template x-for="task in (rewards?.tasks || [])" :key="task.key">
+                <div class="list-row !grid-cols-[minmax(0,1fr)_auto] !px-0">
+                  <div>
+                    <div class="title" x-text="task.label"></div>
+                    <div class="meta" x-text="task.status === 'available' ? rewardsText('task_available_label', '可完成') : task.status"></div>
+                  </div>
+                  <span class="xy-badge xy-badge-green">+<span x-text="task.points"></span></span>
+                </div>
+              </template>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-panel">
+          <div class="flex items-center justify-between mb-4">
+            <div>
+              <div class="text-white font-semibold" x-text="rewardsText('redemptions_title', '兑换记录')">兑换记录</div>
+              <div class="text-xs text-slate-500 mt-1" x-text="rewardsText('redemptions_hint', '只显示当前账号最近兑换。')">只显示当前账号最近兑换。</div>
+            </div>
+            <button class="xy-btn xy-btn-ghost text-sm" @click="loadRedemptions" x-text="rewardsText('redemptions_refresh_text', '刷新')">刷新</button>
+          </div>
+          <div class="list-panel">
+            <template x-if="redemptions.length === 0">
+              <div class="p-8 text-center text-sm text-slate-500" x-text="emptyText('redemptions_empty_title', '暂无兑换记录')">暂无兑换记录</div>
+            </template>
+            <template x-for="item in redemptions" :key="item.id">
+              <div class="list-row !grid-cols-[minmax(0,1fr)_auto]">
+                <div>
+                  <div class="title font-mono" x-text="item.code"></div>
+                  <div class="meta"><span x-text="formatTime(item.created_at)"></span> · <span x-text="item.point_type"></span></div>
+                </div>
+                <span class="xy-badge xy-badge-green">+<span x-text="item.points"></span></span>
+              </div>
+            </template>
+          </div>
+        </div>
+      </section>
+    </main>
+    <nav class="app-bottom-nav" data-app-bottom-nav></nav>
+  </div>
+</body>
+</html>

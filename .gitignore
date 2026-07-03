@@ -1,0 +1,47 @@
+# Runtime/build artifacts
+output/
+git-backups/
+.playwright-mcp/
+android-sdk/
+apk_analysis/
+reverse-analysis/
+learning-notes/
+
+# Large binary inputs and generated archives
+*.apk
+*.aab
+*.apks
+*.zip
+*.7z
+*.rar
+*.tar
+*.tar.gz
+*.tgz
+*.sqlite
+*.sqlite3
+*.db
+
+# Python / Node / editor caches
+__pycache__/
+*.py[cod]
+node_modules/
+.venv/
+venv/
+.env
+.env.*
+*.log
+
+# Bundled third-party reverse-engineering tools
+tools/jadx/
+tools/apktool/apktool.jar
+
+# Secrets and local machine state
+*.pem
+*.key
+*.p12
+*.keystore
+*.jks
+*.mobileprovision
+cookies*.txt
+token*.txt
+secret*.txt

@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>聊天 · AI星月</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
+  <link rel="icon" href="/favicon.ico">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/app/assets/css/app.css">
+  <style>
+    .chat-list {
+      width: 268px; flex-shrink: 0;
+      border-right: 1px solid rgba(196, 181, 253, .14);
+      display: flex; flex-direction: column;
+      background: linear-gradient(180deg, rgba(20,10,50,.45), rgba(8,4,24,.55));
+      backdrop-filter: blur(14px);
+    }
+    .chat-list__header {
+      padding: 16px 18px;
+      border-bottom: 1px solid rgba(196, 181, 253, .12);
+      font-weight: 700; color: #fff;
+      background: linear-gradient(90deg, rgba(168,85,247,.12), transparent);
+    }
+    .chat-list__items { flex: 1; overflow-y: auto; padding: 10px; }
+    .chat-list__item {
+      display: flex; gap: 11px; padding: 10px;
+      border-radius: 14px;
+      cursor: pointer; transition: all .25s;
+      border: 1px solid transparent;
+    }
+    .chat-list__item:hover {
+      background: rgba(168,85,247,.10);
+      border-color: rgba(196, 181, 253, .15);
+    }
+    .chat-list__item.is-active {
+      background: linear-gradient(135deg, rgba(168,85,247,.22), rgba(244,114,182,.10));
+      border-color: rgba(240, 171, 252, .35);
+      box-shadow: 0 4px 16px -6px rgba(168, 85, 247, .5);
+    }
+    .chat-list__item .avatar {
+      width: 40px; height: 40px; border-radius: 50%;
+      object-fit: cover; flex-shrink: 0;
+      background: linear-gradient(135deg,#8b5cf6,#ec4899);
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; color: #fff;
+      box-shadow: 0 2px 10px rgba(244, 114, 182, .35);
+    }
+    .chat-list__item .meta { flex: 1; min-width: 0; }
+    .chat-list__item .name { font-weight: 600; font-size: 14px; color: #fff; }
+    .chat-list__item .preview { font-size: 12px; color: rgba(232,226,255,.55); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .chat-window { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
+    .chat-window__hero {
+      position: relative; height: 220px;
+      background-size: cover; background-position: center;
+      border-bottom: 1px solid rgba(196, 181, 253, .12);
+    }
+    .chat-window__hero::after {
+      content: ''; position: absolute; inset: 0;
+      background:
+        radial-gradient(ellipse 60% 50% at 30% 30%, rgba(168,85,247,.25), transparent 70%),
+        linear-gradient(180deg, transparent 25%, rgba(10,4,32,.96) 100%);
+    }
+    .chat-window__hero__info {
+      position: absolute; left: 28px; bottom: 22px; z-index: 1;
+      display: flex; align-items: center; gap: 16px;
+    }
+    .chat-window__hero__info .avatar {
+      width: 64px; height: 64px; border-radius: 50%;
+      border: 2px solid rgba(240, 171, 252, .55);
+      object-fit: cover;
+      background: linear-gradient(135deg,#8b5cf6,#ec4899);
+      display: flex; align-items: center; justify-content: center;
+      color: #fff; font-weight: 700; font-size: 24px;
+      box-shadow: 0 0 24px rgba(244, 114, 182, .55);
+    }
+    .chat-window__hero__info .text h2 {
+      font-size: 24px; font-weight: 800;
+      background: linear-gradient(135deg, #fff, #f0abfc);
+      -webkit-background-clip: text; background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .chat-window__hero__info .text p { font-size: 13px; color: rgba(232,226,255,.78); margin-top: 4px; }
+    .chat-messages {
+      flex: 1; overflow-y: auto; padding: 26px 32px;
+      display: flex; flex-direction: column; gap: 14px;
+    }
+    .bubble {
+      max-width: 70%; padding: 12px 16px;
+      font-size: 14px; line-height: 1.65; word-break: break-word;
+      animation: bubble-in .35s cubic-bezier(.2,.8,.2,1) both;
+    }
+    @keyframes bubble-in {
+      from { opacity: 0; transform: translateY(8px) scale(0.97); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .bubble.user {
+      align-self: flex-end;
+      background: linear-gradient(135deg, #8b5cf6 0%, #d946ef 60%, #fb7185 100%);
+      color: #fff;
+      border-radius: 20px 20px 4px 20px;
+      box-shadow: 0 8px 22px -6px rgba(217, 70, 239, .55);
+    }
+    .bubble.assistant {
+      align-self: flex-start;
+      background: linear-gradient(145deg, rgba(168,85,247,.12), rgba(255,255,255,.06));
+      border: 1px solid rgba(196,181,253,.20);
+      color: rgba(232,226,255,.96);
+      border-radius: 20px 20px 20px 4px;
+      backdrop-filter: blur(10px);
+    }
+    .bubble .msg-text { white-space: pre-wrap; }
+    .msg-row.has-advanced-render {
+      width: min(920px, 96%);
+      max-width: 96%;
+    }
+    .msg-row.has-status-panel {
+      width: min(760px, 94%);
+      max-width: 94%;
+    }
+    .bubble.has-advanced-render {
+      width: 100%;
+      padding: 10px;
+    }
+    .bubble.has-status-panel {
+      width: 100%;
+    }
+    .msg-expand,
+    .tavo-source {
+      margin-top: 8px;
+      border-top: 1px solid rgba(196,181,253,.14);
+      color: rgba(232,226,255,.82);
+    }
+    .msg-expand summary,
+    .tavo-source summary {
+      padding-top: 8px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+      color: rgba(240,171,252,.9);
+      list-style: none;
+    }
+    .msg-expand summary::-webkit-details-marker,
+    .tavo-source summary::-webkit-details-marker { display: none; }
+    .tavo-frame-card {
+      width: 100%;
+      overflow: hidden;
+      border-radius: 14px;
+      border: 1px solid rgba(196,181,253,.22);
+      background: rgba(8,4,24,.72);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.05);
+    }
+    .tavo-frame-card__bar {
+      min-height: 36px;
+      padding: 0 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      color: rgba(232,226,255,.86);
+      font-size: 12px;
+      font-weight: 750;
+      border-bottom: 1px solid rgba(196,181,253,.14);
+      background: linear-gradient(90deg, rgba(168,85,247,.18), rgba(244,114,182,.08));
+    }
+    .tavo-frame-card__bar span:last-child {
+      color: rgba(216,180,254,.72);
+      font-weight: 650;
+    }
+    .tavo-frame {
+      width: 100%;
+      height: 420px;
+      display: block;
+      border: 0;
+      background: transparent;
+    }
+    .tavo-frame-card.is-paused {
+      padding-bottom: 10px;
+    }
+    .tavo-source {
+      margin: 0;
+      padding: 0 12px 10px;
+      background: rgba(15,23,42,.22);
+    }
+    .tavo-source pre {
+      max-height: 220px;
+      overflow: auto;
+      margin-top: 8px;
+      padding: 10px;
+      border-radius: 10px;
+      background: rgba(2,6,23,.5);
+      color: rgba(226,232,240,.86);
+      font-size: 12px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+    }
+    .tavo-source__note {
+      margin-top: 6px;
+      color: rgba(232,226,255,.55);
+      font-size: 11px;
+    }
+    .tavo-confirm {
+      padding: 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: rgba(232,226,255,.66);
+      font-size: 12px;
+    }
+    .tavo-run-btn {
+      min-height: 32px;
+      padding: 0 12px;
+      border-radius: 10px;
+      color: #fff;
+      background: rgba(168,85,247,.22);
+      border: 1px solid rgba(240,171,252,.34);
+      font-size: 12px;
+      font-weight: 800;
+      cursor: pointer;
+      transition: all .16s;
+    }
+    .tavo-run-btn:hover {
+      background: rgba(168,85,247,.34);
+      border-color: rgba(240,171,252,.62);
+    }
+    .math-inline {
+      display: inline-flex;
+      align-items: center;
+      min-height: 1.7em;
+      margin: 0 2px;
+      padding: 0 7px;
+      border-radius: 8px;
+      color: #fef3c7;
+      background: rgba(245,158,11,.14);
+      border: 1px solid rgba(251,191,36,.24);
+      font-family: "Times New Roman", "Cambria Math", serif;
+      white-space: nowrap;
+    }
+    .math-block {
+      margin: 8px 0;
+      padding: 10px 12px;
+      border-radius: 12px;
+      color: #fef3c7;
+      background: rgba(15,23,42,.42);
+      border: 1px solid rgba(251,191,36,.22);
+      font-family: "Times New Roman", "Cambria Math", serif;
+      white-space: pre-wrap;
+      overflow-x: auto;
+    }
+    .math-block__label {
+      display: inline-flex;
+      margin-right: 8px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      color: rgba(254,243,199,.78);
+      background: rgba(245,158,11,.16);
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 800;
+    }
+    .status-card {
+      margin: 10px 0 2px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: rgba(15, 23, 42, .38);
+      border: 1px solid rgba(196, 181, 253, .24);
+      color: rgba(232,226,255,.9);
+      display: grid;
+      gap: 6px;
+    }
+    .status-card__title {
+      font-size: 12px;
+      font-weight: 800;
+      color: #f0abfc;
+    }
+    .structured-status-card {
+      gap: 10px;
+      background: linear-gradient(145deg, rgba(30, 12, 70, .62), rgba(12, 8, 30, .72));
+      border-color: rgba(216, 180, 254, .34);
+    }
+    .status-card__group {
+      display: grid;
+      gap: 6px;
+      padding: 8px;
+      border-radius: 10px;
+      background: rgba(255,255,255,.035);
+      border: 1px solid rgba(196,181,253,.12);
+    }
+    .status-card__group-title {
+      font-size: 12px;
+      font-weight: 800;
+      color: rgba(240,171,252,.92);
+    }
+    .status-card__row {
+      display: grid;
+      grid-template-columns: 72px minmax(0, 1fr);
+      gap: 8px;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+    .status-card__label { color: rgba(216,180,254,.76); font-weight: 700; }
+    .status-card__value { color: rgba(248,250,252,.88); min-width: 0; }
+    .status-card__line { color: rgba(248,250,252,.86); font-size: 12px; line-height: 1.55; }
+    .bubble.assistant.is-loading {
+      min-width: 56px;
+      min-height: 38px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .bubble.assistant.is-loading::after { content: '...'; animation: dots 1s infinite; }
+    @keyframes dots { 33% { content: '.'; } 66% { content: '..'; } }
+    /* 消息行 + 操作条 */
+    .msg-row { display: flex; flex-direction: column; max-width: 74%; }
+    .msg-row.user { align-self: flex-end; align-items: flex-end; }
+    .msg-row.assistant { align-self: flex-start; align-items: flex-start; }
+    .msg-row .bubble { max-width: 100%; }
+    .load-older {
+      align-self: center;
+      min-height: 32px;
+      padding: 0 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(196,181,253,.2);
+      background: rgba(255,255,255,.045);
+      color: rgba(232,226,255,.74);
+      font-size: 12px;
+      font-weight: 700;
+      transition: all .16s;
+    }
+    .load-older:hover:not(:disabled) {
+      color: #f0abfc;
+      border-color: rgba(240,171,252,.46);
+      background: rgba(168,85,247,.14);
+    }
+    .load-older:disabled { opacity: .55; cursor: not-allowed; }
+    .msg-actions {
+      display: flex; gap: 4px; margin-top: 4px; padding: 0 4px;
+      opacity: 0; transition: opacity .18s; flex-wrap: wrap; align-items: center;
+    }
+    .msg-row:hover .msg-actions, .msg-actions.is-pinned { opacity: 1; }
+    .msg-act {
+      display: inline-flex; align-items: center; gap: 3px;
+      font-size: 11px; color: rgba(232,226,255,.6);
+      background: rgba(255,255,255,.04);
+      border: 1px solid rgba(196,181,253,.16);
+      border-radius: 9px; padding: 3px 8px; cursor: pointer;
+      transition: all .16s;
+    }
+    .msg-act:hover { color: #f0abfc; border-color: rgba(240,171,252,.4); background: rgba(168,85,247,.14); }
+    .msg-act:disabled { opacity: .4; cursor: not-allowed; }
+    .msg-act svg { width: 13px; height: 13px; }
+    .swipe-ctrl { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: rgba(232,226,255,.55); }
+    .swipe-ctrl button {
+      width: 22px; height: 22px; border-radius: 50%;
+      display: inline-flex; align-items: center; justify-content: center;
+      background: rgba(255,255,255,.05); border: 1px solid rgba(196,181,253,.2);
+      color: #e8e2ff; cursor: pointer; transition: all .16s;
+    }
+    .swipe-ctrl button:hover:not(:disabled) { background: rgba(168,85,247,.2); border-color: rgba(240,171,252,.45); }
+    .swipe-ctrl button:disabled { opacity: .35; cursor: not-allowed; }
+    .msg-edit { width: 100%; }
+    .msg-edit textarea {
+      width: 100%; min-height: 70px; resize: vertical; padding: 10px 12px;
+      border-radius: 14px; background: rgba(255,255,255,.06);
+      border: 1px solid rgba(240,171,252,.4); color: #fff; font-size: 14px; font-family: inherit;
+    }
+    .msg-edit__btns { display: flex; gap: 8px; margin-top: 6px; }
+    .new-chat-btn {
+      margin: 8px 10px 4px; padding: 9px;
+      display: flex; align-items: center; justify-content: center; gap: 6px;
+      border-radius: 12px; cursor: pointer; font-size: 13px; font-weight: 600; color: #fff;
+      background: linear-gradient(135deg, rgba(139,92,246,.85), rgba(217,70,239,.7));
+      border: 1px solid rgba(240,171,252,.3);
+      box-shadow: 0 6px 18px -8px rgba(217,70,239,.6); transition: transform .16s;
+    }
+    .new-chat-btn:hover { transform: translateY(-1px); }
+    .chat-list__item .del {
+      opacity: 0; flex-shrink: 0; align-self: center;
+      color: rgba(232,226,255,.4); cursor: pointer; padding: 2px; transition: all .16s;
+    }
+    .chat-list__item:hover .del { opacity: 1; }
+    .chat-list__item .del:hover { color: #fb7185; }
+    .chat-input {
+      border-top: 1px solid rgba(196,181,253,.14);
+      padding: 16px 28px;
+      display: flex; gap: 12px; align-items: flex-end;
+      background: rgba(10,4,32,.78);
+      backdrop-filter: blur(14px);
+    }
+    .chat-input textarea {
+      flex: 1; resize: none; min-height: 46px; max-height: 200px;
+      padding: 13px 16px; border-radius: 16px;
+      background: rgba(255,255,255,.05);
+      border: 1px solid rgba(196,181,253,.22);
+      color: #fff; font-size: 14px; font-family: inherit;
+      transition: all .2s;
+    }
+    .chat-input textarea:focus {
+      outline: none;
+      border-color: #f0abfc;
+      box-shadow: 0 0 0 3px rgba(240, 171, 252, .15);
+      background: rgba(255,255,255,.08);
+    }
+    .chat-input button {
+      width: 46px; height: 46px; border-radius: 50%;
+      display: inline-flex; align-items: center; justify-content: center;
+      background: linear-gradient(135deg,#8b5cf6,#d946ef 60%,#ec4899);
+      color: #fff; border: none; cursor: pointer; flex-shrink: 0;
+      box-shadow: 0 8px 22px -6px rgba(217, 70, 239, .65);
+      transition: transform .2s, box-shadow .2s;
+    }
+    .chat-input button:hover {
+      transform: translateY(-2px) scale(1.05);
+      box-shadow: 0 12px 28px -6px rgba(217, 70, 239, .8);
+    }
+    .chat-input button:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+    .chat-model {
+      min-width: 210px;
+      display: flex; align-items: center; gap: 8px;
+      padding: 7px 10px; border-radius: 14px;
+      background: rgba(255,255,255,.045);
+      border: 1px solid rgba(196,181,253,.18);
+      color: rgba(232,226,255,.76); font-size: 12px;
+    }
+    .chat-model span { flex-shrink: 0; color: rgba(240,171,252,.82); font-weight: 650; }
+    .chat-model select {
+      min-width: 0; flex: 1; height: 30px;
+      color: #fff; background: rgba(16,8,44,.92);
+      border: 1px solid rgba(196,181,253,.18);
+      border-radius: 10px; padding: 0 8px;
+      font-size: 12px; outline: none;
+    }
+    .chat-model select:focus { border-color: rgba(240,171,252,.62); box-shadow: 0 0 0 3px rgba(240,171,252,.12); }
+    .quick-replies {
+      position: absolute; left: 28px; right: 28px; bottom: 82px; z-index: 22;
+      display: flex; gap: 8px; flex-wrap: wrap;
+      pointer-events: none;
+    }
+    .quick-replies button {
+      pointer-events: auto; min-height: 32px; max-width: 240px;
+      padding: 0 11px; border-radius: 999px;
+      color: rgba(255,255,255,.92); font-size: 12px;
+      border: 1px solid rgba(240,171,252,.24);
+      background: rgba(22,10,54,.78); backdrop-filter: blur(12px);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      transition: all .16s;
+    }
+    .quick-replies button:hover { background: rgba(168,85,247,.28); border-color: rgba(240,171,252,.52); }
+    .chat-tools {
+      position: absolute; right: 22px; top: 18px; z-index: 4;
+      display: flex; gap: 8px;
+    }
+    .tool-btn {
+      width: 40px; height: 40px; border-radius: 12px;
+      display: inline-flex; align-items: center; justify-content: center;
+      color: #fff; background: rgba(12, 6, 36, .64);
+      border: 1px solid rgba(240,171,252,.28);
+      backdrop-filter: blur(12px); cursor: pointer; transition: all .18s;
+    }
+    .tool-btn:hover, .tool-btn.is-active { background: rgba(168,85,247,.28); border-color: rgba(240,171,252,.55); }
+    .memory-panel,
+    .advanced-render-panel {
+      position: absolute; right: 20px; top: 66px; z-index: 30;
+      width: min(360px, calc(100vw - 36px)); max-height: calc(100vh - 130px);
+      overflow-y: auto; padding: 14px;
+      border-radius: 18px; border: 1px solid rgba(240,171,252,.26);
+      background: rgba(13, 6, 38, .94); backdrop-filter: blur(18px);
+      box-shadow: 0 24px 60px -24px rgba(0,0,0,.75);
+    }
+    .advanced-render-panel { width: min(390px, calc(100vw - 36px)); }
+    .memory-panel h3 { font-size: 14px; font-weight: 800; color: #fff; margin-bottom: 10px; }
+    .memory-panel label { display: block; font-size: 11px; color: rgba(232,226,255,.62); margin: 10px 0 5px; }
+    .memory-panel input, .memory-panel textarea {
+      width: 100%; border-radius: 12px; border: 1px solid rgba(196,181,253,.18);
+      background: rgba(255,255,255,.06); color: #fff; padding: 9px 10px;
+      font-size: 12px; line-height: 1.5; resize: vertical;
+    }
+    .memory-panel input:focus, .memory-panel textarea:focus {
+      outline: none; border-color: rgba(240,171,252,.55); box-shadow: 0 0 0 3px rgba(240,171,252,.12);
+    }
+    .memory-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    .memory-actions button {
+      min-height: 32px; padding: 0 10px; border-radius: 10px;
+      font-size: 12px; color: #fff; border: 1px solid rgba(240,171,252,.24);
+      background: rgba(168,85,247,.18); cursor: pointer;
+    }
+    .memory-actions button:hover { border-color: rgba(240,171,252,.5); background: rgba(168,85,247,.28); }
+    .memory-item {
+      margin-top: 8px; padding: 9px; border-radius: 12px;
+      border: 1px solid rgba(196,181,253,.14); background: rgba(255,255,255,.045);
+    }
+    .memory-item__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #fff; font-size: 12px; font-weight: 700; }
+    .memory-item__body { margin-top: 5px; color: rgba(232,226,255,.76); font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
+    .memory-item__tags { margin-top: 6px; color: rgba(240,171,252,.72); font-size: 11px; }
+    .memory-del { color: rgba(251,113,133,.9); font-size: 11px; cursor: pointer; }
+    .advanced-render-panel h3 { font-size: 14px; font-weight: 800; color: #fff; margin-bottom: 10px; }
+    .render-setting {
+      margin-top: 10px;
+      padding: 10px;
+      border-radius: 14px;
+      border: 1px solid rgba(196,181,253,.14);
+      background: rgba(255,255,255,.045);
+    }
+    .render-setting__head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      color: rgba(232,226,255,.88);
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .render-setting__value { color: rgba(216,180,254,.72); font-size: 11px; font-weight: 700; }
+    .render-toggle {
+      min-width: 54px;
+      height: 28px;
+      padding: 0 9px;
+      border-radius: 999px;
+      border: 1px solid rgba(196,181,253,.22);
+      background: rgba(15,23,42,.34);
+      color: rgba(232,226,255,.68);
+      font-size: 11px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+    .render-toggle.is-on {
+      color: #fff;
+      border-color: rgba(240,171,252,.56);
+      background: linear-gradient(135deg, rgba(139,92,246,.82), rgba(217,70,239,.58));
+    }
+    .render-segmented {
+      margin-top: 9px;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+    }
+    .render-segmented button {
+      min-height: 30px;
+      border-radius: 10px;
+      border: 1px solid rgba(196,181,253,.16);
+      background: rgba(255,255,255,.045);
+      color: rgba(232,226,255,.7);
+      font-size: 11px;
+      font-weight: 750;
+      cursor: pointer;
+      transition: all .16s;
+    }
+    .render-segmented button:hover,
+    .render-segmented button.is-active {
+      color: #fff;
+      border-color: rgba(240,171,252,.52);
+      background: rgba(168,85,247,.22);
+    }
+    @media (max-width: 768px) {
+      .chat-list { display: none; }
+      .chat-list.is-open { position: fixed; inset: 0; right: auto; width: 280px; display: flex; z-index: 50; }
+      .chat-window { min-height: calc(100vh - 76px); }
+      .chat-window__hero { height: 160px; }
+      .chat-window__hero__info { left: 16px; right: 16px; bottom: 14px; }
+      .chat-window__hero__info .avatar { width: 48px; height: 48px; font-size: 19px; }
+      .chat-window__hero__info .text h2 { font-size: 19px; }
+      .chat-window__hero__info .text p { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+      .chat-messages { padding: 16px 16px 96px; }
+      .bubble { max-width: 86%; }
+      .msg-row.has-advanced-render { width: 100%; max-width: 100%; }
+      .tavo-frame { height: 360px; }
+      .chat-messages { padding-bottom: 138px; }
+      .chat-input { position: fixed; left: 0; right: 0; bottom: 66px; z-index: 55; padding: 10px 12px; flex-wrap: wrap; }
+      .chat-model { width: 100%; min-width: 0; order: -1; }
+      .quick-replies { position: fixed; left: 12px; right: 12px; bottom: 176px; z-index: 54; }
+      .quick-replies button { max-width: 45vw; }
+      .chat-tools { right: 14px; top: 12px; }
+      .memory-panel, .advanced-render-panel { position: fixed; left: 12px; right: 12px; top: 72px; width: auto; max-height: calc(100vh - 160px); }
+    }
+  </style>
+  <script type="module" src="/app/assets/js/chat.js?v=20260702-html-injector"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+</head>
+<body class="min-h-screen">
+  <div class="xy-stars-bg"></div>
+
+  <div class="app-shell" x-data="chatPage()" x-init="init()" x-cloak>
+
+    <aside class="app-sidebar" data-app-sidebar></aside>
+
+    <main class="app-main flex">
+      <!-- 左侧对话列表 -->
+      <aside class="chat-list" :class="{ 'is-open': listOpen }">
+        <div class="chat-list__header flex items-center justify-between">
+          <span x-text="chatText('conversation_list_title', '我的对话')"></span>
+          <a href="/app/explore.html" class="text-xs xy-link" x-text="chatText('new_role_link', '+ 新角色')"></a>
+        </div>
+        <button class="new-chat-btn" x-show="appId" @click="newChat" :disabled="busy">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+          <span x-text="busy ? chatText('creating_label', '创建中…') : `${chatText('new_conversation_prefix', '与')} ${appName || chatText('current_role_fallback', '当前角色')} ${chatText('new_conversation_suffix', '新建对话')}`"></span>
+        </button>
+        <div class="chat-list__items">
+          <template x-if="conversations.length === 0">
+            <div class="px-3 py-8 text-center text-xs text-violet-200/60">
+              <span x-text="chatText('no_conversations_title', '还没有对话')"></span><br>
+              <span x-text="chatText('no_conversations_prefix', '去')"></span> <a href="/app/explore.html" class="xy-link" x-text="chatText('no_conversations_link', '探索')"></a><span x-text="' ' + chatText('no_conversations_suffix', '找个角色聊聊吧')"></span>
+            </div>
+          </template>
+          <template x-for="c in conversations" :key="c.id">
+            <div class="chat-list__item" :class="{ 'is-active': c.id === conversation?.id }" @click="selectConversation(c)">
+              <img x-show="c.app_icon" class="avatar" :src="c.app_icon" referrerpolicy="no-referrer" onerror="this.style.display='none'">
+              <div class="avatar" x-show="!c.app_icon" x-text="(c.app_name || c.title || '?').slice(0,1)"></div>
+              <div class="meta">
+                <div class="name truncate" x-text="c.app_name || c.title || chatText('unnamed_conversation', '未命名')"></div>
+                <div class="preview" x-text="c.last_message || chatText('continue_preview', '点击继续对话')"></div>
+              </div>
+              <span class="del" @click.stop="deleteConversation(c)" :title="chatText('delete_text', '删除')">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+              </span>
+            </div>
+          </template>
+        </div>
+      </aside>
+
+      <!-- 右侧聊天主区 -->
+      <section class="chat-window">
+        <!-- 角色头图 -->
+        <div class="chat-window__hero" :style="appHero ? `background-image: url('${appHero}')` : 'background: linear-gradient(135deg, #1a1230, #2d1b69 60%, #4c1d95);'">
+          <div class="chat-tools" x-show="appId || conversation">
+            <button class="tool-btn" :class="{ 'is-active': memoryOpen }" @click="toggleMemoryPanel" :title="chatText('memory_tool_title', '记忆')">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v12m6-6H6M5 4h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1z"/></svg>
+            </button>
+            <button class="tool-btn" :class="{ 'is-active': advancedRenderOpen }" @click="toggleAdvancedRenderPanel" title="高级渲染">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.5 3.5l1.25 3.2L14 8l-3.25 1.3-1.25 3.2-1.25-3.2L5 8l3.25-1.3 1.25-3.2zM17 11l.9 2.1L20 14l-2.1.9L17 17l-.9-2.1L14 14l2.1-.9L17 11zM7 15l.7 1.6L9.3 17.3l-1.6.7L7 19.6 6.3 18 4.7 17.3l1.6-.7L7 15z"/></svg>
+            </button>
+          </div>
+          <div class="chat-window__hero__info">
+            <img x-show="appIcon" class="avatar" :src="appIcon" referrerpolicy="no-referrer" onerror="this.style.display='none'">
+            <div class="avatar" x-show="!appIcon" x-text="(appName || '?').slice(0,1)"></div>
+            <div class="text">
+              <h2 x-text="appName || (conversation ? chatText('hero_continue_title', '继续对话') : chatText('hero_empty_title', '选个角色开始吧'))"></h2>
+              <p x-text="appDesc || chatText('hero_empty_hint', '点击左侧对话或去探索页选择角色')"></p>
+            </div>
+          </div>
+        </div>
+
+        <aside class="memory-panel" x-show="memoryOpen" @click.outside="memoryOpen=false" x-transition>
+          <h3 x-text="chatText('memory_title', '记忆')"></h3>
+          <label x-text="chatText('summary_label', '会话摘要')"></label>
+          <textarea rows="4" x-model="summaryDraft" :placeholder="chatText('summary_placeholder', '当前会话摘要')"></textarea>
+          <div class="memory-actions">
+            <button @click="autoSummary" :disabled="savingSummary || !conversation" x-text="chatText('auto_summary_button', '自动摘要')"></button>
+            <button @click="saveSummary" :disabled="savingSummary || !conversation" x-text="chatText('save_summary_button', '保存摘要')"></button>
+          </div>
+          <label x-text="chatText('memory_title_label', '记忆标题')"></label>
+          <input x-model="memoryDraft.title" :placeholder="chatText('memory_title_placeholder', '例如：用户偏好')">
+          <label x-text="chatText('memory_content_label', '记忆内容')"></label>
+          <textarea rows="4" x-model="memoryDraft.content" :placeholder="chatText('memory_content_placeholder', '会在相关对话中注入给模型')"></textarea>
+          <label x-text="chatText('memory_keywords_label', '关键词')"></label>
+          <input x-model="memoryDraft.keywords" :placeholder="chatText('memory_keywords_placeholder', '用逗号分隔；留空则手动置顶更稳定')">
+          <div class="memory-actions">
+            <button @click="saveMemory" :disabled="savingMemory || !memoryDraft.content.trim()" x-text="chatText('add_memory_button', '添加记忆')"></button>
+            <button @click="memoryDraft.pinned=!memoryDraft.pinned" x-text="memoryDraft.pinned ? chatText('pinned_on_button', '已置顶') : chatText('pinned_off_button', '置顶')"></button>
+          </div>
+          <template x-if="memories.length === 0">
+            <div class="memory-item__body mt-3" x-text="chatText('no_memory_text', '暂无记忆')"></div>
+          </template>
+          <template x-for="m in memories" :key="m.id">
+            <div class="memory-item">
+              <div class="memory-item__head">
+                <span x-text="m.title || chatText('unnamed_memory', '未命名记忆')"></span>
+                <span class="memory-del" @click="deleteMemory(m)" x-text="chatText('delete_text', '删除')"></span>
+              </div>
+              <div class="memory-item__body" x-text="m.content"></div>
+              <div class="memory-item__tags" x-show="m.keywords?.length" x-text="m.keywords.join(' / ')"></div>
+            </div>
+          </template>
+        </aside>
+
+        <aside class="advanced-render-panel" x-show="advancedRenderOpen" @click.outside="advancedRenderOpen=false" x-transition>
+          <h3>高级渲染</h3>
+          <div class="render-setting">
+            <div class="render-setting__head">
+              <span>高级渲染</span>
+              <button type="button" class="render-toggle" :class="{ 'is-on': advancedRenderSettings.enabled }" @click="toggleAdvancedRenderEnabled" x-text="advancedRenderSettings.enabled ? '开启' : '关闭'"></button>
+            </div>
+          </div>
+          <div class="render-setting">
+            <div class="render-setting__head">
+              <span>JavaScript 支持</span>
+              <span class="render-setting__value" x-text="advancedRenderSettings.javascript === 'disabled' ? '禁止' : (advancedRenderSettings.javascript === 'script' ? 'Script 模式' : (advancedRenderSettings.javascript === 'code-block' ? 'Code Block 模式' : '自动'))"></span>
+            </div>
+            <div class="render-segmented">
+              <button type="button" :class="{ 'is-active': advancedRenderSettings.javascript === 'disabled' }" @click="setAdvancedJsMode('disabled')">禁止</button>
+              <button type="button" :class="{ 'is-active': advancedRenderSettings.javascript === 'auto' }" @click="setAdvancedJsMode('auto')">自动</button>
+              <button type="button" :class="{ 'is-active': advancedRenderSettings.javascript === 'script' }" @click="setAdvancedJsMode('script')">Script 模式</button>
+              <button type="button" :class="{ 'is-active': advancedRenderSettings.javascript === 'code-block' }" @click="setAdvancedJsMode('code-block')">Code Block 模式</button>
+            </div>
+          </div>
+          <div class="render-setting" x-show="advancedRenderSettings.javascript !== 'disabled'">
+            <div class="render-setting__head">
+              <span>TavoJS 操作确认</span>
+              <button type="button" class="render-toggle" :class="{ 'is-on': advancedRenderSettings.confirmTavoJs }" @click="toggleTavoConfirmation" x-text="advancedRenderSettings.confirmTavoJs ? '开启' : '关闭'"></button>
+            </div>
+          </div>
+          <div class="render-setting">
+            <div class="render-setting__head">
+              <span>公式渲染</span>
+              <span class="render-setting__value" x-text="advancedRenderSettings.formula === 'enabled' ? 'LaTeX / AsciiMath' : '关闭'"></span>
+            </div>
+            <div class="render-segmented">
+              <button type="button" :class="{ 'is-active': advancedRenderSettings.formula !== 'enabled' }" @click="setFormulaMode('disabled')">关闭</button>
+              <button type="button" :class="{ 'is-active': advancedRenderSettings.formula === 'enabled' }" @click="setFormulaMode('enabled')">LaTeX / AsciiMath</button>
+            </div>
+          </div>
+        </aside>
+
+        <!-- 消息流 -->
+        <div class="chat-messages" x-ref="messageArea">
+          <template x-if="!conversation && !appId">
+            <div class="m-auto text-center text-violet-200/70">
+              <img src="/assets/img/apk/empty_view.webp?v=20260627-logo" class="w-32 mx-auto opacity-60 mb-4">
+              <p class="text-sm" x-text="chatText('no_role_title', '还没选择角色')"></p>
+              <a href="/app/explore.html" class="xy-btn xy-btn-primary text-sm mt-4 inline-block" x-text="chatText('no_role_cta', '去探索')"></a>
+            </div>
+          </template>
+          <button class="load-older" type="button" x-show="hasOlderMessages" @click="loadOlderMessages" :disabled="loadingOlderMessages">
+            <span x-text="loadingOlderMessages ? chatText('loading_older_messages', '加载中...') : chatText('load_older_messages', '加载更早消息')"></span>
+          </button>
+          <template x-for="m in messages" :key="m.id">
+            <div class="msg-row" :class="rowClass(m)">
+              <!-- 就地编辑 -->
+              <template x-if="editingId === m.id">
+                <div class="msg-edit">
+                  <textarea x-model="editingText"></textarea>
+                  <div class="msg-edit__btns">
+                    <button class="msg-act" @click="saveEdit(m)" x-text="chatText('edit_save_button', '保存')"></button>
+                    <button class="msg-act" @click="cancelEdit()" x-text="chatText('edit_cancel_button', '取消')"></button>
+                  </div>
+                </div>
+              </template>
+              <!-- 气泡 -->
+              <template x-if="editingId !== m.id">
+                <div class="bubble" :class="bubbleClass(m)" x-html="renderMessageContent(m.content, m.role)"></div>
+              </template>
+              <!-- 操作条 -->
+              <div class="msg-actions" x-show="editingId !== m.id && !m._typing && !replying" :class="{ 'is-pinned': showSwipe(m) && m.swipes.length > 1 }">
+                <!-- swipe（assistant 末条或多备选时） -->
+                <template x-if="showSwipe(m)">
+                  <span class="swipe-ctrl">
+                    <button @click="swipePrev(m)" :disabled="(m.swipe_index||0) <= 0 || replying" :title="chatText('swipe_prev_title', '上一个')">‹</button>
+                    <span x-text="swipeLabel(m)"></span>
+                    <button @click="swipeNext(m)" :disabled="replying" :title="chatText('swipe_next_title', '下一个 / 生成新回复')">›</button>
+                  </span>
+                </template>
+                <!-- 重新生成（仅 assistant 末条） -->
+                <template x-if="m.role === 'assistant' && isLastAssistant(m)">
+                  <button class="msg-act" @click="regenerate(m)" :disabled="replying" :title="chatText('regenerate_text', '重新生成')">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h5M20 20v-5h-5M4 9a8 8 0 0114-3M20 15a8 8 0 01-14 3"/></svg>
+                    <span x-text="chatText('regenerate_text', '重新生成')"></span>
+                  </button>
+                </template>
+                <button class="msg-act" @click="startEdit(m)" :title="chatText('edit_text', '编辑')">
+                  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                  <span x-text="chatText('edit_text', '编辑')"></span>
+                </button>
+                <template x-if="m.role === 'assistant'">
+                  <button class="msg-act" @click="speakMessage(m)" :title="chatText('speak_text', '朗读')">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5L6 9H3v6h3l5 4V5zm5 4a5 5 0 010 6m3-9a9 9 0 010 12"/></svg>
+                    <span x-text="chatText('speak_text', '朗读')"></span>
+                  </button>
+                </template>
+                <button class="msg-act" @click="deleteMessage(m)" :title="chatText('delete_text', '删除')">
+                  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                  <span x-text="chatText('delete_text', '删除')"></span>
+                </button>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <!-- 输入框 -->
+        <div class="quick-replies" x-show="quickReplies.length && (appId || conversation)">
+          <template x-for="q in quickReplies" :key="q.id || q.label">
+            <button type="button" @click="sendQuickReply(q)" :disabled="replying" :title="q.message" x-text="q.label || q.message"></button>
+          </template>
+        </div>
+        <div class="chat-input" x-show="appId || conversation">
+          <div class="chat-model" x-show="modelPresets.length">
+            <span x-text="chatText('current_model_label', '当前模型')"></span>
+            <select x-model="currentModelId" @change="persistModelSelection" :title="chatText('model_select_title', '选择当前会话使用的站点模型')">
+              <option value="" x-text="chatText('model_follow_role', '跟随角色设置')"></option>
+              <template x-for="preset in modelPresets" :key="preset.id">
+                <option :value="preset.id" x-text="modelOptionLabel(preset)"></option>
+              </template>
+            </select>
+          </div>
+          <textarea x-model="draft" @keydown.enter.prevent="sendMessage" rows="1" :placeholder="chatText('send_placeholder', '说点什么...')"></textarea>
+          <button @click="startSpeechInput" :class="{ 'opacity-70': listening }" :disabled="replying" :title="listening ? chatText('speech_listening_title', '正在听写') : chatText('speech_input_title', '语音输入')" :aria-label="chatText('speech_input_title', '语音输入')">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3a3 3 0 00-3 3v6a3 3 0 006 0V6a3 3 0 00-3-3zM5 11a7 7 0 0014 0M12 18v3m-4 0h8"/></svg>
+          </button>
+          <button @click="sendMessage" :disabled="!draft.trim() || replying" :aria-label="chatText('send_aria', '发送')">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12l14-7-3 14-4-6-7-1z"/></svg>
+          </button>
+        </div>
+      </section>
+    </main>
+    <nav class="app-bottom-nav" data-app-bottom-nav></nav>
+  </div>
+</body>
+</html>

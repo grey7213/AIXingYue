@@ -1,0 +1,161 @@
+const NAV_ITEMS = [
+  { key: 'home', label: '首页', href: '/app/', icon: 'M3 12l9-9 9 9M5 10v10h14V10' },
+  { key: 'workshop', label: '创作工坊', href: '/app/workshop.html', icon: 'M12 5v14m7-7H5' },
+  { key: 'histories', label: '历史会话', href: '/app/histories.html', icon: 'M12 8v4l3 3M21 12a9 9 0 11-18 0 9 9 0 0118 0z' },
+  { key: 'group', label: '群聊', href: '/app/group-chat.html', icon: 'M17 20h5v-2a4 4 0 00-4-4h-1M9 20H4v-2a4 4 0 014-4h1m0-4a4 4 0 118 0 4 4 0 01-8 0zm8 2a3 3 0 100-6' },
+  { key: 'me', label: '我的', href: '/app/me.html', icon: 'M16 7a4 4 0 11-8 0 4 4 0 018 0zM4 21a8 8 0 0116 0' },
+  { key: 'favorites', label: '我的收藏', href: '/app/favorites.html', icon: 'M11.48 3.5l.52 1.06.52-1.06a5.5 5.5 0 017.78 7.78L12 20.08l-8.8-8.8a5.5 5.5 0 017.78-7.78z' },
+  { key: 'image', label: '图片聊天', href: '/app/image-chat.html', icon: 'M4 16l4-4 3 3 5-6 4 7M4 6h16v12H4z' },
+  { key: 'rewards', label: '每日奖励', href: '/app/rewards.html', icon: 'M12 8c-1.7 0-3-.9-3-2s1.3-2 3-2 3 .9 3 2-1.3 2-3 2zm0 0v12m-7-8h14' },
+  { key: 'logs', label: '操作记录', href: '/app/logs.html', icon: 'M7 8h10M7 12h10M7 16h6M5 4h14v16H5z' },
+  { key: 'deposit', label: '积分充值', href: '/dashboard.html', icon: 'M12 8c-1.7 0-3 .9-3 2s1.3 2 3 2 3 .9 3 2-1.3 2-3 2m0-8V6m0 12v-2' },
+  { key: 'info', label: '信息中心', href: '/app/info.html', icon: 'M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z' },
+];
+
+const MOBILE_ITEMS = [
+  { key: 'home', label: '首页', href: '/app/', icon: NAV_ITEMS[0].icon },
+  { key: 'group', label: '群聊', href: '/app/group-chat.html', icon: NAV_ITEMS[3].icon },
+  { key: 'workshop', label: '创作', href: '/app/workshop.html', icon: NAV_ITEMS[1].icon },
+  { key: 'favorites', label: '收藏', href: '/app/favorites.html', icon: NAV_ITEMS[4].icon },
+  { key: 'me', label: '我的', href: '/app/me.html', icon: 'M16 7a4 4 0 11-8 0 4 4 0 018 0zM4 21a8 8 0 0116 0' },
+];
+
+let publicSiteSettingsPromise = null;
+
+function svg(path) {
+  return `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="${path}"/></svg>`;
+}
+
+function navLabel(item, settings, mobile = false) {
+  const labels = settings?.app?.[mobile ? 'mobile_nav_labels' : 'nav_labels'] || {};
+  return labels[item.key] || item.label;
+}
+
+function appText(settings, key, fallback = '') {
+  return settings?.app?.[key] || fallback;
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function jsString(value) {
+  return JSON.stringify(String(value ?? ''));
+}
+
+export function sidebarHtml(active = 'home', settings = null) {
+  const nav = NAV_ITEMS.map(item => `
+    <a href="${item.href}" class="app-nav__item ${item.key === active ? 'is-active' : ''}">
+      ${svg(item.icon)}<span>${navLabel(item, settings)}</span>
+    </a>`).join('');
+  return `
+    <a href="/app/" class="app-sidebar__brand">
+      <img src="/assets/img/logo-256.png?v=20260627-logo" alt="">
+      <span class="name">AI星月</span>
+    </a>
+    <nav class="app-nav">${nav}</nav>
+    <a class="app-sidebar__user" href="/app/me.html" x-show="user" title="${escapeHtml(appText(settings, 'shell_profile_title', '进入我的'))}">
+      <div class="avatar">
+        <img x-show="user?.avatar_url || user?.avatar" :src="user?.avatar_url || user?.avatar" @error="$el.style.display='none'; $el.nextElementSibling.style.display='flex'" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;">
+        <span x-show="!(user?.avatar_url || user?.avatar)" x-text="(user?.name || '?').slice(0,1).toUpperCase()"></span>
+      </div>
+      <div class="meta">
+        <div class="nick truncate" x-text="user?.name || ${escapeHtml(jsString(appText(settings, 'shell_guest_name', '旅人')))}"></div>
+        <div class="pts">✦ <span x-text="points || 0"></span> ${escapeHtml(appText(settings, 'shell_points_suffix', '积分'))}</div>
+      </div>
+    </a>`;
+}
+
+export function bottomNavHtml(active = 'home', settings = null) {
+  return MOBILE_ITEMS.map(item => `
+    <a href="${item.href}" class="${item.key === active ? 'is-active' : ''}">
+      ${svg(item.icon)}<span>${navLabel(item, settings, true)}</span>
+    </a>`).join('');
+}
+
+function safeHref(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (text.startsWith('/') || text.startsWith('#') || text.startsWith('https://') || text.startsWith('http://')) {
+    return text;
+  }
+  return '';
+}
+
+export async function loadPublicSiteSettings() {
+  if (!publicSiteSettingsPromise) {
+    publicSiteSettingsPromise = fetch('/console/api/public/site-settings', {
+      headers: { Accept: 'application/json' },
+    })
+      .then(res => (res.ok ? res.json() : null))
+      .then(data => data?.data || data || null)
+      .catch(() => null);
+  }
+  return publicSiteSettingsPromise;
+}
+
+function removeAnnouncement() {
+  document.querySelectorAll('[data-app-announcement]').forEach(node => node.remove());
+}
+
+function renderAnnouncement(settings) {
+  removeAnnouncement();
+  const app = settings?.app || {};
+  if (!app.announcement_enabled || !String(app.announcement_text || '').trim()) return;
+  const main = document.querySelector('.app-main');
+  if (!main) return;
+  const topbar = main.querySelector('.app-topbar');
+
+  const wrap = document.createElement('div');
+  wrap.setAttribute('data-app-announcement', '1');
+  wrap.className = 'app-page-pad max-w-6xl mx-auto !pb-0';
+
+  const panel = document.createElement('div');
+  panel.className = 'form-panel !py-4 border-violet-300/25 bg-violet-500/10';
+  const row = document.createElement('div');
+  row.className = 'flex flex-col md:flex-row md:items-center gap-2 md:gap-4';
+
+  const content = document.createElement('div');
+  content.className = 'min-w-0 grow';
+  const title = document.createElement('div');
+  title.className = 'text-sm font-semibold text-violet-100';
+  title.textContent = app.announcement_title || '站内公告';
+  const text = document.createElement('div');
+  text.className = 'text-sm text-slate-300 mt-1';
+  text.textContent = app.announcement_text || '';
+  content.appendChild(title);
+  content.appendChild(text);
+  row.appendChild(content);
+
+  const href = safeHref(app.announcement_link_href);
+  if (href && app.announcement_link_text) {
+    const link = document.createElement('a');
+    link.className = 'xy-btn xy-btn-ghost text-sm shrink-0';
+    link.href = href;
+    link.textContent = app.announcement_link_text;
+    row.appendChild(link);
+  }
+
+  panel.appendChild(row);
+  wrap.appendChild(panel);
+  if (topbar?.nextSibling) main.insertBefore(wrap, topbar.nextSibling);
+  else main.prepend(wrap);
+}
+
+export function injectLayout(active = 'home') {
+  const sidebar = document.querySelector('[data-app-sidebar]');
+  if (sidebar) sidebar.innerHTML = sidebarHtml(active);
+  const bottom = document.querySelector('[data-app-bottom-nav]');
+  if (bottom) bottom.innerHTML = bottomNavHtml(active);
+  loadPublicSiteSettings().then(settings => {
+    renderAnnouncement(settings);
+    if (settings) {
+      if (sidebar) sidebar.innerHTML = sidebarHtml(active, settings);
+      if (bottom) bottom.innerHTML = bottomNavHtml(active, settings);
+    }
+  }).catch(() => {});
+}
