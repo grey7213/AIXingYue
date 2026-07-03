@@ -24,6 +24,7 @@ Updated: 2026-07-03
 | ST17 | Tavo 高级渲染设置与 TavoJS 兼容桥 | Done | 2026-07-02 `/app/chat.html` 新增高级渲染设置；支持 HTML/CSS 渲染开关、JavaScript `disabled/auto/script/code-block` 模式、TavoJS 执行确认和 LaTeX/AsciiMath 轻量显示；TavoJS 兼容桥只存在于 sandbox iframe 内。线上验证 `sandbox_has_same_origin=false`、`tavo_bridge_ok=true`、`raw_script_ran=false`、`fenced_script_ran=true`、console/page error 为 0 |
 | ST18 | HTML 代码注入器片段兼容 | Done | 2026-07-02 修复片段开头 `<style>/<script>` 被 DOMParser 移入 head 后早于 `.mes_text` 执行的问题；iframe 内提供 `#chat/.mes/.mes_text/.message-content` 兼容目标；线上验证 `injector_ran=true`、`unclosed_fence_ran=true`、`event_only_ran=true`，安全沙箱仍无 same-origin |
 | ST19 | 开场视觉 Regex 和 TavernHelper 交互兼容 | Done | 2026-07-03 修复目标卡 `admin-rczip-9721d5969c2effd819af` 的开场可视化：开场白也执行 Prompt Template + Regex；Regex 从 `extensions` 读取完整大段替换并支持 JS `$1/$&/$<name>` 替换；iframe sandbox 增加 ST top/storage/worldbook 兼容代理。线上验证首屏 `晚上好，欢迎回来`、入口齐全、章节弹窗打开，沙箱仍无 same-origin |
+| ST20 | Tavo `.thm` 深色主题对比兜底 | Done | 2026-07-03 确认用户提供的 `.thm` 是深色主题；高级渲染 iframe 现在内置对应 SmartTheme 深色变量和深色 body/控件兜底，避免透明 iframe 叠在浅色 AI星月聊天皮肤上导致白字不可见。线上 Tavo 高级渲染、沙箱安全和目标开场视觉页验证通过 |
 
 ## 2026-07-03 开场视觉 Regex 和 TavernHelper 交互兼容
 
@@ -33,6 +34,14 @@ Updated: 2026-07-03
 - 前端原因：卡片脚本会引用 `window.top`、`parent.SillyTavern`、`localStorage/sessionStorage`、世界书函数和 SillyTavern 消息容器；在无 `allow-same-origin` 的 sandbox iframe 中直接访问原生 storage 会抛 `SecurityError`，部分内联模块脚本或事件属性也没有被兼容重写。
 - 前端修复：`frontend/app/assets/js/chat.js` 在 iframe 内提供 `window.__xySTTop`、`window.SillyTavern.getContext()`、`window.context`、世界书 no-op helpers、`raw-data-store`、本地内存版 `localStorage/sessionStorage` shim，并重写卡内脚本和事件属性里的 `window.top`、`parent.SillyTavern`、storage 引用；内联 `type=module` 脚本降级为普通沙箱脚本。仍保持 `sandbox="allow-scripts"`，不加 `allow-same-origin`，CSP 禁止网络、子 frame、object、form 和外部脚本。
 - 验证：本地 `verify_tavern_opening_render_local.py` 返回 `first_is_code_fence=true`、`first_has_hero=true`、`first_has_script=true`、`p6_in_greetings=true`；线上远程 API 返回 `swipe_count=13`、`has_p6=true`、`has_h8=true`、`has_u6=true` 且临时数据清理为 0；线上浏览器 `verify_tavern_opening_render_live.py` 返回 `hero_text=晚上好，欢迎回来`、labels 包含 `开关选项/游玩说明/小学篇/高中篇/大学篇`、`modal_opened=true`、`sandbox_has_same_origin=false`、`parent_can_read_frame=false`、console/page error 为 0。线上 `verify_tavo_advanced_render_browser.py` 和 `verify_tavo_sandbox_browser.py` 回归通过，服务/Nginx active，公开 `/health` OK，`CONTENT_MODE=local_only`。
+
+## 2026-07-03 Tavo `.thm` 深色主题对比兜底
+
+- 现象：用户提供 `Tavo_主题效果_14G5y(1).thm` 后，反馈界面太亮、部分文字看不见；截图中 `开关选项` 一类 Tavo 视觉界面叠在浅色 AI星月聊天皮肤上，低对比明显。
+- 原因：该 `.thm` 是 zip，`theme.json` 为 `tavo_theme_v1`，实际定义的是深色主题：背景 `0xFF222222`、白色字体、半透明深色用户/角色气泡。AI星月高级渲染 iframe 之前使用透明背景，且没有默认 `--SmartTheme*` 变量，卡片脚本读取不到 Tavo/SillyTavern 主题值时会落到浅色外层 UI。
+- 修复：`frontend/app/assets/js/chat.js` 的 `buildSandboxSrcdoc()` 在 `:root` 和 `<html style>` 同时注入深色 SmartTheme 变量，包括 `--SmartThemeBodyColor`、`--SmartThemeChatTintColor`、`--SmartThemeBotMesBlurTintColor`、`--SmartThemeUserMesBlurTintColor`、`--SmartThemeBorderColor` 等；iframe body、消息容器和默认 button/input/textarea/select 也有深色可读兜底。`frontend/app/chat.html` cache-buster 更新为 `20260703-tavo-theme`。
+- 安全边界：仍只使用 `iframe srcdoc`；脚本模式保持 `sandbox="allow-scripts"` 且不加 `allow-same-origin`；CSP 继续禁止网络、子 frame、object、form 和外部脚本。
+- 验证：本地 `node --check`、`git diff --check`、`verify_tavo_advanced_render_browser.py`、`verify_tavo_sandbox_browser.py`、`verify_tavern_opening_render_browser.py` 均通过；部署后线上 health OK，`CONTENT_MODE=local_only`，`chat.html` 引用 `chat.js?v=20260703-tavo-theme` 且线上 `chat.js` 包含 `--SmartThemeChatTintColor:#222222`；线上 Tavo 高级渲染/沙箱回归和 `verify_tavern_opening_render_live.py` 通过，截图显示深色卡面白字可读。
 
 ## 2026-07-01 角色卡下载包导入
 

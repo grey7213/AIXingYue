@@ -550,6 +550,26 @@ function buildTavoBridgeScript() {
 function buildSandboxSrcdoc(raw, options = {}) {
   const allowScripts = options.allowScripts !== false;
   const sanitized = sanitizeAdvancedHtml(raw, { allowScripts });
+  const tavoThemeVars = [
+    '--SmartThemeBodyColor:#ffffff',
+    '--SmartThemeEmColor:rgba(255,255,255,.92)',
+    '--SmartThemeQuoteColor:#a1cdee',
+    '--SmartThemeBlurTintColor:rgba(34,34,34,.88)',
+    '--SmartThemeChatTintColor:#222222',
+    '--SmartThemeBotMesBlurTintColor:rgba(43,81,110,.80)',
+    '--SmartThemeUserMesBlurTintColor:rgba(86,86,87,.80)',
+    '--SmartThemeBorderColor:rgba(255,255,255,.24)',
+    '--SmartThemeShadowColor:rgba(0,0,0,.45)',
+    '--SmartThemeFastUIBGColor:rgba(202,204,209,.40)',
+    '--SmartThemeFastUITextColor:#ffffff',
+    '--SmartThemeInputColor:rgba(202,204,209,.40)',
+    '--SmartThemeButtonAccentColor:#a1cdee',
+    '--xy-tavo-bg:#222222',
+    '--xy-tavo-panel:rgba(43,81,110,.80)',
+    '--xy-tavo-panel-alt:rgba(86,86,87,.80)',
+    '--xy-tavo-text:#ffffff',
+    '--xy-tavo-muted:rgba(255,255,255,.80)',
+  ].join(';');
   const csp = [
     "default-src 'none'",
     "img-src data: blob:",
@@ -565,11 +585,16 @@ function buildSandboxSrcdoc(raw, options = {}) {
     "form-action 'none'",
   ].join('; ');
   const baseStyle = `
-    html,body{margin:0;min-height:100%;background:transparent;color:#f8fafc;font-family:"Inter","PingFang SC","Microsoft YaHei",system-ui,sans-serif;}
+    :root{${tavoThemeVars};color-scheme:dark;}
+    html,body{margin:0;min-height:100%;background:var(--SmartThemeChatTintColor,#222222);color:var(--SmartThemeBodyColor,#ffffff);font-family:"Inter","PingFang SC","Microsoft YaHei",system-ui,sans-serif;}
     *{box-sizing:border-box;max-width:100%;}
-    body{overflow:auto;}
+    body{overflow:auto;accent-color:var(--SmartThemeQuoteColor,#a1cdee);}
     #chat,.chat,.chat-messages,.mes,.message,.mes_text,.mes-text,.message-content,.tavo-content{width:100%;min-height:100%;}
+    .mes,.message,.mes_text,.mes-text,.message-content,.tavo-content{color:var(--SmartThemeBodyColor,#ffffff);}
     .mes_text:empty,.message-content:empty,.tavo-content:empty{min-height:260px;}
+    button,input,textarea,select{font:inherit;color:inherit;background-color:rgba(255,255,255,.08);border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.24));}
+    button{cursor:pointer;}
+    input::placeholder,textarea::placeholder{color:var(--xy-tavo-muted,rgba(255,255,255,.80));}
     img,video,canvas,svg{max-width:100%;}
     a{color:inherit;}
   `;
@@ -582,7 +607,7 @@ function buildSandboxSrcdoc(raw, options = {}) {
     ? ''
     : `<textarea id="raw-data-store" hidden aria-hidden="true">${escapeHtml(sanitized.body)}</textarea>`;
   const compatBody = `<div id="chat" class="chat chat-messages"><div class="mes message assistant" data-role="assistant"><div id="message-content" class="mes_text mes-text message-content markdown-body tavo-content">${sanitized.body}</div></div></div>`;
-  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${escapeAttr(csp)}"><style>${baseStyle}</style>${bridge}${sanitized.head}</head><body${sanitized.bodyAttrs}>${rawStore}${compatBody}${resize}</body></html>`;
+  return `<!doctype html><html style="${escapeAttr(tavoThemeVars)}"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${escapeAttr(csp)}"><style>${baseStyle}</style>${bridge}${sanitized.head}</head><body${sanitized.bodyAttrs}>${rawStore}${compatBody}${resize}</body></html>`;
 }
 
 function renderAdvancedSourcePreview(code) {

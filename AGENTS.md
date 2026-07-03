@@ -398,3 +398,8 @@
   Cause: 上游流式解析曾把 `reasoning_content` 当正文拼接；系统提示没有明确禁止推理/JSON 输出；`process_model_reply()` 在 Prompt Template、世界书 render 注入和 Regex 后没有最终可见内容清洗。
   Fix: `tools/ai_fengyue_local_server.py` 忽略 `reasoning_content`，系统提示禁止推理/JSON/英文过程标题，并在 Regex 后调用 `normalize_visible_chat_reply()`；`frontend/app/assets/js/chat.js` 对 assistant 历史消息做同一展示级清洗，用户消息不清洗；`chat.html` cache-buster 为 `20260702-reply-format`。
   Verify: `D:\Anconda3\python.exe .\output\verify_reply_format_local.py` 通过；线上 `/tmp/verify_reply_format_remote.py` 返回并保存 `你好 星月`，无 JSON/Processing/reasoning/SECRET，临时用户/角色/消息清理为 0；`D:\Anconda3\python.exe .\output\verify_reply_format_browser.py` 返回 `bubble_text=你好，星月。` 且 console/page error 为 0。
+
+- Symptom: Tavo `.thm` 主题本身是深色，但 AI星月高级渲染页看起来太亮，白字或浅色字看不见。
+  Cause: 高级渲染 iframe 默认透明背景，且没有给 Tavo/SillyTavern 卡片脚本提供 `--SmartTheme*` 变量；卡片落到浅色 AI星月聊天皮肤或浏览器默认控件样式后低对比。
+  Fix: 在 `frontend/app/assets/js/chat.js` 的 `buildSandboxSrcdoc()` 中给 sandbox `srcdoc` 的 `:root` 和 `<html style>` 注入深色 SmartTheme 变量，并给 iframe body、消息容器和默认表单控件设置深色可读兜底；`frontend/app/chat.html` cache-buster 更新为 `20260703-tavo-theme`。
+  Verify: 本地和线上 `verify_tavo_advanced_render_browser.py`、`verify_tavo_sandbox_browser.py`、`verify_tavern_opening_render_browser.py`/`verify_tavern_opening_render_live.py` 通过；线上 `chat.js` 包含 `--SmartThemeChatTintColor:#222222`，目标页截图显示深色卡面白字可读，沙箱仍无 `allow-same-origin`。
