@@ -9,7 +9,7 @@
   <link rel="apple-touch-icon" sizes="180x180" href="/assets/img/apple-touch-icon.png">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="/assets/css/custom.css?v=20260703-fengyue-ui2">
-  <script type="module" src="/assets/js/dashboard-app.js?v=20260626-ass11"></script>
+  <script type="module" src="/assets/js/dashboard-app.js?v=20260703-channels-closed"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
@@ -173,20 +173,24 @@
           <div class="xy-glass p-7">
             <div class="text-sm text-slate-400 mb-3 flex items-center gap-2">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
-              <span x-text="dashboardText('purchase_section_label', '购买与兑换')">购买与兑换</span>
+              <span x-text="dashboardText('purchase_section_label', '充值通道')">充值通道</span>
             </div>
-            <div class="text-xl font-bold text-white mb-2" x-text="depositText('title', '爱发电购买兑换码')">爱发电购买兑换码</div>
-            <p class="text-sm text-slate-400 mb-4" x-text="depositText('description', '付款后把兑换码输入到这里，额度立即到账并同步到 APK。')">付款后把兑换码输入到这里，额度立即到账并同步到 APK。</p>
-            <button @click="openAifadian" class="xy-btn xy-btn-ghost w-full justify-center mb-3">
-              <span x-text="depositText('button_text', '去爱发电购买')">去爱发电购买</span>
-            </button>
-            <div class="flex gap-2 mb-3">
-              <input type="text" x-model="redeemCode" @keydown.enter="redeemNow" class="xy-input flex-1 text-sm uppercase font-mono" :placeholder="depositText('redeem_placeholder', 'XY-XXXX-XXXX-XXXX-XXXX')">
-            </div>
-            <button @click="redeemNow" class="xy-btn xy-btn-primary w-full" :disabled="loading || !redeemCode">
-              <span x-show="!loading" x-text="depositText('redeem_button_text', '兑换额度')">兑换额度</span>
-              <span x-show="loading" class="xy-loading"></span>
-            </button>
+            <div class="text-xl font-bold text-white mb-2" x-text="depositText('title', '充值通道维护中')">充值通道维护中</div>
+            <p class="text-sm text-slate-400 mb-4" x-text="depositText('description', '充值和兑换入口暂时关闭，已有余额、每日奖励和聊天功能不受影响。')">充值和兑换入口暂时关闭，已有余额、每日奖励和聊天功能不受影响。</p>
+            <template x-if="paymentAvailable()">
+              <div>
+                <button @click="openAifadian" class="xy-btn xy-btn-ghost w-full justify-center mb-3">
+                  <span x-text="depositText('button_text', '前往购买')">前往购买</span>
+                </button>
+                <div class="flex gap-2 mb-3">
+                  <input type="text" x-model="redeemCode" @keydown.enter="redeemNow" class="xy-input flex-1 text-sm uppercase font-mono" :placeholder="depositText('redeem_placeholder', 'XY-XXXX-XXXX-XXXX-XXXX')">
+                </div>
+                <button @click="redeemNow" class="xy-btn xy-btn-primary w-full" :disabled="loading || !redeemCode">
+                  <span x-show="!loading" x-text="depositText('redeem_button_text', '兑换额度')">兑换额度</span>
+                  <span x-show="loading" class="xy-loading"></span>
+                </button>
+              </div>
+            </template>
             <p class="text-[11px] text-slate-500 mt-3 leading-relaxed">
               <span x-text="paymentNote()"></span>
             </p>
@@ -204,13 +208,13 @@
               <div class="text-xs text-slate-400" x-text="dailyCheckinSubtitle()">+10 积分</div>
             </div>
           </button>
-          <a href="/" class="xy-glass xy-glass-hover p-5 flex items-center gap-4">
+          <a href="/app/login.html?next=%2Fapp%2F" class="xy-glass xy-glass-hover p-5 flex items-center gap-4">
             <div class="w-10 h-10 rounded-xl bg-blue-500/20 flex items-center justify-center">
               <svg class="w-5 h-5 text-blue-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
             </div>
             <div>
-              <div class="font-semibold text-sm" x-text="dashboardText('download_title', '下载 APK')">下载 APK</div>
-              <div class="text-xs text-slate-400" x-text="dashboardText('download_subtitle', '最新版客户端')">最新版客户端</div>
+              <div class="font-semibold text-sm" x-text="dashboardText('download_title', '打开 Web App')">打开 Web App</div>
+              <div class="text-xs text-slate-400" x-text="dashboardText('download_subtitle', '客户端渠道维护中')">客户端渠道维护中</div>
             </div>
           </a>
           <template x-if="isAdmin">

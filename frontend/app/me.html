@@ -8,7 +8,7 @@
   <link rel="icon" href="/favicon.ico">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="/app/assets/css/app.css?v=20260703-fengyue-home3">
-  <script type="module" src="/app/assets/js/me.js?v=20260703-fengyue-home3"></script>
+  <script type="module" src="/app/assets/js/me.js?v=20260703-channels-closed"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
@@ -123,20 +123,24 @@
           <div class="xy-glass p-7">
             <div class="text-sm text-slate-400 mb-3 flex items-center gap-2">
               <img src="/assets/img/apk/coin3.png" class="w-4 h-4">
-              <span x-text="dashboardText('purchase_section_label', '购买与兑换')">购买与兑换</span>
+              <span x-text="dashboardText('purchase_section_label', '充值通道')">充值通道</span>
             </div>
-            <div class="text-xl font-bold text-white mb-2" x-text="depositText('title', '爱发电购买兑换码')">爱发电购买兑换码</div>
-            <p class="text-sm text-slate-400 mb-4" x-text="depositText('description', '付款后把站长发放的兑换码粘贴到这里，星月币会直接到账。')">付款后把站长发放的兑换码粘贴到这里，星月币会直接到账。</p>
-            <button @click="openAifadian" class="xy-btn xy-btn-ghost w-full justify-center mb-3">
-              <span x-text="depositText('button_text', '去爱发电购买')">去爱发电购买</span>
-            </button>
-            <div class="flex gap-2">
-              <input type="text" x-model="redeemCode" @keydown.enter="redeemNow" class="xy-input flex-1 uppercase font-mono" :placeholder="depositText('redeem_placeholder', 'XY-XXXX-XXXX-XXXX-XXXX')">
-              <button @click="redeemNow" class="xy-btn xy-btn-primary text-sm" :disabled="loading">
-                <span x-show="!loading" x-text="depositText('redeem_button_text', '兑换')">兑换</span>
-                <span x-show="loading" class="xy-loading"></span>
-              </button>
-            </div>
+            <div class="text-xl font-bold text-white mb-2" x-text="depositText('title', '充值通道维护中')">充值通道维护中</div>
+            <p class="text-sm text-slate-400 mb-4" x-text="depositText('description', '充值和兑换入口暂时关闭，已有余额、每日奖励和聊天功能不受影响。')">充值和兑换入口暂时关闭，已有余额、每日奖励和聊天功能不受影响。</p>
+            <template x-if="paymentAvailable()">
+              <div>
+                <button @click="openAifadian" class="xy-btn xy-btn-ghost w-full justify-center mb-3">
+                  <span x-text="depositText('button_text', '前往购买')">前往购买</span>
+                </button>
+                <div class="flex gap-2">
+                  <input type="text" x-model="redeemCode" @keydown.enter="redeemNow" class="xy-input flex-1 uppercase font-mono" :placeholder="depositText('redeem_placeholder', 'XY-XXXX-XXXX-XXXX-XXXX')">
+                  <button @click="redeemNow" class="xy-btn xy-btn-primary text-sm" :disabled="loading">
+                    <span x-show="!loading" x-text="depositText('redeem_button_text', '兑换')">兑换</span>
+                    <span x-show="loading" class="xy-loading"></span>
+                  </button>
+                </div>
+              </div>
+            </template>
             <p class="text-xs text-slate-500 mt-3" x-text="paymentNote()"></p>
           </div>
         </div>

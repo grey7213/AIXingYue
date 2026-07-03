@@ -1,5 +1,5 @@
 import { api, requireAuth, getCachedUser, setCachedUser, clearAuth, formatDateTime, ApiError } from '/app/assets/js/app-core.js';
-import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-fengyue-home3';
+import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-channels-closed';
 
 function mePage() {
   return {
@@ -156,15 +156,19 @@ function mePage() {
       return this.deposit?.[key] || this.siteText('deposit', key, fallback);
     },
 
+    paymentAvailable() {
+      return !!(this.deposit?.payment_available && this.deposit?.mode !== 'closed');
+    },
+
     dailyCheckinText() {
       const points = parseInt(this.siteSettings?.rewards?.daily_points || 10, 10);
       return this.formatTemplate(this.accountText('daily_checkin_template', '每日签到 +{points}'), { points });
     },
 
     paymentNote() {
-      return this.deposit?.aifadian_url
+      return this.paymentAvailable()
         ? this.depositText('payment_note_available', '兑换码只可使用一次，请确认登录的是当前账号。')
-        : this.depositText('payment_note_unavailable', '购买链接暂未配置，可以联系站长手动获取兑换码。');
+        : this.depositText('payment_note_unavailable', '充值通道暂时关闭，恢复后会重新开放购买和兑换。');
     },
 
     formatDate(ts) {
@@ -196,10 +200,10 @@ function mePage() {
 
     openAifadian() {
       const url = this.deposit?.aifadian_url;
-      if (url) {
+      if (this.paymentAvailable() && url) {
         window.open(url, '_blank', 'noopener,noreferrer');
       } else {
-        this.showToast(this.dashboardText('aifadian_missing_text', this.depositText('support_text', '暂未配置爱发电购买链接，请联系站长获取兑换码')), 'error');
+        this.showToast(this.depositText('support_text', this.dashboardText('aifadian_missing_text', '充值通道暂时关闭')), 'error');
       }
     },
 
@@ -223,6 +227,10 @@ function mePage() {
     },
 
     async redeemNow() {
+      if (!this.paymentAvailable()) {
+        this.showToast(this.paymentNote(), 'error');
+        return;
+      }
       const code = String(this.redeemCode || '').trim();
       if (!code) {
         this.showToast(this.dashboardText('redeem_empty_text', '请输入兑换码'), 'error');

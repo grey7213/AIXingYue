@@ -1,5 +1,5 @@
 import { api, setToken, ApiError } from '/app/assets/js/app-core.js';
-import { loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-fengyue-home3';
+import { loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-channels-closed';
 
 function loginPage() {
   return {

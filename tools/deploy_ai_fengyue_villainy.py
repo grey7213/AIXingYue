@@ -168,14 +168,9 @@ server {{
 
 {proxy_locations(port)}
 
-    # APK 下载（强制下载并附带 Android MIME 类型）
+    # APK 下载渠道暂时关闭。保留文件目录但不对公网发包，避免旧链接继续分发。
     location /download/ {{
-        alias {FRONTEND_REMOTE}/download/;
-        types {{
-            application/vnd.android.package-archive apk;
-        }}
-        default_type application/octet-stream;
-        add_header Content-Disposition "attachment";
+        return 404;
     }}
 
     # 静态资源：短期缓存 + 验证（每次刷新会问服务器是否更新，但 304 仍然很快）

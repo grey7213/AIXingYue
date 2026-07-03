@@ -65,3 +65,13 @@
 - 已上线基础反薅：重复邮箱拒绝发码/注册；同邮箱每小时 3 次发码、同 IP 每小时 8 次发码；同 IP 每天最多 3 个新账号领取注册赠送额度。
 - 已上线 Web Logo 替换：`logo-64/128/256/512`、favicon、apple touch icon、`default_avatar.png`、`avatar.webp`、`empty_view.webp`、`base_logo.webp` 均换成用户提供的黑白斜杠 Logo。
 - 验证：`output\verify_billing_logo_browser.py` 线上浏览器验收通过，前台桌面/移动 Rewards 和后台运营配置均渲染新套餐/订阅，Logo/默认头像/空态图加载正常，无 console/page error。
+
+## 2026-07-03 临时关闭状态
+
+- 按用户要求暂时关闭 APK 下载渠道和充值/兑换渠道，保留已有余额、每日奖励、聊天扣费和管理员兑换码库存管理能力。
+- 后端运行开关默认关闭：`PAYMENT_CHANNEL_ENABLED=0`、`APK_DOWNLOAD_ENABLED=0`。以后恢复渠道时可显式开启对应 env，再保留原有爱发电配置和兑换码流程。
+- 用户侧 `/console/api/web/deposit-meta` 返回 `mode=closed`、`payment_available=false`、`redeem_available=false`、`packages=[]`、`subscriptions=[]`。
+- 用户兑换码接口 `/console/api/web/redeem-code` 和 APK 注入充值接口 `/console/api/ctf/recharge` 在关闭状态返回包体 `code=403`、`message=充值通道暂时关闭`。
+- Nginx `/download/` 已返回 404，公网 `https://patcher.villainy.top/download/ai-xingyue-latest.apk` 不再分发 APK。
+- 前端 Rewards/Me/Dashboard 不再渲染购买按钮、兑换输入、套餐和订阅卡片；首页和信息中心改为引导 Web App。
+- 线上验证：service/nginx active，`CONTENT_MODE=local_only`，公开 `/health` 200；浏览器 `output/verify_channels_closed_browser.py` 验证首页无 APK 链接、无在线充值文案，Rewards/Me/Dashboard 均为维护态且无 console/page error。

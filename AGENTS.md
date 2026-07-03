@@ -403,3 +403,8 @@
   Cause: 高级渲染 iframe 默认透明背景，且没有给 Tavo/SillyTavern 卡片脚本提供 `--SmartTheme*` 变量；卡片落到浅色 AI星月聊天皮肤或浏览器默认控件样式后低对比。
   Fix: 在 `frontend/app/assets/js/chat.js` 的 `buildSandboxSrcdoc()` 中给 sandbox `srcdoc` 的 `:root` 和 `<html style>` 注入深色 SmartTheme 变量，并给 iframe body、消息容器和默认表单控件设置深色可读兜底；`frontend/app/chat.html` cache-buster 更新为 `20260703-tavo-theme`。
   Verify: 本地和线上 `verify_tavo_advanced_render_browser.py`、`verify_tavo_sandbox_browser.py`、`verify_tavern_opening_render_browser.py`/`verify_tavern_opening_render_live.py` 通过；线上 `chat.js` 包含 `--SmartThemeChatTintColor:#222222`，目标页截图显示深色卡面白字可读，沙箱仍无 `allow-same-origin`。
+
+- Symptom: 关闭 APK 下载/充值渠道后，首页仍可能显示“下载 APK”或“在线充值”旧文案。
+  Cause: 首页和 App 壳会从 `/console/api/public/site-settings` 拉取后台运营配置，旧 `site_settings` 会覆盖静态 HTML 默认文案。
+  Fix: `tools/ai_fengyue_local_server.py` 用 `APK_DOWNLOAD_ENABLED` 和 `PAYMENT_CHANNEL_ENABLED` 运行开关生成公开安全视图；关闭状态强制 Web App 入口、充值维护文案、空套餐和空订阅，Nginx `/download/` 返回 404。
+  Verify: `verify_channels_closed_browser.py` 返回首页无 APK 链接/无在线充值文案，Rewards/Me/Dashboard 为维护态；公网 `/download/ai-xingyue-latest.apk` 返回 404，`deposit-meta` 返回 `mode=closed`。

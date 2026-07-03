@@ -8,7 +8,7 @@
   <link rel="icon" href="/favicon.ico">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="/app/assets/css/app.css?v=20260703-fengyue-home3">
-  <script type="module" src="/app/assets/js/hub-pages.js?v=20260703-fengyue-home3"></script>
+  <script type="module" src="/app/assets/js/hub-pages.js?v=20260703-channels-closed"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
@@ -21,7 +21,7 @@
       <header class="app-topbar">
         <h1 x-text="rewardsText('page_title', 'Credits')">Credits</h1>
         <div class="grow"></div>
-        <button class="xy-btn xy-btn-primary text-sm" @click="openAifadian" x-text="depositText('button_text', '去爱发电购买')">去爱发电购买</button>
+        <button class="xy-btn xy-btn-primary text-sm" x-show="paymentAvailable()" @click="openAifadian" x-text="depositText('button_text', '前往购买')">前往购买</button>
       </header>
       <section class="app-page-pad max-w-6xl mx-auto space-y-5">
         <template x-if="message">
@@ -58,23 +58,27 @@
           </div>
 
           <div class="form-panel">
-            <div class="text-white font-semibold mb-2" x-text="depositText('title', '兑换码')">兑换码</div>
-            <div class="text-sm text-slate-400 mb-4" x-text="depositText('description', '购买后复制兑换码到这里，到账后会写入充值额度。')">购买后复制兑换码到这里，到账后会写入充值额度。</div>
-            <div class="flex gap-2">
-              <input class="xy-input flex-1 uppercase font-mono" x-model="redeemInput" @keydown.enter="redeemNow" :placeholder="depositText('redeem_placeholder', 'XY-XXXX-XXXX-XXXX-XXXX')">
-              <button class="xy-btn xy-btn-primary shrink-0" @click="redeemNow" :disabled="busy">
-                <span x-show="!busy" x-text="depositText('redeem_button_text', '兑换')">兑换</span>
-                <span x-show="busy" class="xy-loading"></span>
-              </button>
-            </div>
-            <button class="xy-btn xy-btn-ghost w-full justify-center mt-3" @click="openAifadian" x-text="depositText('button_text', '去爱发电购买兑换码')">去爱发电购买兑换码</button>
+            <div class="text-white font-semibold mb-2" x-text="depositText('title', '充值通道维护中')">充值通道维护中</div>
+            <div class="text-sm text-slate-400 mb-4" x-text="depositText('description', '充值和兑换入口暂时关闭，已有余额、每日奖励和聊天功能不受影响。')">充值和兑换入口暂时关闭，已有余额、每日奖励和聊天功能不受影响。</div>
+            <template x-if="paymentAvailable()">
+              <div>
+                <div class="flex gap-2">
+                  <input class="xy-input flex-1 uppercase font-mono" x-model="redeemInput" @keydown.enter="redeemNow" :placeholder="depositText('redeem_placeholder', 'XY-XXXX-XXXX-XXXX-XXXX')">
+                  <button class="xy-btn xy-btn-primary shrink-0" @click="redeemNow" :disabled="busy">
+                    <span x-show="!busy" x-text="depositText('redeem_button_text', '兑换')">兑换</span>
+                    <span x-show="busy" class="xy-loading"></span>
+                  </button>
+                </div>
+                <button class="xy-btn xy-btn-ghost w-full justify-center mt-3" @click="openAifadian" x-text="depositText('button_text', '前往购买兑换码')">前往购买兑换码</button>
+              </div>
+            </template>
             <p class="text-xs text-slate-500 mt-3" x-text="paymentNote()"></p>
           </div>
         </div>
 
         <div class="grid xl:grid-cols-[1fr_360px] gap-4">
           <div class="space-y-4">
-          <div class="form-panel">
+           <div class="form-panel" x-show="paymentAvailable()">
             <div class="flex items-center justify-between mb-4">
               <div>
                 <div class="text-white font-semibold" x-text="rewardsText('packages_title', '推荐套餐')">推荐套餐</div>
@@ -96,7 +100,7 @@
             </div>
           </div>
 
-          <div class="form-panel">
+          <div class="form-panel" x-show="paymentAvailable()">
             <div class="flex items-start justify-between gap-4 mb-4">
               <div>
                 <div class="text-white font-semibold" x-text="depositText('subscriptions_title', '月度订阅')">月度订阅</div>

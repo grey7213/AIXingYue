@@ -1,5 +1,5 @@
 import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js';
-import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-fengyue-home3';
+import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-channels-closed';
 
 const STATUS_LABELS = {
   name: '姓名',
@@ -116,6 +116,11 @@ const INTERNAL_SECTION_MARKERS = [
   'planning', 'response plan', 'drafting', 'thought', 'internal',
   'reflection', 'deliberation', 'strategy',
 ];
+const METADATA_FENCE_LANGS = new Set(['yaml', 'yml', 'json', 'jsonc', 'toml', 'ini', 'properties', 'meta', 'metadata']);
+const METADATA_FENCE_MARKERS = [
+  '{{char}}', '{{user}}', 'persona', 'personality', 'scenario', 'worldbook', 'world_info',
+  'relationships', 'residence', 'creator', 'version', 'updated_at', 'update_date',
+];
 
 function singleFencedBlock(text) {
   const match = String(text || '').trim().match(/^```([a-zA-Z0-9_-]*)[ \t]*\r?\n([\s\S]*?)\r?\n?```\s*$/);
@@ -228,6 +233,33 @@ function stripLeadingReplyLabels(text) {
   return value;
 }
 
+function looksLikeLeadingMetadataFence(lang, body) {
+  const normalizedLang = normalizeFenceLang(lang);
+  const value = String(body || '').trim();
+  const lower = value.toLowerCase();
+  if (lower.includes('{{char}}') || lower.includes('{{user}}')) return true;
+  if (METADATA_FENCE_MARKERS.some(marker => lower.includes(marker))) return true;
+  if (METADATA_FENCE_LANGS.has(normalizedLang)) {
+    const colonLines = value.match(/^\s*[-\w\u4e00-\u9fff{}.$[\]"']+\s*[:=]/gm) || [];
+    return colonLines.length >= 2;
+  }
+  return false;
+}
+
+function stripLeadingMetadataFences(text) {
+  let value = String(text || '').trim();
+  let changed = false;
+  for (let i = 0; i < 4; i += 1) {
+    const match = value.match(/^\s*```([^\r\n`]*)\r?\n([\s\S]*?)\r?\n```\s*/);
+    if (!match) break;
+    const rest = value.slice(match[0].length).trimStart();
+    if (!rest || !looksLikeLeadingMetadataFence(match[1], match[2])) break;
+    value = rest;
+    changed = true;
+  }
+  return changed ? value : text;
+}
+
 function extractLabeledFinalReply(text) {
   const value = String(text || '').trim();
   const patterns = [
@@ -254,6 +286,7 @@ function normalizeVisibleAssistantContent(content) {
     if (extracted) value = extracted.trim();
     value = stripInternalMarkdownSections(value);
     value = stripLeadingReplyLabels(value);
+    value = stripLeadingMetadataFences(value).trim();
     const fenced = singleFencedBlock(value);
     if (fenced && ['text', 'txt', 'markdown', 'md'].includes(fenced.lang)) value = fenced.body.trim();
     if (value === before) break;
@@ -611,11 +644,7 @@ function buildSandboxSrcdoc(raw, options = {}) {
 }
 
 function renderAdvancedSourcePreview(code) {
-  const source = String(code || '');
-  const truncated = source.length > ADVANCED_SOURCE_PREVIEW_CHARS;
-  const preview = truncated ? source.slice(0, ADVANCED_SOURCE_PREVIEW_CHARS) + '\n...' : source;
-  const note = truncated ? '<div class="tavo-source__note">源码较长，仅显示片段</div>' : '';
-  return `<details class="tavo-source"><summary>源码片段</summary><pre>${escapeHtml(preview)}</pre>${note}</details>`;
+  return '';
 }
 
 function renderAdvancedPausedCard(source, title, status, actionHtml = '') {

@@ -1,5 +1,5 @@
 import { api, requireAuth, getCachedUser } from '/app/assets/js/app-core.js';
-import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-fengyue-home3';
+import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-channels-closed';
 
 function groupChatPage() {
   return {

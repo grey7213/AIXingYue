@@ -8,7 +8,6 @@ const NAV_ITEMS = [
   { key: 'image', label: '图片聊天', href: '/app/image-chat.html', icon: 'M4 16l4-4 3 3 5-6 4 7M4 6h16v12H4z' },
   { key: 'rewards', label: '每日奖励', href: '/app/rewards.html', icon: 'M12 8c-1.7 0-3-.9-3-2s1.3-2 3-2 3 .9 3 2-1.3 2-3 2zm0 0v12m-7-8h14' },
   { key: 'logs', label: '操作记录', href: '/app/logs.html', icon: 'M7 8h10M7 12h10M7 16h6M5 4h14v16H5z' },
-  { key: 'deposit', label: '积分充值', href: '/dashboard.html', icon: 'M12 8c-1.7 0-3 .9-3 2s1.3 2 3 2 3 .9 3 2-1.3 2-3 2m0-8V6m0 12v-2' },
   { key: 'info', label: '信息中心', href: '/app/info.html', icon: 'M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z' },
 ];
 

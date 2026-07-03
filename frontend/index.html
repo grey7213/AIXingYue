@@ -18,7 +18,7 @@
   <link rel="apple-touch-icon" sizes="180x180" href="/assets/img/apple-touch-icon.png">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="/assets/css/custom.css?v=20260703-fengyue-ui2">
-  <script type="module" src="/assets/js/site-settings.js?v=20260626-ops-content"></script>
+  <script type="module" src="/assets/js/site-settings.js?v=20260703-channels-closed"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen overflow-x-hidden bg-[#0a0420]">
@@ -35,7 +35,7 @@
       </a>
       <div class="flex items-center gap-2 sm:gap-4">
         <a href="#features" class="hidden md:block text-sm text-slate-300 hover:text-white transition">功能</a>
-        <a href="#download" class="hidden md:block text-sm text-slate-300 hover:text-white transition">下载</a>
+        <a href="/app/login.html?next=%2Fapp%2F" class="hidden md:block text-sm text-slate-300 hover:text-white transition">Web App</a>
         <a href="#faq" class="hidden md:block text-sm text-slate-300 hover:text-white transition">问答</a>
         <a href="/dashboard.html" class="xy-cta-secondary text-sm py-2 px-4">用户中心</a>
       </div>
@@ -85,7 +85,7 @@
 
       <!-- 主次 CTA：明显视觉权重差 -->
       <div class="flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-5 mb-6">
-        <a href="#download" class="xy-cta-primary xy-fade-up group" data-delay="4" data-site-href="home.primary_cta_href">
+        <a href="/app/login.html?next=%2Fapp%2F" class="xy-cta-primary xy-fade-up group" data-delay="4">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1M16 12l-4 4m0 0l-4-4m4 4V4"/>
           </svg>
@@ -176,7 +176,7 @@
       </div>
 
       <div class="text-center mt-10">
-        <a href="#download" class="xy-cta-primary">
+        <a href="/app/login.html?next=%2Fapp%2F" class="xy-cta-primary">
           <span>立即体验</span>
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/>
@@ -212,7 +212,7 @@
             </svg>
           </div>
           <h3 class="text-xl font-bold mb-2">无限积分</h3>
-          <p class="text-slate-400 leading-relaxed">注册即赠 1000 积分，每日签到获得额外积分。还可在线充值，永不停歇。</p>
+          <p class="text-slate-400 leading-relaxed">注册即赠 5000 积分，每日签到获得额外积分。已有额度网页与客户端共用。</p>
         </div>
 
         <div class="xy-glass xy-glass-hover p-8">
@@ -258,45 +258,25 @@
     </div>
   </section>
 
-  <!-- 下载区域 -->
-  <section id="download" class="py-24 px-6 relative">
+  <!-- Web 入口 -->
+  <section id="web-app" class="py-24 px-6 relative">
     <div class="max-w-4xl mx-auto">
       <div class="xy-glass p-10 md:p-14 text-center relative overflow-hidden">
         <div class="absolute inset-0 bg-gradient-to-br from-violet-600/20 via-fuchsia-500/10 to-blue-500/20"></div>
         <div class="relative z-10">
           <img src="/assets/img/logo-256.png?v=20260627-logo" alt="AI星月" class="w-24 h-24 mx-auto mb-6 drop-shadow-[0_0_28px_rgba(168,85,247,0.7)]">
-          <h2 class="text-3xl md:text-4xl font-bold mb-4 xy-gradient-text" data-site-text="home.download_title">立即下载 AI星月</h2>
-          <p class="text-slate-300 mb-8" data-site-text="home.download_subtitle">Android 客户端 · 持续更新中</p>
+          <h2 class="text-3xl md:text-4xl font-bold mb-4 xy-gradient-text">网页端暂时开放</h2>
+          <p class="text-slate-300 mb-8">APK 下载渠道维护中，请先使用 Web App。</p>
 
-          <a href="/download/ai-xingyue-latest.apk" class="xy-btn xy-btn-primary text-lg px-10 py-4 mb-6" download>
+          <a href="/app/login.html?next=%2Fapp%2F" class="xy-btn xy-btn-primary text-lg px-10 py-4 mb-6">
             <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
             </svg>
-            <span data-site-text="home.download_button_text">下载 APK 文件</span>
+            <span>打开 Web App</span>
           </a>
 
-          <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mt-8 text-sm" data-site-download-facts="home.download_facts">
-            <div class="px-4 py-3 rounded-lg bg-white/5">
-              <div class="text-slate-400 mb-1">版本</div>
-              <div class="font-semibold">v1.0.0</div>
-            </div>
-            <div class="px-4 py-3 rounded-lg bg-white/5">
-              <div class="text-slate-400 mb-1">系统要求</div>
-              <div class="font-semibold">Android 5.0+</div>
-            </div>
-            <div class="px-4 py-3 rounded-lg bg-white/5">
-              <div class="text-slate-400 mb-1">架构</div>
-              <div class="font-semibold">ARM / ARM64</div>
-            </div>
-            <div class="px-4 py-3 rounded-lg bg-white/5">
-              <div class="text-slate-400 mb-1">语言</div>
-              <div class="font-semibold">简体中文</div>
-            </div>
-          </div>
-
-          <div class="mt-6 text-xs text-slate-400 leading-relaxed max-w-xl mx-auto" data-site-text="home.download_note">
-            首次安装可能需要在系统设置中允许"未知来源"应用。
-            如下载未自动开始，请在浏览器中使用复制链接到下载工具。
+          <div class="mt-6 text-xs text-slate-400 leading-relaxed max-w-xl mx-auto">
+            充值通道和 APK 下载渠道已暂时关闭。已有账号、每日奖励、角色聊天和后台管理功能保持可用。
           </div>
         </div>
       </div>
@@ -330,7 +310,7 @@
         open: 0,
         faqs: [
           { q: '如何注册账号？', a: '在 APP 启动后选择「注册」，输入邮箱获取验证码，填写昵称和密码即可完成注册。注册成功后会自动登录并赠送 1000 积分。' },
-          { q: '积分是做什么用的？', a: '积分用于消耗调用 AI 模型生成内容。不同模型每次对话消耗不同积分。每日签到可获得额外积分，也可通过充值获取更多积分。' },
+          { q: '积分是做什么用的？', a: '积分用于消耗调用 AI 模型生成内容。每日签到可获得额外积分，充值通道维护期间暂不开放购买和兑换。' },
           { q: '安装时提示风险怎么办？', a: '由于本应用为定制版本未上架应用商店，部分系统会提示来源未知。请在系统「安全设置」中允许浏览器或文件管理器安装应用，并按提示安装即可。' },
           { q: '忘记密码怎么办？', a: '当前版本暂未开放密码找回功能。如有需要请联系管理员或重新使用其他邮箱注册。我们计划在下个版本加入完整的密码重置流程。' },
           { q: '账号信息存储在哪里？', a: '账号数据存储在我们位于专用服务器的私有数据库中，仅用于身份验证和积分记录，不会用于任何第三方用途。' },
@@ -349,7 +329,7 @@
       <div class="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 mb-4">
         <a href="/" class="xy-link">首页</a>
         <a href="/dashboard.html" class="xy-link">用户中心</a>
-        <a href="#download" class="xy-link">下载</a>
+        <a href="/app/login.html?next=%2Fapp%2F" class="xy-link">Web App</a>
         <a href="#faq" class="xy-link">常见问题</a>
       </div>
       <div>© 2026 AI星月 · The Origin of Imagination</div>

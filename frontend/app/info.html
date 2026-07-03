@@ -8,7 +8,7 @@
   <link rel="icon" href="/favicon.ico">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="/app/assets/css/app.css?v=20260703-fengyue-home3">
-  <script type="module" src="/app/assets/js/hub-pages.js?v=20260703-fengyue-home3"></script>
+  <script type="module" src="/app/assets/js/hub-pages.js?v=20260703-channels-closed"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
@@ -21,12 +21,12 @@
       <header class="app-topbar">
         <h1 x-text="infoValue('info_topbar_title', '信息中心')">信息中心</h1>
         <div class="grow"></div>
-        <a href="/download/ai-xingyue-latest.apk" class="xy-btn xy-btn-primary text-sm" x-text="infoValue('info_download_button_text', '下载 APK')">下载 APK</a>
+        <a href="/app/login.html?next=%2Fapp%2F" class="xy-btn xy-btn-primary text-sm" x-text="infoValue('info_download_button_text', '打开 Web App')">打开 Web App</a>
       </header>
       <section class="app-page-pad max-w-5xl mx-auto space-y-5">
         <div class="app-hero__panel">
-          <div class="app-hero__eyebrow" x-text="infoValue('info_eyebrow', 'AI星月 APK 同步状态')">AI星月 APK 同步状态</div>
-          <h2 class="app-hero__title whitespace-pre-line" x-text="infoValue('info_title', '网页与 APK\n同账号 · 同积分 · 同角色库。')">网页与 APK
+          <div class="app-hero__eyebrow" x-text="infoValue('info_eyebrow', 'AI星月 Web 同步状态')">AI星月 Web 同步状态</div>
+          <h2 class="app-hero__title whitespace-pre-line" x-text="infoValue('info_title', '网页端\n同账号 · 同积分 · 同角色库。')">网页端
 同账号 · 同积分 · 同角色库。</h2>
           <p class="app-hero__copy" x-text="infoValue('info_copy', '当前站点保持本地库模式，角色封面走本站媒体缓存，不依赖上游可用性，国内访问也很顺畅。')">当前站点保持本地库模式，角色封面走本站媒体缓存，不依赖上游可用性，国内访问也很顺畅。</p>
         </div>

@@ -1,5 +1,5 @@
 import { api, requireAuth, getCachedUser, setCachedUser, clearAuth, ApiError } from '/app/assets/js/app-core.js';
-import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-fengyue-home3';
+import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-channels-closed';
 
 async function loadUser(ctx) {
   if (!requireAuth()) return false;
@@ -169,6 +169,9 @@ export function rewardsPage() {
     depositText(key, fallback = '') { return this.deposit?.[key] || siteText(this, 'deposit', key, fallback); },
     dashboardText(key, fallback = '') { return siteText(this, 'dashboard', key, fallback); },
     rewardsText(key, fallback = '') { return siteText(this, 'rewards', key, fallback); },
+    paymentAvailable() {
+      return !!(this.deposit?.payment_available && this.deposit?.mode !== 'closed');
+    },
     normalizeBalance(data) {
       const b = data?.balance || data || {};
       return {
@@ -191,19 +194,23 @@ export function rewardsPage() {
     },
     openAifadian() {
       const url = this.deposit?.aifadian_url;
-      if (url) {
+      if (this.paymentAvailable() && url) {
         window.open(url, '_blank', 'noopener,noreferrer');
       } else {
-        this.setMessage(this.dashboardText('aifadian_missing_text', this.deposit?.support_text || '暂未配置爱发电购买链接，请联系站长获取兑换码。'), 'error');
+        this.setMessage(this.deposit?.support_text || this.dashboardText('aifadian_missing_text', '充值通道暂时关闭'), 'error');
       }
     },
     paymentNote() {
-      if (this.deposit?.payment_available) {
-        return this.deposit?.payment_note_available || '爱发电购买完成后，使用站长发放的兑换码在本页到账。';
+      if (this.paymentAvailable()) {
+        return this.deposit?.payment_note_available || '购买完成后，使用站长发放的兑换码在本页到账。';
       }
-      return this.deposit?.payment_note_unavailable || '暂未配置购买链接，请联系站长获取兑换码。';
+      return this.deposit?.payment_note_unavailable || '充值通道暂时关闭，恢复后会重新开放购买和兑换。';
     },
     async redeemNow() {
+      if (!this.paymentAvailable()) {
+        this.setMessage(this.paymentNote(), 'error');
+        return;
+      }
       const code = String(this.redeemInput || '').trim();
       if (!code || this.busy) {
         this.setMessage(this.dashboardText('redeem_empty_text', '请输入兑换码'), 'error');

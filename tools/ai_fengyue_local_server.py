@@ -26,6 +26,15 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_STATE_DIR = ROOT / "output" / "zip-1-repack" / "local-server"
 DEFAULT_DB = DEFAULT_STATE_DIR / "ai_fengyue_local.sqlite3"
+
+
+def env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
 CODE_TTL_SECONDS = 10 * 60
 NEW_USER_INITIAL_POINTS = 5000
 CHAT_MESSAGE_COST = 50
@@ -42,6 +51,8 @@ USER_LLM_API_KEY = os.environ.get("USER_LLM_API_KEY") or os.environ.get("OPENAI_
 USER_LLM_MODEL = os.environ.get("USER_LLM_MODEL") or os.environ.get("LLM_MODEL") or "gpt-4o-mini"
 USER_LLM_TEMPERATURE = float(os.environ.get("USER_LLM_TEMPERATURE", "0.8") or "0.8")
 USER_BYOK_ENABLED = str(os.environ.get("USER_BYOK_ENABLED", "0")).strip().lower() in ("1", "true", "yes", "on")
+PAYMENT_CHANNEL_ENABLED = env_bool("PAYMENT_CHANNEL_ENABLED", False)
+APK_DOWNLOAD_ENABLED = env_bool("APK_DOWNLOAD_ENABLED", False)
 LLM_UPSTREAM_USER_AGENT = os.environ.get(
     "LLM_UPSTREAM_USER_AGENT",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -297,6 +308,26 @@ def public_email_error(exc: Exception) -> str:
 
 
 def site_settings_defaults() -> dict:
+    payment_title = "爱发电购买兑换码" if PAYMENT_CHANNEL_ENABLED else "充值通道维护中"
+    payment_description = (
+        "付款后把兑换码输入到这里，额度立即到账并同步到 APK。"
+        if PAYMENT_CHANNEL_ENABLED
+        else "充值和兑换入口暂时关闭，已有余额、每日奖励和聊天功能不受影响。"
+    )
+    payment_button = "去爱发电购买" if PAYMENT_CHANNEL_ENABLED else "通道维护中"
+    payment_redeem_button = "兑换额度" if PAYMENT_CHANNEL_ENABLED else "暂不可兑换"
+    payment_note_unavailable = "充值通道暂时关闭，恢复后会重新开放购买和兑换。"
+    deposit_packages = [
+        {"id": "xy_10", "price_cny": 10, "points": 10000, "bonus_rate": 0, "label": "轻量包"},
+        {"id": "xy_20", "price_cny": 20, "points": 22000, "bonus_rate": 10, "label": "常用包"},
+        {"id": "xy_50", "price_cny": 50, "points": 57500, "bonus_rate": 15, "label": "高频包"},
+        {"id": "xy_100", "price_cny": 100, "points": 120000, "bonus_rate": 20, "label": "深度包"},
+    ] if PAYMENT_CHANNEL_ENABLED else []
+    deposit_subscriptions = [
+        {"id": "sub_month_light", "price_cny": 19.9, "points": 22000, "period": "月", "label": "月卡", "description": "适合普通聊天，约 440 次回复"},
+        {"id": "sub_month_standard", "price_cny": 39.9, "points": 50000, "period": "月", "label": "标准会员", "description": "适合高频聊天，约 1000 次回复"},
+        {"id": "sub_month_pro", "price_cny": 79.9, "points": 110000, "period": "月", "label": "Pro 会员", "description": "适合重度使用，约 2200 次回复"},
+    ] if PAYMENT_CHANNEL_ENABLED else []
     return {
         "home": {
             "nav_tagline": "让想象 · 照进二次元",
@@ -305,20 +336,20 @@ def site_settings_defaults() -> dict:
             "hero_subtitle": "与你心中那个角色，说一句你想说很久的话",
             "hero_secondary": "AI 角色扮演 · 剧情创作 · 沉浸互动",
             "primary_cta_text": "开启我的角色",
-            "primary_cta_href": "#download",
+            "primary_cta_href": "/app/login.html?next=%2Fapp%2F",
             "secondary_cta_text": "先看看 App",
             "secondary_cta_href": "/app/login.html?next=%2Fapp%2F",
             "trust_text": "30 秒注册 · 5000 积分起步 · Android 5.0+ · 邮箱验证",
             "preview_title": "不只是聊天，而是一段真实的相遇",
             "preview_subtitle": "每一个角色都有独立的世界观、记忆和情感反应",
-            "download_title": "立即下载 AI星月",
-            "download_subtitle": "Android 客户端 · 持续更新中",
-            "download_button_text": "下载 APK 文件",
+            "download_title": "网页端暂时开放",
+            "download_subtitle": "APK 下载渠道维护中，请先使用 Web App。",
+            "download_button_text": "打开 Web App",
             "features_title": "核心功能",
             "features_subtitle": "为每一位创作者打造的 AI 角色扮演体验",
             "feature_cards": [
                 {"title": "多角色对话", "description": "海量预设角色，覆盖动漫、游戏、原创人设。可自定义性格、背景、说话风格。"},
-                {"title": "无限积分", "description": "注册即赠 5000 积分，每日签到获得额外积分。还可在线充值，永不停歇。"},
+                {"title": "每日奖励", "description": "注册即赠 5000 积分，每日签到获得额外积分，已有额度网页与客户端共用。"},
                 {"title": "安全可靠", "description": "邮箱验证码注册，账号安全有保障。本地化数据存储，隐私不外泄。"},
                 {"title": "高速响应", "description": "专属服务器节点，低延迟流式输出，沉浸式体验毫无卡顿。"},
                 {"title": "智能创作", "description": "长上下文记忆，故事连贯发展。剧情自由分支，每次对话都是独一无二的体验。"},
@@ -341,7 +372,7 @@ def site_settings_defaults() -> dict:
             ],
             "footer_service_text": "本服务由 patcher.villainy.top 提供",
         },
-        "app": {
+            "app": {
             "announcement_enabled": False,
             "announcement_title": "站内公告",
             "announcement_text": "",
@@ -371,9 +402,9 @@ def site_settings_defaults() -> dict:
             "shell_guest_name": "旅人",
             "shell_points_suffix": "积分",
             "info_topbar_title": "信息中心",
-            "info_download_button_text": "下载 APK",
-            "info_eyebrow": "AI星月 APK 同步状态",
-            "info_title": "网页与 APK\n同账号 · 同积分 · 同角色库。",
+            "info_download_button_text": "打开 Web App",
+            "info_eyebrow": "AI星月 Web 同步状态",
+            "info_title": "网页端\n同账号 · 同积分 · 同角色库。",
             "info_copy": "当前站点保持本地库模式，角色封面走本站媒体缓存，不依赖上游可用性，国内访问也很顺畅。",
             "info_stat_upstream_label": "上游本地化角色",
             "info_stat_user_label": "用户角色",
@@ -467,8 +498,8 @@ def site_settings_defaults() -> dict:
             "balance_paid_label": "充值",
             "balance_reward_label": "奖励",
             "daily_checkin_title": "每日签到",
-            "download_title": "下载 APK",
-            "download_subtitle": "最新版客户端",
+            "download_title": "打开 Web App",
+            "download_subtitle": "客户端渠道维护中",
             "admin_card_title": "管理后台",
             "admin_card_subtitle": "查看数据 · 管理用户",
             "api_title": "API 接入信息",
@@ -490,7 +521,7 @@ def site_settings_defaults() -> dict:
             "checkin_failed_text": "签到失败",
             "claim_failed_text": "领取失败",
             "logout_success_text": "已退出登录",
-            "aifadian_missing_text": "暂未配置爱发电购买链接，请联系站长获取兑换码",
+            "aifadian_missing_text": "充值通道暂时关闭",
         },
         "account": {
             "topbar_title": "我的",
@@ -874,36 +905,27 @@ def site_settings_defaults() -> dict:
             ],
         },
         "deposit": {
-            "aifadian_url": AIFADIAN_URL,
+            "aifadian_url": AIFADIAN_URL if PAYMENT_CHANNEL_ENABLED else "",
             "currency": "CNY",
             "credits_name": "星月币",
             "rate_label": "1 CNY = 1000 星月币，50 星月币约等于 1 次角色回复",
-            "title": "爱发电购买兑换码",
-            "description": "付款后把兑换码输入到这里，额度立即到账并同步到 APK。",
-            "button_text": "去爱发电购买",
-            "redeem_button_text": "兑换额度",
+            "title": payment_title,
+            "description": payment_description,
+            "button_text": payment_button,
+            "redeem_button_text": payment_redeem_button,
             "redeem_placeholder": "XY-XXXX-XXXX-XXXX-XXXX",
-            "support_text": "如果没有看到购买链接，请联系站长获取兑换码。",
+            "support_text": payment_note_unavailable if not PAYMENT_CHANNEL_ENABLED else "如果没有看到购买链接，请联系站长获取兑换码。",
             "payment_note_available": "爱发电购买完成后，使用站长发放的兑换码在本页到账。",
-            "payment_note_unavailable": "暂未配置购买链接，请联系站长获取兑换码。",
+            "payment_note_unavailable": payment_note_unavailable,
             "steps": [
                 "在爱发电购买对应套餐",
                 "从订单说明或站长发放信息中复制兑换码",
                 "回到 AI星月输入兑换码，额度立即到账",
-            ],
-            "packages": [
-                {"id": "xy_10", "price_cny": 10, "points": 10000, "bonus_rate": 0, "label": "轻量包"},
-                {"id": "xy_20", "price_cny": 20, "points": 22000, "bonus_rate": 10, "label": "常用包"},
-                {"id": "xy_50", "price_cny": 50, "points": 57500, "bonus_rate": 15, "label": "高频包"},
-                {"id": "xy_100", "price_cny": 100, "points": 120000, "bonus_rate": 20, "label": "深度包"},
-            ],
+            ] if PAYMENT_CHANNEL_ENABLED else ["充值通道维护中，暂不开放购买和兑换。"],
+            "packages": deposit_packages,
             "subscriptions_title": "月度订阅",
             "subscriptions_note": "订阅为月度额度包，不承诺无限使用；额度用完后可继续兑换积分包。",
-            "subscriptions": [
-                {"id": "sub_month_light", "price_cny": 19.9, "points": 22000, "period": "月", "label": "月卡", "description": "适合普通聊天，约 440 次回复"},
-                {"id": "sub_month_standard", "price_cny": 39.9, "points": 50000, "period": "月", "label": "标准会员", "description": "适合高频聊天，约 1000 次回复"},
-                {"id": "sub_month_pro", "price_cny": 79.9, "points": 110000, "period": "月", "label": "Pro 会员", "description": "适合重度使用，约 2200 次回复"},
-            ],
+            "subscriptions": deposit_subscriptions,
         },
         "empty_states": {
             "explore_no_results": "没有找到匹配的角色",
@@ -7455,6 +7477,44 @@ def _extract_labeled_final_reply(text: str) -> str | None:
     return None
 
 
+METADATA_FENCE_LANGS = {"yaml", "yml", "json", "jsonc", "toml", "ini", "properties", "meta", "metadata"}
+METADATA_FENCE_MARKERS = (
+    "{{char}}", "{{user}}", "persona", "personality", "scenario", "worldbook", "world_info",
+    "relationships", "residence", "creator", "version", "updated_at", "update_date",
+)
+
+
+def _looks_like_leading_metadata_fence(lang: str, body: str) -> bool:
+    normalized_lang = str(lang or "").strip().lower().split()[0]
+    value = str(body or "").strip()
+    lower = value.lower()
+    if "{{char}}" in lower or "{{user}}" in lower:
+        return True
+    if any(marker in lower for marker in METADATA_FENCE_MARKERS):
+        return True
+    if normalized_lang in METADATA_FENCE_LANGS:
+        colon_lines = len(re.findall(r"(?m)^\s*[-\w\u4e00-\u9fff{}.$\[\]\"']+\s*[:=]", value))
+        return colon_lines >= 2
+    return False
+
+
+def _strip_leading_metadata_fences(text: str) -> str:
+    value = str(text or "").strip()
+    changed = False
+    for _ in range(4):
+        match = re.match(r"^\s*```([^\r\n`]*)\r?\n([\s\S]*?)\r?\n```\s*", value)
+        if not match:
+            break
+        rest = value[match.end():].lstrip()
+        if not rest:
+            break
+        if not _looks_like_leading_metadata_fence(match.group(1), match.group(2)):
+            break
+        value = rest
+        changed = True
+    return value if changed else text
+
+
 def normalize_visible_chat_reply(text: object) -> str:
     """Keep only the user-visible assistant reply after model/template/regex processing."""
     original = str(text or "").strip()
@@ -7472,6 +7532,7 @@ def normalize_visible_chat_reply(text: object) -> str:
             value = extracted.strip()
         value = _strip_internal_markdown_sections(value)
         value = _strip_leading_reply_labels(value)
+        value = _strip_leading_metadata_fences(value).strip()
         fenced = _single_fenced_block(value)
         if fenced and fenced[0] in {"text", "txt", "markdown", "md"}:
             value = fenced[1].strip()
@@ -8256,10 +8317,37 @@ def deposit_meta_json(user: sqlite3.Row | None = None) -> dict:
     settings = ACTIVE_STORE.site_settings() if ACTIVE_STORE is not None else site_settings_defaults()
     deposit = settings.get("deposit") if isinstance(settings.get("deposit"), dict) else site_settings_defaults()["deposit"]
     aifadian_url = str(deposit.get("aifadian_url") or AIFADIAN_URL or "").strip()
+    if not PAYMENT_CHANNEL_ENABLED:
+        return {
+            "mode": "closed",
+            "channel_enabled": False,
+            "aifadian_url": "",
+            "payment_available": False,
+            "redeem_available": False,
+            "currency": deposit.get("currency") or "CNY",
+            "credits_name": deposit.get("credits_name") or "星月币",
+            "rate_label": "充值通道暂时关闭",
+            "title": "充值通道维护中",
+            "description": "充值和兑换入口暂时关闭，已有余额、每日奖励和聊天功能不受影响。",
+            "button_text": "通道维护中",
+            "redeem_button_text": "暂不可兑换",
+            "redeem_placeholder": "",
+            "packages": [],
+            "subscriptions_title": "月度订阅",
+            "subscriptions_note": "充值通道恢复后再开放额度包。",
+            "subscriptions": [],
+            "steps": ["充值通道维护中，暂不开放购买和兑换。"],
+            "support_text": "充值通道暂时关闭，恢复后会重新开放购买和兑换。",
+            "payment_note_available": "",
+            "payment_note_unavailable": "充值通道暂时关闭，恢复后会重新开放购买和兑换。",
+            "balance": credit_balance_json(user) if user is not None else None,
+        }
     return {
         "mode": "aifadian_redeem_code",
+        "channel_enabled": True,
         "aifadian_url": aifadian_url,
         "payment_available": bool(aifadian_url),
+        "redeem_available": True,
         "currency": deposit.get("currency") or "CNY",
         "credits_name": deposit.get("credits_name") or "星月币",
         "rate_label": deposit.get("rate_label") or "1 CNY = 1000 星月币，50 星月币约等于 1 次角色回复",
@@ -8278,6 +8366,64 @@ def deposit_meta_json(user: sqlite3.Row | None = None) -> dict:
         "payment_note_unavailable": deposit.get("payment_note_unavailable") or "暂未配置购买链接，请联系站长获取兑换码。",
         "balance": credit_balance_json(user) if user is not None else None,
     }
+
+
+def public_site_settings_json(settings: dict) -> dict:
+    public = json.loads(json.dumps(settings if isinstance(settings, dict) else site_settings_defaults(), ensure_ascii=False))
+    home = public.setdefault("home", {})
+    app = public.setdefault("app", {})
+    dashboard = public.setdefault("dashboard", {})
+    if not APK_DOWNLOAD_ENABLED:
+        home["primary_cta_href"] = "/app/login.html?next=%2Fapp%2F"
+        home["download_title"] = "网页端暂时开放"
+        home["download_subtitle"] = "APK 下载渠道维护中，请先使用 Web App。"
+        home["download_button_text"] = "打开 Web App"
+        home["download_facts"] = []
+        home["download_note"] = "APK 下载渠道暂时关闭。已有账号、角色聊天和后台管理功能保持可用。"
+        faq_items = home.get("faq_items")
+        if isinstance(faq_items, list):
+            for item in faq_items:
+                if not isinstance(item, dict):
+                    continue
+                question = str(item.get("q") or "")
+                if "积分" in question:
+                    item["a"] = "积分用于消耗调用 AI 模型生成内容。每日签到可获得额外积分，充值通道维护期间暂不开放购买和兑换。"
+                if "安装" in question or "风险" in question:
+                    item["a"] = "APK 下载渠道暂时关闭，请先使用 Web App。"
+        app["info_download_button_text"] = "打开 Web App"
+        app["info_eyebrow"] = "AI星月 Web 同步状态"
+        app["info_title"] = "网页端\n同账号 · 同积分 · 同角色库。"
+        dashboard["download_title"] = "打开 Web App"
+        dashboard["download_subtitle"] = "客户端渠道维护中"
+    if not PAYMENT_CHANNEL_ENABLED:
+        dashboard["purchase_section_label"] = "充值通道"
+        dashboard["aifadian_missing_text"] = "充值通道暂时关闭"
+        feature_cards = home.get("feature_cards")
+        if isinstance(feature_cards, list):
+            for item in feature_cards:
+                if not isinstance(item, dict):
+                    continue
+                title = str(item.get("title") or "")
+                description = str(item.get("description") or "")
+                if "积分" in title or "充值" in description:
+                    item["title"] = "每日奖励"
+                    item["description"] = "注册即赠 5000 积分，每日签到获得额外积分，已有额度网页与客户端共用。"
+        deposit = public.setdefault("deposit", {})
+        deposit.update({
+            "aifadian_url": "",
+            "title": "充值通道维护中",
+            "description": "充值和兑换入口暂时关闭，已有余额、每日奖励和聊天功能不受影响。",
+            "button_text": "通道维护中",
+            "redeem_button_text": "暂不可兑换",
+            "redeem_placeholder": "",
+            "support_text": "充值通道暂时关闭，恢复后会重新开放购买和兑换。",
+            "payment_note_available": "",
+            "payment_note_unavailable": "充值通道暂时关闭，恢复后会重新开放购买和兑换。",
+            "packages": [],
+            "subscriptions": [],
+            "steps": ["充值通道维护中，暂不开放购买和兑换。"],
+        })
+    return public
 
 
 def workspace_json() -> dict:
@@ -8821,7 +8967,7 @@ class Handler(BaseHTTPRequestHandler):
         normalized = path.lstrip("/")
 
         if normalized == "console/api/public/site-settings":
-            return ok_response(self.store.site_settings())
+            return ok_response(public_site_settings_json(self.store.site_settings()))
 
         user = self.authenticated_user()
 
@@ -8966,6 +9112,8 @@ class Handler(BaseHTTPRequestHandler):
             })
 
         if normalized in ("console/api/ctf/recharge", "go/api/ctf/recharge"):
+            if not PAYMENT_CHANNEL_ENABLED:
+                return error_response("充值通道暂时关闭", 403)
             if isinstance(body, dict):
                 amount = int(body.get("points") or body.get("amount") or 100)
                 product_id = str(body.get("product_id") or "ctf_internal_recharge_100")
@@ -9226,6 +9374,8 @@ class Handler(BaseHTTPRequestHandler):
         if normalized == "console/api/web/redeem-code":
             if self.command.upper() != "POST":
                 return error_response("method not allowed", 405)
+            if not PAYMENT_CHANNEL_ENABLED:
+                return error_response("充值通道暂时关闭", 403)
             if not isinstance(body, dict):
                 return error_response("invalid body")
             try:
