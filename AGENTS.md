@@ -50,6 +50,13 @@
 - Put one-off verification/import/prune scripts under `output/` if they are short-lived, or `tools/` only when they become reusable project tooling.
 - After a task is verified, archive useful temporary artifacts under `output/root-artifact-archive-*` or delete disposable files; keep the project root limited to source APKs, source zips, docs, and stable project files.
 
+## Git Backup Policy
+
+- Every important implementation change, feature change, deployment-affecting fix, or project rule update must be committed to git after verification.
+- Push completed commits to `origin/main` when network/auth is available so GitHub remains the recoverable backup.
+- Keep commits focused and descriptive; do not include temporary screenshots, one-off scripts, traces, secrets, local tokens, or generated junk unless they are intentionally reusable project artifacts.
+- Before committing, check `git status --short` and avoid staging unrelated user changes.
+
 ## Reusable Pitfalls
 
 - Symptom: JADX command fails with `UnsupportedClassVersionError ... class file version 55.0`.
