@@ -16,7 +16,7 @@ const MOBILE_ITEMS = [
   { key: 'home', label: '首页', href: '/app/', icon: NAV_ITEMS[0].icon },
   { key: 'group', label: '群聊', href: '/app/group-chat.html', icon: NAV_ITEMS[3].icon },
   { key: 'workshop', label: '创作', href: '/app/workshop.html', icon: NAV_ITEMS[1].icon },
-  { key: 'favorites', label: '收藏', href: '/app/favorites.html', icon: NAV_ITEMS[4].icon },
+  { key: 'favorites', label: '收藏', href: '/app/favorites.html', icon: NAV_ITEMS[5].icon },
   { key: 'me', label: '我的', href: '/app/me.html', icon: 'M16 7a4 4 0 11-8 0 4 4 0 018 0zM4 21a8 8 0 0116 0' },
 ];
 
@@ -47,6 +47,24 @@ function jsString(value) {
   return JSON.stringify(String(value ?? ''));
 }
 
+function sidebarUtilityHtml(settings = null) {
+  const app = settings?.app || {};
+  return `
+    <div class="app-shell-links">
+      <a href="/app/workshop.html">${escapeHtml(app.shell_workshop_link || '创作')}</a>
+      <a href="/app/histories.html">${escapeHtml(app.shell_history_link || '历史')}</a>
+      <a href="/app/favorites.html">${escapeHtml(app.shell_favorites_link || '收藏')}</a>
+    </div>
+    <div class="app-shell-tools" aria-label="快捷工具">
+      <a href="/app/info.html" title="${escapeHtml(app.shell_notice_title || '公告')}">📢</a>
+      <a href="/app/logs.html" title="${escapeHtml(app.shell_logs_title || '记录')}">🔔</a>
+      <a href="/app/rewards.html" title="${escapeHtml(app.shell_rewards_title || '奖励')}">🎁</a>
+      <button type="button" data-shell-action="pictureless" title="${escapeHtml(app.shell_pictureless_title || '无图模式')}">🖼</button>
+      <button type="button" data-shell-action="theme" title="${escapeHtml(app.shell_theme_title || '明暗模式')}">🌙</button>
+      <a href="/app/me.html" title="${escapeHtml(app.shell_profile_title || '我的')}">👤</a>
+    </div>`;
+}
+
 export function sidebarHtml(active = 'home', settings = null) {
   const nav = NAV_ITEMS.map(item => `
     <a href="${item.href}" class="app-nav__item ${item.key === active ? 'is-active' : ''}">
@@ -67,7 +85,8 @@ export function sidebarHtml(active = 'home', settings = null) {
         <div class="nick truncate" x-text="user?.name || ${escapeHtml(jsString(appText(settings, 'shell_guest_name', '旅人')))}"></div>
         <div class="pts">✦ <span x-text="points || 0"></span> ${escapeHtml(appText(settings, 'shell_points_suffix', '积分'))}</div>
       </div>
-    </a>`;
+    </a>
+    ${sidebarUtilityHtml(settings)}`;
 }
 
 export function bottomNavHtml(active = 'home', settings = null) {
@@ -146,16 +165,44 @@ function renderAnnouncement(settings) {
   else main.prepend(wrap);
 }
 
+function applyShellPreferences() {
+  const theme = localStorage.getItem('ai_xingyue_shell_theme') || '';
+  if (theme === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+  else document.documentElement.removeAttribute('data-theme');
+  document.body?.classList.toggle('no-img', localStorage.getItem('ai_xingyue_pictureless') === '1');
+}
+
+function bindShellUtilities(root = document) {
+  root.querySelectorAll('[data-shell-action="pictureless"]').forEach(button => {
+    button.onclick = () => {
+      const enabled = !document.body.classList.contains('no-img');
+      document.body.classList.toggle('no-img', enabled);
+      localStorage.setItem('ai_xingyue_pictureless', enabled ? '1' : '0');
+    };
+  });
+  root.querySelectorAll('[data-shell-action="theme"]').forEach(button => {
+    button.onclick = () => {
+      const next = document.documentElement.getAttribute('data-theme') === 'dark' ? '' : 'dark';
+      if (next) document.documentElement.setAttribute('data-theme', next);
+      else document.documentElement.removeAttribute('data-theme');
+      localStorage.setItem('ai_xingyue_shell_theme', next);
+    };
+  });
+}
+
 export function injectLayout(active = 'home') {
+  applyShellPreferences();
   const sidebar = document.querySelector('[data-app-sidebar]');
   if (sidebar) sidebar.innerHTML = sidebarHtml(active);
   const bottom = document.querySelector('[data-app-bottom-nav]');
   if (bottom) bottom.innerHTML = bottomNavHtml(active);
+  bindShellUtilities(document);
   loadPublicSiteSettings().then(settings => {
     renderAnnouncement(settings);
     if (settings) {
       if (sidebar) sidebar.innerHTML = sidebarHtml(active, settings);
       if (bottom) bottom.innerHTML = bottomNavHtml(active, settings);
+      bindShellUtilities(document);
     }
   }).catch(() => {});
 }

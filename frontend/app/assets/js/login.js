@@ -1,5 +1,5 @@
 import { api, setToken, ApiError } from '/app/assets/js/app-core.js';
-import { loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260627-logo';
+import { loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-fengyue-ui2';
 
 function loginPage() {
   return {

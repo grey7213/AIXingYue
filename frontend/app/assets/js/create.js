@@ -1,5 +1,5 @@
 import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js';
-import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260627-logo';
+import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-fengyue-ui2';
 
 const emptyForm = () => ({
   name: '',

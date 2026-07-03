@@ -7,7 +7,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
   <link rel="icon" href="/favicon.ico">
   <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="/app/assets/css/app.css">
+  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260703-fengyue-ui2">
   <style>
     .chat-list {
       width: 268px; flex-shrink: 0;
@@ -572,9 +572,258 @@
       .chat-tools { right: 14px; top: 12px; }
       .memory-panel, .advanced-render-panel { position: fixed; left: 12px; right: 12px; top: 72px; width: auto; max-height: calc(100vh - 160px); }
     }
+
+    /* Fengyue clone chat skin. Keep all chat behavior and sandbox logic intact. */
+    .chat-list {
+      width: 268px;
+      border-right: 1px solid var(--fy-border);
+      background: var(--fy-panel);
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+    .chat-list__header {
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--fy-border);
+      color: var(--fy-text);
+      background: var(--fy-panel);
+    }
+    .chat-list__items { padding: 10px; }
+    .chat-list__item {
+      border-radius: 12px;
+      border: 1px solid transparent;
+    }
+    .chat-list__item:hover {
+      background: var(--fy-panel-2);
+      border-color: var(--fy-border);
+    }
+    .chat-list__item.is-active {
+      background: var(--fy-accent-soft);
+      border-color: var(--fy-accent);
+      box-shadow: none;
+    }
+    .chat-list__item .avatar {
+      background: linear-gradient(135deg, #f0a868, #e8834e);
+      color: #fff;
+      box-shadow: none;
+    }
+    .chat-list__item .name { color: var(--fy-text); }
+    .chat-list__item .preview { color: var(--fy-text-mute); }
+    .chat-list__item .del { color: var(--fy-text-mute); }
+
+    .chat-window {
+      background: var(--fy-bg);
+    }
+    .chat-window__hero {
+      height: 172px;
+      border-bottom: 1px solid var(--fy-border);
+      background-color: var(--fy-panel-2);
+    }
+    .chat-window__hero::after {
+      background: linear-gradient(180deg, rgba(0,0,0,.04), rgba(243,237,227,.88));
+    }
+    .chat-window__hero__info {
+      left: 26px;
+      bottom: 20px;
+    }
+    .chat-window__hero__info .avatar {
+      border: 2px solid #fff;
+      box-shadow: var(--fy-shadow-hover);
+      background: linear-gradient(135deg, #f0a868, #e8834e);
+    }
+    .chat-window__hero__info .text h2 {
+      background: none;
+      color: var(--fy-text);
+      -webkit-text-fill-color: var(--fy-text);
+      text-shadow: none;
+      font-size: 22px;
+    }
+    .chat-window__hero__info .text p {
+      color: var(--fy-text-soft);
+    }
+
+    .chat-tools { top: 14px; right: 18px; }
+    .tool-btn {
+      background: rgba(255,255,255,.92);
+      border: 1px solid var(--fy-border);
+      color: var(--fy-text-soft);
+      box-shadow: var(--fy-shadow);
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+    .tool-btn:hover,
+    .tool-btn.is-active {
+      background: var(--fy-accent-soft);
+      border-color: var(--fy-accent);
+      color: var(--fy-accent-2);
+    }
+
+    .memory-panel,
+    .advanced-render-panel {
+      border-radius: 16px;
+      border: 1px solid var(--fy-border);
+      background: var(--fy-panel);
+      box-shadow: var(--fy-shadow-hover);
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+    .memory-panel h3,
+    .advanced-render-panel h3 { color: var(--fy-text); }
+    .memory-panel label,
+    .render-setting__head,
+    .render-setting__value { color: var(--fy-text-soft); }
+    .memory-panel input,
+    .memory-panel textarea {
+      background: var(--fy-panel-2);
+      color: var(--fy-text);
+      border-color: var(--fy-border);
+    }
+    .memory-panel input:focus,
+    .memory-panel textarea:focus {
+      border-color: var(--fy-accent);
+      box-shadow: 0 0 0 3px rgba(239,154,95,.16);
+    }
+    .render-setting,
+    .memory-item {
+      background: var(--fy-panel-2);
+      border-color: var(--fy-border);
+    }
+    .render-toggle,
+    .render-segmented button,
+    .memory-actions button {
+      background: var(--fy-panel);
+      color: var(--fy-text-soft);
+      border-color: var(--fy-border);
+    }
+    .render-toggle.is-on,
+    .render-segmented button.is-active,
+    .memory-actions button:hover {
+      background: var(--fy-accent-2);
+      color: #fff;
+      border-color: var(--fy-accent-2);
+    }
+
+    .chat-messages {
+      padding: 22px 28px;
+      gap: 14px;
+      background: var(--fy-bg);
+    }
+    .bubble {
+      border-radius: 16px;
+      box-shadow: none;
+    }
+    .bubble.user {
+      background: var(--fy-accent-2);
+      color: #fff;
+      border-radius: 16px 16px 4px 16px;
+      box-shadow: none;
+    }
+    .bubble.assistant {
+      background: var(--fy-panel);
+      border: 1px solid var(--fy-border);
+      color: var(--fy-text);
+      border-radius: 16px 16px 16px 4px;
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+    .bubble.assistant.is-loading::after { color: var(--fy-accent-2); }
+    .msg-actions { opacity: .9; }
+    .msg-act,
+    .load-older,
+    .swipe-ctrl button {
+      background: var(--fy-panel);
+      border: 1px solid var(--fy-border);
+      color: var(--fy-text-soft);
+    }
+    .msg-act:hover,
+    .load-older:hover:not(:disabled),
+    .swipe-ctrl button:hover:not(:disabled) {
+      background: var(--fy-accent-soft);
+      border-color: var(--fy-accent);
+      color: var(--fy-accent-2);
+    }
+
+    .chat-input {
+      border-top: 1px solid var(--fy-border);
+      background: var(--fy-panel);
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+    .chat-input textarea {
+      background: var(--fy-panel-2);
+      border: 1px solid var(--fy-border);
+      color: var(--fy-text);
+      border-radius: 22px;
+      box-shadow: none;
+    }
+    .chat-input textarea:focus {
+      background: #fff;
+      border-color: var(--fy-accent);
+      box-shadow: 0 0 0 3px rgba(239,154,95,.16);
+    }
+    .chat-input button {
+      background: var(--fy-accent-2);
+      color: #fff;
+      box-shadow: none;
+    }
+    .chat-input button:hover {
+      background: var(--fy-accent);
+      transform: translateY(-1px);
+      box-shadow: none;
+    }
+    .chat-model {
+      background: var(--fy-panel-2);
+      border-color: var(--fy-border);
+      color: var(--fy-text-soft);
+    }
+    .chat-model span { color: var(--fy-accent-2); }
+    .chat-model select {
+      background: var(--fy-panel);
+      border-color: var(--fy-border);
+      color: var(--fy-text);
+    }
+    .quick-replies button {
+      background: var(--fy-panel);
+      color: var(--fy-text-soft);
+      border-color: var(--fy-border);
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+    .quick-replies button:hover {
+      background: var(--fy-accent-soft);
+      border-color: var(--fy-accent);
+      color: var(--fy-accent-2);
+    }
+
+    .tavo-frame-card,
+    .status-card,
+    .structured-status-card,
+    .math-block {
+      background: var(--fy-panel-2);
+      border-color: var(--fy-border);
+      color: var(--fy-text);
+    }
+    .tavo-frame-card__bar {
+      background: var(--fy-banner);
+      border-bottom-color: var(--fy-border);
+      color: #9a6719;
+    }
+    .tavo-source,
+    .tavo-source pre {
+      background: #fff;
+      color: var(--fy-text);
+    }
+
+    @media (max-width: 768px) {
+      .chat-window { min-height: calc(100vh - 72px); }
+      .chat-window__hero { height: 148px; }
+      .chat-messages { padding: 16px 14px 138px; }
+      .bubble { max-width: 88%; }
+      .chat-input { bottom: 66px; padding: 10px 12px; }
+      .quick-replies { bottom: 176px; }
+    }
   </style>
-  <script type="module" src="/app/assets/js/chat.js?v=20260702-html-injector"></script>
-  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+  <script type="module" src="/app/assets/js/chat.js?v=20260703-fengyue-ui2"></script>
+  <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
   <div class="xy-stars-bg"></div>

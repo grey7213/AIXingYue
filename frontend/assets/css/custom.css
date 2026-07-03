@@ -921,3 +921,410 @@ select.xy-input option:hover {
     transition: none !important;
   }
 }
+
+/* ===========================================================
+   Fengyue clone UI skin - shared public/admin/dashboard
+   =========================================================== */
+:root {
+  --fy-bg: #f3ede3;
+  --fy-panel: #ffffff;
+  --fy-panel-2: #faf6ef;
+  --fy-banner: #fdf3d8;
+  --fy-text: #2b2b2b;
+  --fy-text-soft: #6b6b6b;
+  --fy-text-mute: #9a9a9a;
+  --fy-accent: #ef9a5f;
+  --fy-accent-2: #e8834e;
+  --fy-accent-soft: #fbe6d3;
+  --fy-border: #ece5d8;
+  --fy-star: #f5b940;
+  --fy-shadow: 0 2px 12px rgba(0, 0, 0, .06);
+  --fy-shadow-hover: 0 8px 22px rgba(0, 0, 0, .12);
+  --xy-primary: var(--fy-accent-2);
+  --xy-primary-light: var(--fy-accent);
+  --xy-primary-dark: #c96b37;
+  --xy-bg-darkest: var(--fy-bg);
+  --xy-bg-dark: var(--fy-panel-2);
+  --xy-bg-card: var(--fy-panel);
+  --xy-border: var(--fy-border);
+  --xy-text: var(--fy-text);
+  --xy-text-dim: var(--fy-text-soft);
+  --xy-success: #10b981;
+  --xy-danger: #d9534f;
+  --xy-warning: #b8860b;
+}
+
+[data-theme="dark"] {
+  --fy-bg: #1d1b18;
+  --fy-panel: #262320;
+  --fy-panel-2: #2c2925;
+  --fy-banner: #33301a;
+  --fy-text: #ece7de;
+  --fy-text-soft: #b7b0a4;
+  --fy-text-mute: #877f72;
+  --fy-accent-soft: #3a2f24;
+  --fy-border: #37332d;
+  --fy-shadow: 0 2px 12px rgba(0, 0, 0, .4);
+  --fy-shadow-hover: 0 8px 22px rgba(0, 0, 0, .48);
+}
+
+html,
+body {
+  background: var(--fy-bg) !important;
+  color: var(--fy-text) !important;
+  letter-spacing: 0;
+}
+
+body {
+  background-image: none !important;
+}
+
+.xy-stars-bg,
+.xy-stars-bg::before,
+.xy-stars-bg::after,
+.xy-meteor,
+.xy-moon,
+.xy-cinema__bg,
+.xy-cinema__glow,
+.xy-cinema__vignette,
+.xy-cinema__grain,
+.xy-cinema__particles,
+[class*="blur-3xl"] {
+  display: none !important;
+  animation: none !important;
+}
+
+/* Tailwind-heavy pages load Tailwind before custom.css. These late overrides
+   keep text and surfaces readable after switching to the warm skin. */
+.text-white,
+.text-violet-50,
+.text-violet-100,
+.text-violet-200,
+.text-slate-100,
+.text-slate-200,
+.text-slate-300,
+[class*="text-white"],
+[class*="text-violet-100"],
+[class*="text-violet-200"],
+[class*="text-slate-200"],
+[class*="text-slate-300"] {
+  color: var(--fy-text) !important;
+  -webkit-text-fill-color: currentColor !important;
+}
+
+.text-slate-400,
+.text-slate-500,
+.text-violet-300,
+.text-violet-400,
+[class*="text-slate-400"],
+[class*="text-slate-500"],
+[class*="text-violet-300"],
+[class*="text-violet-400"] {
+  color: var(--fy-text-soft) !important;
+  -webkit-text-fill-color: currentColor !important;
+}
+
+.text-fuchsia-300,
+.text-pink-300,
+.text-amber-300,
+.text-cyan-300,
+.text-blue-300,
+.text-emerald-300,
+.text-emerald-400,
+[class*="text-fuchsia"],
+[class*="text-pink"],
+[class*="text-amber"],
+[class*="text-cyan"],
+[class*="text-blue"],
+[class*="text-emerald"] {
+  color: var(--fy-accent-2) !important;
+  -webkit-text-fill-color: currentColor !important;
+}
+
+[class*="bg-black/"],
+[class*="bg-white/"],
+[class*="bg-violet-"],
+[class*="bg-fuchsia-"],
+[class*="bg-rose-"],
+[class*="bg-cyan-"],
+[class*="bg-emerald-"],
+[class*="bg-amber-"],
+[class*="bg-blue-"] {
+  background: var(--fy-panel-2) !important;
+}
+
+[class*="border-white/"],
+[class*="border-violet-"],
+[class*="border-fuchsia-"],
+[class*="border-rose-"],
+[class*="border-cyan-"],
+[class*="border-emerald-"],
+[class*="border-amber-"] {
+  border-color: var(--fy-border) !important;
+}
+
+code,
+pre {
+  color: var(--fy-text) !important;
+}
+
+.xy-gradient-text,
+.xy-cinema-title {
+  background: none !important;
+  color: var(--fy-text) !important;
+  -webkit-text-fill-color: currentColor !important;
+  text-shadow: none !important;
+}
+
+img[alt="AI星月"] {
+  filter: none !important;
+}
+
+.xy-cinema-title::after {
+  background: var(--fy-accent-2) !important;
+  filter: none !important;
+}
+
+.xy-glass {
+  background: var(--fy-panel) !important;
+  border: 1px solid var(--fy-border) !important;
+  border-radius: 14px !important;
+  box-shadow: var(--fy-shadow) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  color: var(--fy-text) !important;
+}
+
+.xy-glass-hover:hover {
+  transform: translateY(-3px);
+  border-color: var(--fy-accent) !important;
+  box-shadow: var(--fy-shadow-hover) !important;
+}
+
+.xy-btn,
+.xy-cta-primary,
+.xy-cta-secondary {
+  border-radius: 999px;
+  box-shadow: none !important;
+  letter-spacing: 0;
+}
+
+.xy-btn-primary,
+.xy-cta-primary {
+  background: var(--fy-accent-2) !important;
+  border-color: var(--fy-accent-2) !important;
+  color: #fff !important;
+  -webkit-text-fill-color: #fff !important;
+}
+
+.xy-btn-primary:hover,
+.xy-cta-primary:hover {
+  background: var(--fy-accent) !important;
+  transform: translateY(-1px);
+}
+
+.xy-btn-ghost,
+.xy-cta-secondary {
+  background: var(--fy-panel) !important;
+  color: var(--fy-text-soft) !important;
+  border: 1px solid var(--fy-border) !important;
+}
+
+.xy-btn-ghost:hover,
+.xy-cta-secondary:hover {
+  background: var(--fy-accent-soft) !important;
+  color: var(--fy-accent-2) !important;
+  border-color: var(--fy-accent) !important;
+}
+
+.xy-btn-danger {
+  background: #fff6f3 !important;
+  border: 1px solid #f2c5be !important;
+  color: #d9534f !important;
+}
+
+.xy-input,
+select.xy-input,
+textarea.xy-input {
+  background: var(--fy-panel-2) !important;
+  border: 1px solid var(--fy-border) !important;
+  border-radius: 10px !important;
+  color: var(--fy-text) !important;
+  color-scheme: light !important;
+  box-shadow: none !important;
+}
+
+.xy-input::placeholder,
+textarea.xy-input::placeholder {
+  color: var(--fy-text-mute) !important;
+}
+
+.xy-input:focus,
+select.xy-input:focus,
+textarea.xy-input:focus {
+  background: #fff !important;
+  border-color: var(--fy-accent) !important;
+  box-shadow: 0 0 0 3px rgba(239, 154, 95, .16) !important;
+}
+
+select.xy-input option {
+  background: var(--fy-panel);
+  color: var(--fy-text);
+}
+
+.xy-label,
+.xy-table th {
+  color: var(--fy-text-soft) !important;
+}
+
+.xy-link {
+  color: var(--fy-accent-2) !important;
+}
+
+.xy-link:hover {
+  color: #c96b37 !important;
+}
+
+.xy-loading {
+  border-color: rgba(232, 131, 78, .25) !important;
+  border-top-color: var(--fy-accent-2) !important;
+}
+
+.xy-toast {
+  background: var(--fy-panel) !important;
+  border-color: var(--fy-border) !important;
+  color: var(--fy-text) !important;
+  box-shadow: var(--fy-shadow-hover);
+}
+
+.xy-toast-success { color: #14845f !important; border-color: rgba(16, 185, 129, .35) !important; }
+.xy-toast-error { color: #b6403a !important; border-color: rgba(217, 83, 79, .35) !important; }
+.xy-toast-info { color: var(--fy-accent-2) !important; border-color: rgba(232, 131, 78, .35) !important; }
+
+.xy-badge-purple,
+.xy-badge-blue,
+.xy-badge-green,
+.xy-badge-yellow,
+.xy-badge-gray,
+.xy-badge-red {
+  background: var(--fy-accent-soft) !important;
+  color: var(--fy-accent-2) !important;
+}
+
+.xy-table th {
+  background: var(--fy-panel-2) !important;
+  border-bottom: 1px solid var(--fy-border) !important;
+}
+
+.xy-table td {
+  border-bottom: 1px solid var(--fy-border) !important;
+}
+
+.xy-table tr:hover td {
+  background: var(--fy-panel-2) !important;
+}
+
+/* Public home: keep the first viewport, but replace the cinematic dark shell
+   with the clone-style warm product surface. */
+.xy-cinema {
+  min-height: 92vh;
+  background:
+    linear-gradient(180deg, rgba(253, 243, 216, .9), rgba(243, 237, 227, .98)),
+    var(--fy-bg) !important;
+  color: var(--fy-text);
+}
+
+.xy-status-chip {
+  background: var(--fy-banner) !important;
+  border: 1px solid #f5dfaa !important;
+  color: #9a6719 !important;
+  box-shadow: none !important;
+}
+
+.xy-cinema-subtitle {
+  color: var(--fy-text-soft) !important;
+  text-shadow: none !important;
+}
+
+.xy-trust-row {
+  color: var(--fy-text-soft) !important;
+}
+
+.xy-trust-row span.dot {
+  background: var(--fy-border) !important;
+}
+
+.xy-scroll-hint {
+  display: none !important;
+}
+
+.xy-mockup {
+  background: var(--fy-panel);
+  border: 1px solid var(--fy-border);
+  box-shadow: var(--fy-shadow-hover);
+}
+
+.xy-mockup__screen {
+  background: var(--fy-panel-2);
+}
+
+.xy-mockup__caption {
+  background: var(--fy-panel);
+  border: 1px solid var(--fy-border);
+  color: var(--fy-text);
+}
+
+nav.fixed,
+.fixed.top-0.inset-x-0,
+.md\:hidden.fixed {
+  background: rgba(255, 255, 255, .88) !important;
+  border-color: var(--fy-border) !important;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 1px 12px rgba(0,0,0,.04);
+}
+
+footer {
+  border-color: var(--fy-border) !important;
+  background: var(--fy-panel);
+}
+
+/* Admin/dashboard dense operations UI. */
+aside.hidden.md\:flex,
+aside.md\:flex {
+  background: var(--fy-panel) !important;
+  border-color: var(--fy-border) !important;
+  box-shadow: var(--fy-shadow);
+}
+
+aside.hidden.md\:flex button,
+aside.md\:flex button {
+  color: var(--fy-text-soft) !important;
+}
+
+aside.hidden.md\:flex button:hover,
+aside.md\:flex button:hover,
+aside.hidden.md\:flex button[class*="bg-violet"],
+aside.md\:flex button[class*="bg-violet"] {
+  background: var(--fy-accent-soft) !important;
+  color: var(--fy-accent-2) !important;
+}
+
+.fixed.inset-0,
+[class*="bg-black/70"] {
+  background: rgba(43, 43, 43, .45) !important;
+}
+
+.rounded-lg,
+.rounded-xl,
+.rounded-2xl {
+  border-radius: 12px;
+}
+
+@media (max-width: 768px) {
+  .xy-cinema {
+    min-height: 88vh;
+    padding-top: 7rem !important;
+    padding-bottom: 4rem !important;
+  }
+}

@@ -7,7 +7,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
   <link rel="icon" href="/favicon.ico">
   <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="/app/assets/css/app.css">
+  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260703-fengyue-ui2">
   <style>
     .group-layout { display:grid; grid-template-columns:260px minmax(0,1fr) 320px; height:100vh; }
     .group-panel { border-right:1px solid rgba(196,181,253,.14); background:rgba(12,6,34,.62); backdrop-filter:blur(14px); overflow:hidden; display:flex; flex-direction:column; }
@@ -38,9 +38,94 @@
       .chat-main { min-height:calc(100vh - 430px); }
       .group-input { padding-bottom:78px; }
     }
+    /* Fengyue clone group chat skin. */
+    .group-layout { background: var(--fy-bg); }
+    .group-panel {
+      border-color: var(--fy-border);
+      background: var(--fy-panel);
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+    .group-panel.right { border-left-color: var(--fy-border); }
+    .group-head {
+      border-bottom-color: var(--fy-border);
+      color: var(--fy-text);
+      background: var(--fy-panel);
+    }
+    .group-item {
+      color: var(--fy-text);
+      border-radius: 12px;
+    }
+    .group-item:hover,
+    .group-item.is-active {
+      background: var(--fy-accent-soft);
+      border-color: var(--fy-accent);
+      color: var(--fy-accent-2);
+    }
+    .role-card {
+      border-color: var(--fy-border);
+      background: var(--fy-panel-2);
+    }
+    .role-card:hover {
+      border-color: var(--fy-accent);
+      background: var(--fy-accent-soft);
+    }
+    .role-card img,
+    .role-avatar {
+      background: linear-gradient(135deg, #f0a868, #e8834e);
+    }
+    .chat-top {
+      border-bottom-color: var(--fy-border);
+      background: var(--fy-panel);
+    }
+    .group-messages {
+      background: var(--fy-bg);
+    }
+    .gmsg .speaker {
+      color: var(--fy-text-mute);
+    }
+    .gmsg.user .bubble {
+      background: var(--fy-accent-2);
+      color: #fff;
+      border-bottom-right-radius: 5px;
+    }
+    .gmsg.assistant .bubble {
+      background: var(--fy-panel);
+      border: 1px solid var(--fy-border);
+      color: var(--fy-text);
+      border-bottom-left-radius: 5px;
+    }
+    .group-input {
+      border-top-color: var(--fy-border);
+      background: var(--fy-panel);
+    }
+    .group-input textarea {
+      background: var(--fy-panel-2);
+      border-color: var(--fy-border);
+      color: var(--fy-text);
+    }
+    .group-input textarea:focus {
+      outline: none;
+      border-color: var(--fy-accent);
+      box-shadow: 0 0 0 3px rgba(239,154,95,.16);
+      background: #fff;
+    }
+    .chip {
+      background: var(--fy-accent-soft);
+      color: var(--fy-accent-2);
+    }
+    .px-5.py-2.border-t {
+      border-top-color: var(--fy-border) !important;
+      background: var(--fy-panel);
+    }
+    @media (max-width: 1024px) {
+      .group-panel.right {
+        border-top-color: var(--fy-border);
+      }
+    }
   </style>
-  <script type="module" src="/app/assets/js/group-chat.js?v=20260626-ass12"></script>
-  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+  <script type="module" src="/app/assets/js/group-chat.js?v=20260703-fengyue-ui2"></script>
+  <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
   <div class="xy-stars-bg"></div>
