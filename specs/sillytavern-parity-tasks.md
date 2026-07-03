@@ -1,6 +1,6 @@
 # AI星月 SillyTavern 能力补齐任务
 
-Updated: 2026-07-02
+Updated: 2026-07-03
 
 | ID | 任务 | 状态 | 验证 |
 |----|------|------|------|
@@ -23,6 +23,16 @@ Updated: 2026-07-02
 | ST16 | 正则后最终回复格式规范 | Done | 2026-07-02 后端在 Prompt Template / `[RENDER:*]` / Regex 之后清洗最终可见回复，移除英文过程标题、JSON 包裹和推理标签；流式解析丢弃 `reasoning_content`；前端 assistant 历史同样清洗。线上假上游 E2E 和浏览器验证通过 |
 | ST17 | Tavo 高级渲染设置与 TavoJS 兼容桥 | Done | 2026-07-02 `/app/chat.html` 新增高级渲染设置；支持 HTML/CSS 渲染开关、JavaScript `disabled/auto/script/code-block` 模式、TavoJS 执行确认和 LaTeX/AsciiMath 轻量显示；TavoJS 兼容桥只存在于 sandbox iframe 内。线上验证 `sandbox_has_same_origin=false`、`tavo_bridge_ok=true`、`raw_script_ran=false`、`fenced_script_ran=true`、console/page error 为 0 |
 | ST18 | HTML 代码注入器片段兼容 | Done | 2026-07-02 修复片段开头 `<style>/<script>` 被 DOMParser 移入 head 后早于 `.mes_text` 执行的问题；iframe 内提供 `#chat/.mes/.mes_text/.message-content` 兼容目标；线上验证 `injector_ran=true`、`unclosed_fence_ran=true`、`event_only_ran=true`，安全沙箱仍无 same-origin |
+| ST19 | 开场视觉 Regex 和 TavernHelper 交互兼容 | Done | 2026-07-03 修复目标卡 `admin-rczip-9721d5969c2effd819af` 的开场可视化：开场白也执行 Prompt Template + Regex；Regex 从 `extensions` 读取完整大段替换并支持 JS `$1/$&/$<name>` 替换；iframe sandbox 增加 ST top/storage/worldbook 兼容代理。线上验证首屏 `晚上好，欢迎回来`、入口齐全、章节弹窗打开，沙箱仍无 same-origin |
+
+## 2026-07-03 开场视觉 Regex 和 TavernHelper 交互兼容
+
+- 现象：用户打开 `https://patcher.villainy.top/app/chat.html?app_id=admin-rczip-9721d5969c2effd819af` 时，预期应看到 Tavo/ST 风格的开场视觉菜单；实际会出现源码、首屏视觉无效，或视觉出来但点击章节没有弹窗。
+- 后端原因：开场问候没有走角色 Regex，旧导入卡把 `# 游玩说明...` 视觉前言保存在 `creator_notes`、只把 `P1` 留在 `opening_statement`；线上顶层 `regex_scripts` 的大段 HTML 替换曾被截断，但原始 `extensions.regex_scripts` 里保留了完整 `replaceString`。此外 Python `re.sub` 会把 SillyTavern/JS 替换文本里的 `$1`、`$&`、反斜杠当成不同语义处理。
+- 后端修复：`chat_greetings_from_card()` 会恢复旧导入卡的视觉前言并把开场问候执行 Prompt Template 后再执行 Regex；`split_silly_first_mes_greetings()` 支持 `P/H/U` 开头并保留视觉 first_mes；`enabled_regex_scripts()` 同时读取顶层和 `extensions` 内的 regex，并对同名同规则优先选更长替换；`REGEX_REPLACE_MAX_CHARS=240000`；`apply_regex_scripts()` 使用函数式替换并按 JS/SillyTavern 规则展开 `$1`、`$&`、`$<name>`、`$$`，保留普通反斜杠。
+- 前端原因：卡片脚本会引用 `window.top`、`parent.SillyTavern`、`localStorage/sessionStorage`、世界书函数和 SillyTavern 消息容器；在无 `allow-same-origin` 的 sandbox iframe 中直接访问原生 storage 会抛 `SecurityError`，部分内联模块脚本或事件属性也没有被兼容重写。
+- 前端修复：`frontend/app/assets/js/chat.js` 在 iframe 内提供 `window.__xySTTop`、`window.SillyTavern.getContext()`、`window.context`、世界书 no-op helpers、`raw-data-store`、本地内存版 `localStorage/sessionStorage` shim，并重写卡内脚本和事件属性里的 `window.top`、`parent.SillyTavern`、storage 引用；内联 `type=module` 脚本降级为普通沙箱脚本。仍保持 `sandbox="allow-scripts"`，不加 `allow-same-origin`，CSP 禁止网络、子 frame、object、form 和外部脚本。
+- 验证：本地 `verify_tavern_opening_render_local.py` 返回 `first_is_code_fence=true`、`first_has_hero=true`、`first_has_script=true`、`p6_in_greetings=true`；线上远程 API 返回 `swipe_count=13`、`has_p6=true`、`has_h8=true`、`has_u6=true` 且临时数据清理为 0；线上浏览器 `verify_tavern_opening_render_live.py` 返回 `hero_text=晚上好，欢迎回来`、labels 包含 `开关选项/游玩说明/小学篇/高中篇/大学篇`、`modal_opened=true`、`sandbox_has_same_origin=false`、`parent_can_read_frame=false`、console/page error 为 0。线上 `verify_tavo_advanced_render_browser.py` 和 `verify_tavo_sandbox_browser.py` 回归通过，服务/Nginx active，公开 `/health` OK，`CONTENT_MODE=local_only`。
 
 ## 2026-07-01 角色卡下载包导入
 

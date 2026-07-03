@@ -5980,15 +5980,33 @@ def apply_initial_template_variables(entries: list, template_context: dict | Non
 SILLY_GREETING_HEADING_RE = re.compile(
     r"(?im)^[ \t]{0,3}#{2,4}[ \t]+"
     r"(?P<label>"
-    r"(?:[UP][ \t]*[-_.]?[ \t]*\d{1,3}(?!\d))"
+    r"(?:[UPH][ \t]*[-_.]?[ \t]*\d{1,3}(?!\d))"
     r"|(?:开(?:场|头|局)|问候|开场白)[ \t]*(?:[:：#-]?[ \t]*)?(?:\d{1,3}|[一二三四五六七八九十]+)"
     r"|(?:opening|greeting|starter|scene)[ \t]*(?:[:：#-]?[ \t]*)?\d{1,3}"
     r")[^\n\r]*$"
 )
 
+IMPORTED_OPENING_PREFACE_MARKER = "【导入自 first_mes 的开场说明】"
+VISUAL_OPENING_PREFACE_RE = re.compile(
+    r"(?im)^[ \t]{0,3}#[ \t]*(?:游玩说明|玩法说明|使用说明|开局说明|说明)\b"
+)
+
 
 def _dedupe_text_key(value: object) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip().lower()
+
+
+def is_visual_opening_preface(value: object) -> bool:
+    text = str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    return bool(text and VISUAL_OPENING_PREFACE_RE.search(text))
+
+
+def imported_opening_preface_from_notes(creator_notes: object) -> str:
+    text = str(creator_notes or "").replace("\r\n", "\n").replace("\r", "\n")
+    if IMPORTED_OPENING_PREFACE_MARKER in text:
+        text = text.split(IMPORTED_OPENING_PREFACE_MARKER, 1)[1]
+    match = VISUAL_OPENING_PREFACE_RE.search(text)
+    return text[match.start():].strip() if match else ""
 
 
 def split_silly_first_mes_greetings(first_mes: object) -> dict:
@@ -6017,17 +6035,19 @@ def split_silly_first_mes_greetings(first_mes: object) -> dict:
         return {"primary": text, "alternates": [], "preface": ""}
 
     preface = text[:matches[0].start()].strip()
-    primary = sections[0]
+    visual_preface = preface if is_visual_opening_preface(preface) else ""
+    primary = text if visual_preface else sections[0]
     alternates: list[str] = []
     seen = {_dedupe_text_key(primary)}
-    for section in sections[1:20]:
+    section_source = sections if visual_preface else sections[1:20]
+    for section in section_source:
         key = _dedupe_text_key(section)
         if key and key not in seen:
             seen.add(key)
             alternates.append(section)
     if not alternates:
         return {"primary": text, "alternates": [], "preface": ""}
-    return {"primary": primary, "alternates": alternates, "preface": preface}
+    return {"primary": primary, "alternates": alternates, "preface": "" if visual_preface else preface}
 
 
 def merge_alternate_greetings(primary: object, *groups: object) -> list[str]:
@@ -6054,18 +6074,31 @@ def append_imported_opening_preface(creator_notes: str, preface: str) -> str:
     clean_preface = str(preface or "").strip()
     if not clean_preface:
         return clean_notes
-    marker = "【导入自 first_mes 的开场说明】"
-    if marker in clean_notes:
+    if IMPORTED_OPENING_PREFACE_MARKER in clean_notes:
         return clean_notes
-    merged = f"{clean_notes}\n\n{marker}\n{clean_preface}".strip() if clean_notes else f"{marker}\n{clean_preface}"
+    merged = f"{clean_notes}\n\n{IMPORTED_OPENING_PREFACE_MARKER}\n{clean_preface}".strip() if clean_notes else f"{IMPORTED_OPENING_PREFACE_MARKER}\n{clean_preface}"
     return merged[:4000]
 
 
 def chat_greetings_from_card(card: dict, char_name: str = "", user_name: str = "", *, template_context: dict | None = None) -> list[str]:
     primary_raw = str((card or {}).get("opening_statement") or "").strip()
     split = split_silly_first_mes_greetings(primary_raw)
-    primary = str(split.get("primary") or primary_raw).strip()
-    alternates = merge_alternate_greetings(primary, split.get("alternates") or [], (card or {}).get("alternate_greetings") or [])
+    imported_preface = imported_opening_preface_from_notes((card or {}).get("creator_notes"))
+    if imported_preface:
+        alternates = merge_alternate_greetings(
+            imported_preface,
+            [primary_raw] if primary_raw else [],
+            split.get("alternates") or [],
+            (card or {}).get("alternate_greetings") or [],
+        )
+        primary = "\n\n".join([imported_preface] + alternates).strip()
+    else:
+        primary = str(split.get("primary") or primary_raw).strip()
+        alternates = merge_alternate_greetings(
+            primary,
+            split.get("alternates") or [],
+            (card or {}).get("alternate_greetings") or [],
+        )
     greetings: list[str] = []
     for value in ([primary] if primary else []) + alternates:
         text = render_tavern_template(
@@ -6075,6 +6108,7 @@ def chat_greetings_from_card(card: dict, char_name: str = "", user_name: str = "
             template_context=template_context,
             phase="generate",
         )
+        text = apply_regex_scripts(text, card or {})
         key = _dedupe_text_key(text)
         if text and key and key not in {_dedupe_text_key(g) for g in greetings}:
             greetings.append(text)
@@ -6496,6 +6530,9 @@ def split_silly_regex_pattern(value: object) -> tuple[str, str]:
     return text, ""
 
 
+REGEX_REPLACE_MAX_CHARS = 240000
+
+
 def normalize_regex_scripts(value: object) -> list:
     if not isinstance(value, list):
         return []
@@ -6520,7 +6557,7 @@ def normalize_regex_scripts(value: object) -> list:
             "id": str(raw.get("id") or f"regex-{idx + 1}")[:80],
             "name": str(raw.get("name") or raw.get("scriptName") or f"Regex {idx + 1}")[:80],
             "find": find[:1000],
-            "replace": replace[:4000],
+            "replace": replace[:REGEX_REPLACE_MAX_CHARS],
             "flags": "".join(ch for ch in flags if ch in "ims")[:3],
             "enabled": enabled,
             "order": max(0, min(order, 9999)),
@@ -7105,14 +7142,96 @@ def app_extras(app: dict) -> dict:
 
 
 def enabled_regex_scripts(app: dict) -> list[dict]:
-    scripts = app_extras(app).get("regex_scripts")
-    if not isinstance(scripts, list):
-        return []
-    out = []
-    for script in normalize_regex_scripts(scripts):
-        if script.get("enabled", True):
-            out.append(script)
-    return out
+    candidates: list[object] = []
+    if isinstance(app, dict):
+        candidates.extend(regex_scripts_from_extensions(app.get("extensions")))
+        extras = app_extras(app)
+        candidates.extend(regex_scripts_from_extensions(extras.get("extensions")))
+        top_scripts = app.get("regex_scripts")
+        if isinstance(top_scripts, list):
+            candidates.extend(top_scripts)
+        extra_scripts = extras.get("regex_scripts")
+        if isinstance(extra_scripts, list):
+            candidates.extend(extra_scripts)
+    best: dict[tuple[str, str, str], dict] = {}
+    ordered_keys: list[tuple[str, str, str]] = []
+    for script in normalize_regex_scripts(candidates):
+        key = (
+            str(script.get("name") or ""),
+            str(script.get("find") or ""),
+            str(script.get("flags") or ""),
+        )
+        current = best.get(key)
+        if current is None:
+            ordered_keys.append(key)
+            best[key] = script
+            continue
+        if len(str(script.get("replace") or "")) > len(str(current.get("replace") or "")):
+            best[key] = script
+    return [best[key] for key in ordered_keys if best[key].get("enabled", True)]
+
+
+def expand_silly_regex_replacement(template: str, match: re.Match) -> str:
+    """Expand JS/SillyTavern-style replacement tokens without Python backslash escapes."""
+    text = str(template or "")
+    out: list[str] = []
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if ch == "$":
+            nxt = text[i + 1] if i + 1 < len(text) else ""
+            if nxt == "$":
+                out.append("$")
+                i += 2
+                continue
+            if nxt == "&":
+                out.append(match.group(0) or "")
+                i += 2
+                continue
+            if nxt == "<":
+                end = text.find(">", i + 2)
+                if end > i + 2:
+                    name = text[i + 2:end]
+                    try:
+                        out.append(match.group(name) or "")
+                    except Exception:
+                        out.append("")
+                    i = end + 1
+                    continue
+            if nxt.isdigit():
+                digits = nxt
+                if i + 2 < len(text) and text[i + 2].isdigit():
+                    digits += text[i + 2]
+                try:
+                    value = match.group(int(digits))
+                    out.append(value or "")
+                    i += 1 + len(digits)
+                    continue
+                except Exception:
+                    if len(digits) > 1:
+                        try:
+                            value = match.group(int(digits[0]))
+                            out.append((value or "") + digits[1:])
+                            i += 1 + len(digits)
+                            continue
+                        except Exception:
+                            pass
+                    out.append("")
+                    i += 2
+                    continue
+        if ch == "\\" and i + 1 < len(text) and text[i + 1].isdigit():
+            digits = text[i + 1]
+            if i + 2 < len(text) and text[i + 2].isdigit():
+                digits += text[i + 2]
+            try:
+                out.append(match.group(int(digits)) or "")
+                i += 1 + len(digits)
+                continue
+            except Exception:
+                pass
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def apply_regex_scripts(text: str, app: dict) -> str:
@@ -7127,7 +7246,9 @@ def apply_regex_scripts(text: str, app: dict) -> str:
         if "s" in raw_flags:
             flags |= re.DOTALL
         try:
-            value = re.sub(str(script.get("find") or ""), str(script.get("replace") or ""), value, flags=flags)
+            pattern = re.compile(str(script.get("find") or ""), flags=flags)
+            replacement = str(script.get("replace") or "")
+            value = pattern.sub(lambda match: expand_silly_regex_replacement(replacement, match), value)
         except re.error as exc:
             log(f"regex script skipped for {app.get('id')}: {exc}")
     return value

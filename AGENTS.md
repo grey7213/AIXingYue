@@ -312,6 +312,11 @@
   Fix: `frontend\app\assets\js\chat.js` 对非完整 HTML 片段把 parsed head 内容放回 iframe body 兼容容器，容器提供 `#chat`、`.mes`、`.mes_text`、`.message-content`、`.tavo-content`；HTML fence 语言取首个 token，最后一个未闭合 fence 也解析；脚本仍只在无 `allow-same-origin` 的 sandbox iframe 中运行。
   Verify: 2026-07-02 本地和线上 `D:\Anconda3\python.exe .\output\verify_tavo_advanced_render_browser.py` 返回 `injector_ran=true`、`injector_text_has_result=true`、`unclosed_fence_ran=true`、`event_only_ran=true`，同时 `sandbox_has_same_origin=false`、`parent_can_read_frame=false`、`main_script_count=0`；线上 `verify_tavo_sandbox_browser.py` 回归通过。
 
+- Symptom: Tavo/ST 开场视觉页显示源码、空白，或首屏出现但点击章节/按钮没有效果。
+  Cause: 开场问候曾不执行角色 Regex；旧导入卡可能把 `# 游玩说明...` 视觉前言放进 `creator_notes`、只把 `P1` 留在 `opening_statement`；大段 HTML Regex 顶层副本可能被截断但 `extensions.regex_scripts` 保留完整替换；Python `re.sub` 不兼容 SillyTavern/JS 的 `$1/$&/$<name>` 替换；iframe sandbox 中卡片脚本直接访问 `window.top`、`parent.SillyTavern`、`localStorage/sessionStorage` 或世界书函数会失败。
+  Fix: `tools\ai_fengyue_local_server.py` 恢复视觉前言、开场问候执行 Prompt Template 后再执行 Regex、从顶层和 `extensions` 合并读取 regex 并优先使用更长替换、`REGEX_REPLACE_MAX_CHARS=240000`、函数式展开 JS 风格替换；`frontend\app\assets\js\chat.js` 在无 same-origin iframe 中提供 `__xySTTop`、`SillyTavern.getContext()`、本地 storage shim、世界书 no-op helpers，并重写卡内脚本/事件属性。
+  Verify: 2026-07-03 目标卡 `admin-rczip-9721d5969c2effd819af` 远程 API 返回 `first_has_hero=true`、`first_has_script=true`、`swipe_count=13`、`has_p6/h8/u6=true`；线上 `D:\Anconda3\python.exe .\output\verify_tavern_opening_render_live.py` 返回 `hero_text=晚上好，欢迎回来`、菜单 labels 齐全、`modal_opened=true`、`sandbox_has_same_origin=false`、console/page error 为 0。
+
 - Symptom: 从 PowerShell 执行 `ssh "... python3 - <<'PY' ..."` 一类内联远程 Python 检查时，本地 PowerShell 把远程脚本里的 `*` 等字符当作本地命令解析，导致命令还没到服务器就失败。
   Cause: PowerShell 与远程 shell 双层转义叠加，bash heredoc/多行 Python 不适合直接塞进本地命令字符串。
   Fix: 把远程检查写成临时 `.py` 文件，用 Windows OpenSSH `scp.exe` 上传到 `/tmp/` 后再 `ssh "python3 /tmp/script.py"` 执行。

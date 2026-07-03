@@ -356,6 +356,17 @@ function sanitizeUrlAttribute(el, attr) {
   el.removeAttribute(attr);
 }
 
+function rewriteTavernHelperScript(source) {
+  return String(source || '')
+    .replace(/\bwindow\.parent\.SillyTavern\b/g, 'window.__xySTTop.SillyTavern')
+    .replace(/\bparent\.SillyTavern\b/g, 'window.__xySTTop.SillyTavern')
+    .replace(/\bwindow\.top\b/g, 'window.__xySTTop')
+    .replace(/\bwindow\.localStorage\b/g, 'window.__xyLocalStorage')
+    .replace(/(^|[^\w$.])localStorage\b/g, '$1window.__xyLocalStorage')
+    .replace(/\bwindow\.sessionStorage\b/g, 'window.__xySessionStorage')
+    .replace(/(^|[^\w$.])sessionStorage\b/g, '$1window.__xySessionStorage');
+}
+
 function serializeSafeAttrs(el, allowed = ['class', 'style', 'dir']) {
   if (!el) return '';
   const parts = [];
@@ -376,6 +387,14 @@ function sanitizeAdvancedHtml(raw, options = {}) {
   const doc = new DOMParser().parseFromString(source, 'text/html');
   doc.querySelectorAll('base, iframe, object, embed, link[rel], script[src], script[data-src]').forEach(el => el.remove());
   if (!allowScripts) doc.querySelectorAll('script').forEach(el => el.remove());
+  if (allowScripts) {
+    doc.querySelectorAll('script:not([src])').forEach(el => {
+      el.textContent = rewriteTavernHelperScript(el.textContent || '');
+      if (String(el.getAttribute('type') || '').trim().toLowerCase() === 'module') {
+        el.removeAttribute('type');
+      }
+    });
+  }
   doc.querySelectorAll('meta[http-equiv]').forEach(el => {
     const equiv = String(el.getAttribute('http-equiv') || '').toLowerCase();
     if (equiv.includes('refresh') || equiv.includes('content-security-policy')) el.remove();
@@ -388,6 +407,10 @@ function sanitizeAdvancedHtml(raw, options = {}) {
     if (!allowScripts) {
       Array.from(el.attributes || []).forEach(attr => {
         if (/^on/i.test(attr.name)) el.removeAttribute(attr.name);
+      });
+    } else {
+      Array.from(el.attributes || []).forEach(attr => {
+        if (/^on/i.test(attr.name)) el.setAttribute(attr.name, rewriteTavernHelperScript(attr.value || ''));
       });
     }
   });
@@ -402,7 +425,125 @@ function sanitizeAdvancedHtml(raw, options = {}) {
 
 function buildTavoBridgeScript() {
   return `
-    (()=>{const listeners=Object.create(null);const state=Object.create(null);const height=()=>{const root=document.documentElement;const body=document.body;return Math.ceil(Math.max(root.scrollHeight,body?body.scrollHeight:0,260));};const resize=()=>{try{parent.postMessage({type:'xy-tavo-resize',height:height()},'*');}catch(e){}};const clone=(value)=>JSON.parse(JSON.stringify(value));const api={version:'ai-xingyue-safe',notify(message){try{parent.postMessage({type:'xy-tavo-notify',message:String(message||'').slice(0,200)},'*');}catch(e){}return true;},resize(){resize();return true;},emit(name,detail){(listeners[String(name)]||[]).slice().forEach(fn=>{try{fn(detail);}catch(e){}});return true;},on(name,fn){name=String(name);if(typeof fn!=='function')return()=>{};(listeners[name]||(listeners[name]=[])).push(fn);return()=>{listeners[name]=(listeners[name]||[]).filter(item=>item!==fn);};},getState(){return clone(state);},setState(patch){if(patch&&typeof patch==='object')Object.assign(state,patch);resize();return clone(state);},getVar(name){return state[String(name)];},setVar(name,value){state[String(name)]=value;resize();return value;},confirm(action){try{parent.postMessage({type:'xy-tavo-confirm-request',action:String(action||'').slice(0,120)},'*');}catch(e){}return false;},request(){return Promise.reject(new Error('Network access is disabled in AI星月 Tavo sandbox'));}};Object.defineProperty(window,'TavoJS',{value:api,configurable:false,writable:false});window.tavo=api;window.Tavo=api;})();
+    (() => {
+      const listeners = Object.create(null);
+      const state = Object.create(null);
+      const storageBag = Object.create(null);
+      const storage = {
+        get length() { return Object.keys(storageBag).length; },
+        key(index) { return Object.keys(storageBag)[Number(index)] || null; },
+        getItem(name) {
+          name = String(name);
+          return Object.prototype.hasOwnProperty.call(storageBag, name) ? storageBag[name] : null;
+        },
+        setItem(name, value) { storageBag[String(name)] = String(value); },
+        removeItem(name) { delete storageBag[String(name)]; },
+        clear() { Object.keys(storageBag).forEach(key => delete storageBag[key]); },
+      };
+      window.addEventListener('error', event => {
+        const message = String((event && (event.message || (event.error && event.error.message))) || '');
+        if (message.includes('localStorage') && message.includes('sandboxed')) event.preventDefault();
+        if (message.includes('sessionStorage') && message.includes('sandboxed')) event.preventDefault();
+      }, true);
+      const height = () => {
+        const root = document.documentElement;
+        const body = document.body;
+        return Math.ceil(Math.max(root.scrollHeight, body ? body.scrollHeight : 0, 260));
+      };
+      const resize = () => {
+        try { parent.postMessage({ type: 'xy-tavo-resize', height: height() }, '*'); } catch (e) {}
+      };
+      const clone = value => {
+        try { return JSON.parse(JSON.stringify(value)); } catch (e) { return value; }
+      };
+      const rawText = () => {
+        const raw = document.getElementById('raw-data-store');
+        return raw ? raw.textContent || raw.innerText || '' : '';
+      };
+      const currentMessage = () => ({ mes: rawText(), name: 'assistant', is_system: false, is_user: false });
+      const context = {
+        get chat() { return [currentMessage()]; },
+        saveChat() { return Promise.resolve(true); },
+      };
+      const topProxy = {};
+      Object.defineProperties(topProxy, {
+        document: { get() { return document; } },
+        SillyTavern: { value: { getContext() { return context; } } },
+        context: { get() { return context; } },
+        localStorage: { get() { return storage; } },
+        sessionStorage: { get() { return storage; } },
+        pageXOffset: { get() { return window.pageXOffset || 0; } },
+        pageYOffset: { get() { return window.pageYOffset || 0; } },
+        innerWidth: { get() { return window.innerWidth; } },
+        innerHeight: { get() { return window.innerHeight; } },
+        visualViewport: { get() { return window.visualViewport || { width: window.innerWidth, height: window.innerHeight }; } },
+        location: { value: { reload() { resize(); } } },
+      });
+      topProxy.getComputedStyle = el => window.getComputedStyle(el);
+      topProxy.scrollTo = (...args) => { try { window.scrollTo(...args); } catch (e) {} };
+      topProxy.updateMessageBlock = (idx, msg) => {
+        try {
+          const raw = document.getElementById('raw-data-store');
+          if (raw && msg && typeof msg.mes === 'string') raw.textContent = msg.mes;
+          resize();
+        } catch (e) {}
+      };
+      const emptyWorldNames = () => [];
+      const emptyWorld = () => Promise.resolve([]);
+      window.__xyLocalStorage = storage;
+      window.__xySessionStorage = storage;
+      window.__xySTTop = topProxy;
+      try { Object.defineProperty(window, 'localStorage', { value: storage, configurable: true }); } catch (e) {}
+      try { Object.defineProperty(window, 'sessionStorage', { value: storage, configurable: true }); } catch (e) {}
+      window.context = context;
+      window.SillyTavern = topProxy.SillyTavern;
+      window.getCharWorldbookNames = () => ({ primary: '', additional: [] });
+      window.getChatWorldbookName = () => '';
+      window.getGlobalWorldbookNames = emptyWorldNames;
+      window.getWorldbook = emptyWorld;
+      window.updateWorldbookWith = (name, updater) => emptyWorld().then(entries => {
+        try { return typeof updater === 'function' ? updater(entries) : entries; } catch (e) { return entries; }
+      });
+      const api = {
+        version: 'ai-xingyue-safe',
+        notify(message) {
+          try { parent.postMessage({ type: 'xy-tavo-notify', message: String(message || '').slice(0, 200) }, '*'); } catch (e) {}
+          return true;
+        },
+        resize() { resize(); return true; },
+        emit(name, detail) {
+          (listeners[String(name)] || []).slice().forEach(fn => { try { fn(detail); } catch (e) {} });
+          return true;
+        },
+        on(name, fn) {
+          name = String(name);
+          if (typeof fn !== 'function') return () => {};
+          (listeners[name] || (listeners[name] = [])).push(fn);
+          return () => { listeners[name] = (listeners[name] || []).filter(item => item !== fn); };
+        },
+        getState() { return clone(state); },
+        setState(patch) {
+          if (patch && typeof patch === 'object') Object.assign(state, patch);
+          resize();
+          return clone(state);
+        },
+        getVar(name) { return state[String(name)]; },
+        setVar(name, value) {
+          state[String(name)] = value;
+          resize();
+          return value;
+        },
+        confirm(action) {
+          try { parent.postMessage({ type: 'xy-tavo-confirm-request', action: String(action || '').slice(0, 120) }, '*'); } catch (e) {}
+          return false;
+        },
+        request() { return Promise.reject(new Error('Network access is disabled in AI星月 Tavo sandbox')); },
+      };
+      Object.defineProperty(window, 'TavoJS', { value: api, configurable: false, writable: false });
+      window.tavo = api;
+      window.Tavo = api;
+      try { window.alert = message => api.notify(message); } catch (e) {}
+    })();
   `;
 }
 
@@ -437,8 +578,11 @@ function buildSandboxSrcdoc(raw, options = {}) {
   `;
   const bridge = allowScripts ? `<script>${buildTavoBridgeScript()}<\/script>` : '';
   const resize = allowScripts ? `<script>${resizeScript}<\/script>` : '';
+  const rawStore = /id=["']raw-data-store["']/i.test(sanitized.body)
+    ? ''
+    : `<textarea id="raw-data-store" hidden aria-hidden="true">${escapeHtml(sanitized.body)}</textarea>`;
   const compatBody = `<div id="chat" class="chat chat-messages"><div class="mes message assistant" data-role="assistant"><div id="message-content" class="mes_text mes-text message-content markdown-body tavo-content">${sanitized.body}</div></div></div>`;
-  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${escapeAttr(csp)}"><style>${baseStyle}</style>${bridge}${sanitized.head}</head><body${sanitized.bodyAttrs}>${compatBody}${resize}</body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${escapeAttr(csp)}"><style>${baseStyle}</style>${bridge}${sanitized.head}</head><body${sanitized.bodyAttrs}>${rawStore}${compatBody}${resize}</body></html>`;
 }
 
 function renderAdvancedSourcePreview(code) {
