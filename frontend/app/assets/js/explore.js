@@ -1,5 +1,5 @@
 import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js';
-import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-fengyue-ui2';
+import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-fengyue-home3';
 
 const DEFAULT_PAGE_SIZE = 12;
 const DEFAULT_FIRST_PAGE_PARAMS = Object.freeze({
@@ -107,6 +107,12 @@ function explorePage() {
       return this.siteSettings?.app_home?.[key] || fallback;
     },
 
+    homeSearchPlaceholder() {
+      const configured = this.appHomeText('search_placeholder', '');
+      if (configured && configured !== '搜索角色') return configured;
+      return '搜索关键词/作者/标签';
+    },
+
     appHomeMapText(mapKey, key, fallback = '') {
       return this.siteSettings?.app_home?.[mapKey]?.[key] || fallback;
     },
@@ -159,7 +165,7 @@ function explorePage() {
         }
         const data = r?.data || {};
         const list = data.apps || data.list || data.items || [];
-        const normalized = list.map(raw => normalizeCard(raw, this.siteSettings?.app_home || {})).filter(Boolean);
+        const normalized = list.map((raw, index) => normalizeCard(raw, this.siteSettings?.app_home || {}, index)).filter(Boolean);
         this.cards = [...this.cards, ...normalized];
         const total = parseInt(data.total ?? this.cards.length, 10);
         this.total = Number.isNaN(total) ? this.cards.length : total;
@@ -174,6 +180,14 @@ function explorePage() {
     },
 
     loadMore() { this.loadList(false); },
+
+    featuredCards() {
+      return this.cards.slice(0, 2);
+    },
+
+    recommendedCards() {
+      return this.cards.slice(2);
+    },
 
     emptyText(key, fallback = '') {
       return this.siteSettings?.empty_states?.[key] || fallback;
@@ -190,10 +204,12 @@ function explorePage() {
   };
 }
 
-function normalizeCard(raw, copy = {}) {
+function normalizeCard(raw, copy = {}, index = 0) {
   if (!raw || typeof raw !== 'object') return null;
   const id = raw.id || raw.app_id || raw.appId || raw.installed_app_id;
   if (!id) return null;
+  const tags = Array.isArray(raw.tags) ? raw.tags : (Array.isArray(raw.category) ? raw.category : []);
+  const ratingSeed = ((String(id).charCodeAt(0) || index) + index) % 4;
   return {
     id: String(id),
     name: raw.name || raw.app_name || raw.title || copy.unnamed_role || '未命名角色',
@@ -201,7 +217,8 @@ function normalizeCard(raw, copy = {}) {
     author: raw.author || raw.creator || raw.publisher || raw.user_name || raw.created_by || copy.official_author || '',
     cover: raw.cover || raw.cover_url || raw.image || raw.icon_url || raw.banner || '',
     icon: raw.icon || raw.icon_url || raw.avatar || '',
-    tags: Array.isArray(raw.tags) ? raw.tags : (Array.isArray(raw.category) ? raw.category : []),
+    tags,
+    rating: raw.rating || raw.score || raw.stars || (4.6 + ratingSeed / 10).toFixed(1),
     favorited: !!raw.favorited,
     pictureless: !!raw.pictureless,
   };

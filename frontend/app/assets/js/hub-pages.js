@@ -1,5 +1,5 @@
 import { api, requireAuth, getCachedUser, setCachedUser, clearAuth, ApiError } from '/app/assets/js/app-core.js';
-import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-fengyue-ui2';
+import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-fengyue-home3';
 
 async function loadUser(ctx) {
   if (!requireAuth()) return false;

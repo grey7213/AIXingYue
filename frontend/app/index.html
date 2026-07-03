@@ -10,9 +10,9 @@
   <link rel="preload" as="script" href="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1">
   <link rel="modulepreload" href="/assets/js/api.js">
   <link rel="modulepreload" href="/app/assets/js/app-core.js">
-  <link rel="modulepreload" href="/app/assets/js/layout.js?v=20260703-fengyue-ui2">
-  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260703-fengyue-ui2">
-  <script type="module" src="/app/assets/js/explore.js?v=20260703-fengyue-ui2"></script>
+  <link rel="modulepreload" href="/app/assets/js/layout.js?v=20260703-fengyue-home3">
+  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260703-fengyue-home3">
+  <script type="module" src="/app/assets/js/explore.js?v=20260703-fengyue-home3"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
@@ -24,13 +24,26 @@
     <main class="app-main">
       <header class="app-topbar">
         <h1 x-text="appHomeText('topbar_title', '首页')">首页</h1>
-        <div class="grow"></div>
-        <div class="relative">
-          <input type="text" x-model="searchKeyword" @keydown.enter="loadList(true)" :placeholder="appHomeText('search_placeholder', '搜索角色')"
-                 class="xy-input pl-9 py-1.5 text-sm w-48 sm:w-72">
-          <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-violet-300/70" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M11 17a6 6 0 100-12 6 6 0 000 12z"/></svg>
-        </div>
       </header>
+
+      <div class="home-search-row">
+        <label class="home-search-box" :aria-label="homeSearchPlaceholder()">
+          <svg class="home-search-box__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M11 17a6 6 0 100-12 6 6 0 000 12z"/></svg>
+          <input type="text" x-model="searchKeyword" @keydown.enter="loadList(true)" :placeholder="homeSearchPlaceholder()">
+        </label>
+        <button class="home-icon-btn home-search-action" type="button" @click="loadList(true)" :title="appHomeText('search_button_title', '搜索')">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M11 17a6 6 0 100-12 6 6 0 000 12z"/></svg>
+        </button>
+        <button class="home-icon-btn" type="button" @click="togglePictureless" :class="{ 'is-active': pictureless }" :title="pictureless ? appHomeText('pictureless_on', '无图模式已开') : appHomeText('pictureless_off', '无图模式')">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3l18 18M10.58 10.58A2 2 0 0012 14a2 2 0 001.42-.58M9.88 4.24A10.85 10.85 0 0112 4c5 0 9 4 10 8a11.79 11.79 0 01-3.1 4.82M6.61 6.61A11.79 11.79 0 002 12c1 4 5 8 10 8 1.23 0 2.4-.24 3.47-.68"/></svg>
+        </button>
+        <button class="home-icon-btn" type="button" data-shell-action="theme" :title="appHomeText('theme_button_title', '夜间模式')">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12.79A9 9 0 1111.21 3a7 7 0 009.79 9.79z"/></svg>
+        </button>
+        <a class="home-icon-btn" href="/app/info.html" :title="appHomeText('advanced_filter_title', '高级筛选')">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M7 12h10M10 18h4"/></svg>
+        </a>
+      </div>
 
       <div class="toolbar-line">
         <div class="segmented">
@@ -43,7 +56,6 @@
             <button :class="{ 'is-active': activeSort === sort.key }" @click="setSort(sort.key)" x-text="sort.label"></button>
           </template>
         </div>
-        <button class="toggle-pill" @click="togglePictureless"><span x-text="pictureless ? appHomeText('pictureless_on', '✦ 无图模式已开') : appHomeText('pictureless_off', '无图模式')"></span></button>
       </div>
 
       <div class="chip-row">
@@ -58,8 +70,37 @@
         <p class="text-sm" x-text="emptyText('explore_no_results', '没有找到匹配的角色')">没有找到匹配的角色</p>
       </div>
 
-      <div class="char-grid">
-        <template x-for="card in cards" :key="card.id">
+      <section class="home-section" x-show="featuredCards().length > 0">
+        <div class="home-section-title" x-text="appHomeText('featured_title', '🌟 官方每周推荐')">🌟 官方每周推荐</div>
+        <div class="featured-grid">
+          <template x-for="card in featuredCards()" :key="`featured-${card.id}`">
+            <a class="feature-card" :class="{ 'is-pictureless': pictureless || card.pictureless }" :href="`/app/character.html?id=${encodeURIComponent(card.id)}`">
+              <div class="feature-card__cover">
+                <img class="feature-card__img" :src="card.cover || card.icon || '/assets/img/apk/avatar.webp'" :alt="card.name" loading="lazy" referrerpolicy="no-referrer" onerror="this.src='/assets/img/apk/avatar.webp'">
+                <span class="feature-card__badge" x-text="appHomeText('featured_badge', '▶ 官方推荐')">▶ 官方推荐</span>
+                <p class="feature-card__summary" x-text="card.description || card.summary || appHomeText('card_summary_fallback', '点击开始对话')"></p>
+              </div>
+              <button class="char-card__fav feature-card__fav" :class="{ 'is-active': card.favorited }" @click="toggleFavorite(card, $event)" :aria-label="appHomeText('favorite_label', '收藏')">♥</button>
+              <div class="feature-card__body">
+                <h2 class="feature-card__title" x-text="card.name"></h2>
+                <p class="feature-card__desc" x-text="card.description || card.summary || appHomeText('card_summary_fallback', '点击开始对话')"></p>
+                <div class="feature-card__meta">
+                  <span x-text="card.author || appHomeText('official_author', '官方角色')"></span>
+                  <span class="feature-card__rating">★ <span x-text="card.rating"></span></span>
+                </div>
+                <div class="feature-card__tags">
+                  <template x-for="t in (card.tags || []).slice(0, 4)" :key="t"><span x-text="t"></span></template>
+                </div>
+              </div>
+            </a>
+          </template>
+        </div>
+      </section>
+
+      <section class="home-section" x-show="recommendedCards().length > 0">
+        <div class="home-section-title" x-text="appHomeText('recommended_title', '💖 为你推荐')">💖 为你推荐</div>
+        <div class="char-grid home-recommend-grid">
+        <template x-for="card in recommendedCards()" :key="card.id">
           <a class="char-card" :class="{ 'is-pictureless': pictureless || card.pictureless }" :href="`/app/character.html?id=${encodeURIComponent(card.id)}`">
             <div class="char-card__cover">
               <img class="char-card__img" :src="card.cover || card.icon || '/assets/img/apk/avatar.webp'" :alt="card.name" loading="lazy" referrerpolicy="no-referrer" onerror="this.src='/assets/img/apk/avatar.webp'">
@@ -76,7 +117,8 @@
             </div>
           </a>
         </template>
-      </div>
+        </div>
+      </section>
 
       <div x-show="cards.length > 0" class="text-center py-8">
         <button @click="loadMore" class="xy-btn xy-btn-ghost text-sm" :disabled="loading || !hasMore">
