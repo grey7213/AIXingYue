@@ -11,7 +11,7 @@ Updated: 2026-07-03
 | FC5 | Apply clone visual system to public/dashboard/admin shared CSS | Done | Screenshots `output/playwright/fengyue-ui-home.png`, `fengyue-ui-dashboard.png`, `fengyue-ui-admin.png` |
 | FC6 | Verify representative pages online | Done | `D:\Anconda3\python.exe .\output\verify_fengyue_clone_ui_browser.py` returned `console_error_count=0`, `page_error_count=0`; verified `/`, `/app/`, login, detail, chat, create, rewards, me, group chat, dashboard, admin, and mobile `/app/` |
 | FC7 | Deploy frontend/backend-only update | Done | `D:\Anconda3\python.exe .\tools\deploy_ai_fengyue_villainy.py --skip-apk --skip-mail-install --skip-certbot`; service and Nginx active, public `/health` OK, `CONTENT_MODE=local_only`, live HTML references `20260703-fengyue-ui2` |
-| FC8 | Commit UI replacement and push GitHub | Done | Commit `3cf17d4` prepared after deployment verification; pushed to GitHub after amend |
+| FC8 | Commit UI replacement and push GitHub | Done | UI replacement commit `4b1cb09` pushed to GitHub after deployment verification |
 
 ## Notes
 
