@@ -1,6 +1,6 @@
 # AI星月 SillyTavern 能力补齐任务
 
-Updated: 2026-07-03
+Updated: 2026-07-04
 
 | ID | 任务 | 状态 | 验证 |
 |----|------|------|------|
@@ -25,6 +25,7 @@ Updated: 2026-07-03
 | ST18 | HTML 代码注入器片段兼容 | Done | 2026-07-02 修复片段开头 `<style>/<script>` 被 DOMParser 移入 head 后早于 `.mes_text` 执行的问题；iframe 内提供 `#chat/.mes/.mes_text/.message-content` 兼容目标；线上验证 `injector_ran=true`、`unclosed_fence_ran=true`、`event_only_ran=true`，安全沙箱仍无 same-origin |
 | ST19 | 开场视觉 Regex 和 TavernHelper 交互兼容 | Done | 2026-07-03 修复目标卡 `admin-rczip-9721d5969c2effd819af` 的开场可视化：开场白也执行 Prompt Template + Regex；Regex 从 `extensions` 读取完整大段替换并支持 JS `$1/$&/$<name>` 替换；iframe sandbox 增加 ST top/storage/worldbook 兼容代理。线上验证首屏 `晚上好，欢迎回来`、入口齐全、章节弹窗打开，沙箱仍无 same-origin |
 | ST20 | Tavo `.thm` 深色主题对比兜底 | Done | 2026-07-03 确认用户提供的 `.thm` 是深色主题；高级渲染 iframe 现在内置对应 SmartTheme 深色变量和深色 body/控件兜底，避免透明 iframe 叠在浅色 AI星月聊天皮肤上导致白字不可见。线上 Tavo 高级渲染、沙箱安全和目标开场视觉页验证通过 |
+| ST21 | `E:\迅雷下载\卡\卡.zip` 全量可用角色卡导入 | Done | 2026-07-04 按用户要求不做题材筛选；6692 个 PNG/JSON 候选中 6608 个有 metadata，6523 个可用角色卡导入为公开官方卡，85 个空壳与 84 个无 metadata/非 PNG 未导入；2626 张保留并提升 Regex/TavernHelper 脚本，6411 个封面上传；线上验证 `expected_found=6523`、`public_found=6523`、`empty_imported=0`、样本详情/封面/流式聊天通过，总官方卡数 8778 |
 
 ## 2026-07-03 开场视觉 Regex 和 TavernHelper 交互兼容
 
@@ -42,6 +43,38 @@ Updated: 2026-07-03
 - 修复：`frontend/app/assets/js/chat.js` 的 `buildSandboxSrcdoc()` 在 `:root` 和 `<html style>` 同时注入深色 SmartTheme 变量，包括 `--SmartThemeBodyColor`、`--SmartThemeChatTintColor`、`--SmartThemeBotMesBlurTintColor`、`--SmartThemeUserMesBlurTintColor`、`--SmartThemeBorderColor` 等；iframe body、消息容器和默认 button/input/textarea/select 也有深色可读兜底。`frontend/app/chat.html` cache-buster 更新为 `20260703-tavo-theme`。
 - 安全边界：仍只使用 `iframe srcdoc`；脚本模式保持 `sandbox="allow-scripts"` 且不加 `allow-same-origin`；CSP 继续禁止网络、子 frame、object、form 和外部脚本。
 - 验证：本地 `node --check`、`git diff --check`、`verify_tavo_advanced_render_browser.py`、`verify_tavo_sandbox_browser.py`、`verify_tavern_opening_render_browser.py` 均通过；部署后线上 health OK，`CONTENT_MODE=local_only`，`chat.html` 引用 `chat.js?v=20260703-tavo-theme` 且线上 `chat.js` 包含 `--SmartThemeChatTintColor:#222222`；线上 Tavo 高级渲染/沙箱回归和 `verify_tavern_opening_render_live.py` 通过，截图显示深色卡面白字可读。
+
+## 2026-07-04 `卡.zip` 全量角色卡导入
+
+- Source archive: `E:\迅雷下载\卡\卡.zip`; AES password `123`.
+- Import policy: no topic/theme/content filtering. Only skip files without recognizable Character Card metadata and parsed payloads that are empty shells or script/config/workflow-only.
+- Local artifacts:
+  - `output\card-zip-import-20260704\import-bundle.json`
+  - `output\card-zip-import-20260704\import-summary.json`
+  - `output\card-zip-import-20260704\covers.tar.gz`
+  - `output\run_card_zip_prepare.py`
+- Local preparation result:
+  - 6692 candidate `.png/.json` files: 6506 PNG and 186 JSON.
+  - 6608 files had recognizable Character Card metadata.
+  - 6523 files had usable role content and were included in the import bundle.
+  - 85 parsed files were empty shells or script/config/workflow-only and were not imported.
+  - 84 files had no recognizable metadata or were not valid PNG card files and were not imported.
+  - 2626 imported cards have non-empty top-level `regex_scripts`, promoted from SillyTavern `extensions.regex_scripts` / `TavernHelper_scripts`.
+  - 6421 imported cards preserve non-empty `extensions`, 5545 include world info, and 2795 include alternate greetings.
+  - 6411 compressed covers were generated.
+  - Batch marker: `role-card-cardzip-20260704`.
+- Remote import:
+  - Uploaded bundle and cover archive to `/tmp`, then removed the temporary remote files after verification.
+  - Extracted 6411 `admin-rccardzip-*.jpg` covers under `/var/www/ai-fengyue-frontend/media-cache/cover/`.
+  - Remote DB backup before import: `/opt/ai-fengyue-backend/data/ai_fengyue.sqlite3.bak-role-card-download-20260704-153953`.
+  - Import inserted 6523 cards, updated 0, skipped 0.
+  - Live official/admin card total is now 8778.
+- Verification:
+  - Remote verification returned `expected_found=6523`, `public_found=6523`, `batch_total=6523`, `regex_nonempty=2626`, `extensions_nonempty=6421`, `world_nonempty=5545`, and `empty_imported=0`.
+  - Sample role `admin-rccardzip-eb6b659b22279d9ac7b1` is readable through `/console/api/apps/{id}`, has 2 promoted regex scripts, and its cover returned HTTP 200.
+  - Temporary-user streaming chat against that sample returned 3 delta events, `message_end=true`, 27 reply characters, and points changed `5000 -> 4950`; cleanup left 0 temporary users.
+  - `ai-fengyue-backend.service` and `nginx` remained active, local health returned `OK`, public `https://patcher.villainy.top/health` returned `OK`, and `CONTENT_MODE=local_only`.
+  - Public/local `/go/api/explore/search?page=1&page_size=12&sort=latest` returned `total=8778`, 12 lightweight items, first source `admin`, first id `admin-rccardzip-154e7129ab39e0053988`.
 
 ## 2026-07-01 角色卡下载包导入
 
