@@ -1,5 +1,5 @@
 import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js';
-import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-channels-closed';
+import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260704-home-search';
 
 const DEFAULT_PAGE_SIZE = 12;
 const DEFAULT_FIRST_PAGE_PARAMS = Object.freeze({
@@ -30,8 +30,18 @@ function explorePage() {
     activeCategory: 'all',
     activeSort: 'random',
     activeRank: 'daily',
+    randomSeed: Math.floor(Math.random() * 2147483647),
     pictureless: false,
     siteSettings: null,
+    advancedOpen: false,
+    advancedForm: {
+      keyword: '',
+      category: 'all',
+      sort: 'random',
+      rank: 'daily',
+      pictureless: false,
+      pageSize: DEFAULT_PAGE_SIZE,
+    },
     categories: [
       { key: 'all', label: '全部' },
       { key: '恋爱', label: '恋爱' },
@@ -98,10 +108,48 @@ function explorePage() {
       await Promise.allSettled([settingsPromise, listPromise, accountPromise]);
     },
 
-    setCategory(k) { this.activeCategory = k; this.loadList(true); },
-    setSort(k) { this.activeSort = k; this.loadList(true); },
-    setRank(k) { this.activeRank = k; this.loadList(true); },
-    togglePictureless() { this.pictureless = !this.pictureless; this.loadList(true); },
+    setCategory(k) { this.activeCategory = k; this.syncAdvancedForm(); this.loadList(true); },
+    setSort(k) { this.activeSort = k; this.syncAdvancedForm(); this.loadList(true); },
+    setRank(k) { this.activeRank = k; this.syncAdvancedForm(); this.loadList(true); },
+    togglePictureless() { this.pictureless = !this.pictureless; this.syncAdvancedForm(); this.loadList(true); },
+
+    syncAdvancedForm() {
+      this.advancedForm = {
+        keyword: this.searchKeyword || '',
+        category: this.activeCategory || 'all',
+        sort: this.activeSort || 'random',
+        rank: this.activeRank || 'daily',
+        pictureless: !!this.pictureless,
+        pageSize: Number(this.pageSize) || DEFAULT_PAGE_SIZE,
+      };
+    },
+
+    toggleAdvancedSearch() {
+      if (!this.advancedOpen) this.syncAdvancedForm();
+      this.advancedOpen = !this.advancedOpen;
+    },
+
+    applyAdvancedSearch() {
+      this.searchKeyword = String(this.advancedForm.keyword || '').trim();
+      this.activeCategory = this.advancedForm.category || 'all';
+      this.activeSort = this.advancedForm.sort || 'random';
+      this.activeRank = this.advancedForm.rank || 'daily';
+      this.pictureless = !!this.advancedForm.pictureless;
+      this.pageSize = Number(this.advancedForm.pageSize) || DEFAULT_PAGE_SIZE;
+      this.loadList(true);
+    },
+
+    resetAdvancedSearch() {
+      this.advancedForm = {
+        keyword: '',
+        category: 'all',
+        sort: 'random',
+        rank: 'daily',
+        pictureless: false,
+        pageSize: DEFAULT_PAGE_SIZE,
+      };
+      this.applyAdvancedSearch();
+    },
 
     appHomeText(key, fallback = '') {
       return this.siteSettings?.app_home?.[key] || fallback;
@@ -133,7 +181,13 @@ function explorePage() {
     },
 
     async loadList(reset = false) {
-      if (reset) { this.page = 1; this.cards = []; this.hasMore = true; this.total = 0; }
+      if (reset) {
+        this.page = 1;
+        this.cards = [];
+        this.hasMore = true;
+        this.total = 0;
+        if (this.activeSort === 'random') this.randomSeed = Math.floor(Math.random() * 2147483647);
+      }
       if (this.loading || !this.hasMore) return;
       this.loading = true;
       try {
@@ -143,6 +197,7 @@ function explorePage() {
           sort: this.activeSort,
           rank: this.activeRank,
         };
+        if (this.activeSort === 'random') params.seed = this.randomSeed;
         if (this.activeCategory !== 'all') params.tag = this.activeCategory;
         if (this.searchKeyword) params.q = this.searchKeyword;
         if (this.pictureless) params.pictureless = 'true';
@@ -153,7 +208,8 @@ function explorePage() {
           && params.rank === DEFAULT_FIRST_PAGE_PARAMS.rank
           && !params.tag
           && !params.q
-          && !params.pictureless;
+          && !params.pictureless
+          && !params.seed;
         let r;
         if (canUsePrefetch) {
           const prefetched = await defaultFirstPagePrefetch;
@@ -165,11 +221,15 @@ function explorePage() {
         }
         const data = r?.data || {};
         const list = data.apps || data.list || data.items || [];
-        const normalized = list.map((raw, index) => normalizeCard(raw, this.siteSettings?.app_home || {}, index)).filter(Boolean);
+        const seen = new Set(this.cards.map(card => card.id));
+        const normalized = list
+          .map((raw, index) => normalizeCard(raw, this.siteSettings?.app_home || {}, index))
+          .filter(card => card && !seen.has(card.id));
         this.cards = [...this.cards, ...normalized];
         const total = parseInt(data.total ?? this.cards.length, 10);
         this.total = Number.isNaN(total) ? this.cards.length : total;
-        this.hasMore = this.cards.length < this.total && normalized.length > 0;
+        const receivedCount = Array.isArray(list) ? list.length : 0;
+        this.hasMore = this.cards.length < this.total && receivedCount > 0;
         this.page += 1;
       } catch (err) {
         // 上游不可达时静默

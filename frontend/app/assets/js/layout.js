@@ -15,7 +15,7 @@ const MOBILE_ITEMS = [
   { key: 'home', label: '首页', href: '/app/', icon: NAV_ITEMS[0].icon },
   { key: 'group', label: '群聊', href: '/app/group-chat.html', icon: NAV_ITEMS[3].icon },
   { key: 'workshop', label: '创作', href: '/app/workshop.html', icon: NAV_ITEMS[1].icon },
-  { key: 'favorites', label: '收藏', href: '/app/favorites.html', icon: NAV_ITEMS[5].icon },
+  { key: 'histories', label: '历史对话', href: '/app/histories.html', icon: NAV_ITEMS[2].icon },
   { key: 'me', label: '我的', href: '/app/me.html', icon: 'M16 7a4 4 0 11-8 0 4 4 0 018 0zM4 21a8 8 0 0116 0' },
 ];
 

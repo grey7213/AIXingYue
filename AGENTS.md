@@ -408,3 +408,8 @@
   Cause: 首页和 App 壳会从 `/console/api/public/site-settings` 拉取后台运营配置，旧 `site_settings` 会覆盖静态 HTML 默认文案。
   Fix: `tools/ai_fengyue_local_server.py` 用 `APK_DOWNLOAD_ENABLED` 和 `PAYMENT_CHANNEL_ENABLED` 运行开关生成公开安全视图；关闭状态强制 Web App 入口、充值维护文案、空套餐和空订阅，Nginx `/download/` 返回 404。
   Verify: `verify_channels_closed_browser.py` 返回首页无 APK 链接/无在线充值文案，Rewards/Me/Dashboard 为维护态；公网 `/download/ai-xingyue-latest.apk` 返回 404，`deposit-meta` 返回 `mode=closed`。
+
+- Symptom: `/app/` 首页默认随机排序时，点击“加载更多”可能追加重复角色、看起来没有加载新内容，或过早显示到底。
+  Cause: SQLite `order by random()` 每次请求都会重新洗牌，分页 `offset` 不能稳定对应 page 1/page 2。
+  Fix: 前端对 `sort=random` 生成同一轮搜索的 `seed` 并传给 `/go/api/explore/search`；后端用 `rowid` 和 seed 生成稳定伪随机排序，前端追加时按角色 id 去重。
+  Verify: 首页浏览器验证中 page 1 后点击“加载更多”卡片数量增加且 id 不重复，console/page error 为 0。

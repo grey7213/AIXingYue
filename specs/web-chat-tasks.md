@@ -27,6 +27,7 @@
 | WC23 | Tavern 开场视觉页渲染和交互修复 | Done | 2026-07-03 目标卡 `admin-rczip-9721d5969c2effd819af` 新会话首条 assistant 先执行 Prompt Template 再执行 Regex，支持从 `extensions.regex_scripts` 读取完整大段替换；前端 sandbox 提供 ST top/storage 兼容代理。线上 Playwright 验证显示 `晚上好，欢迎回来`、5 个入口、章节弹窗打开，console/page error 为 0 |
 | WC24 | Tavo `.thm` 深色主题与文字对比修复 | Done | 2026-07-03 解析 `Tavo_主题效果_14G5y(1).thm` 后确认其为深色主题；`chat.js` 的 sandbox `srcdoc` 注入对应 SmartTheme 深色变量、深色 iframe 背景和默认控件样式，`chat.html` cache-buster 更新为 `20260703-tavo-theme`。本地/线上 Tavo 高级渲染、沙箱安全和目标开场视觉页验证通过 |
 | WC25 | 关闭 APK 下载和充值兑换渠道，隐藏聊天源码泄露 | Done | 2026-07-03 默认 `PAYMENT_CHANNEL_ENABLED=0`、`APK_DOWNLOAD_ENABLED=0`；`/download/ai-xingyue-latest.apk` 返回 404；`deposit-meta` 返回 `mode=closed/payment_available=false/packages=[]`；兑换码和 CTF 充值接口返回包体 `code=403`；聊天前端/后端会剥离开头 YAML metadata fence，高级渲染不再显示“源码片段”。浏览器验证 `verify_channels_closed_browser.py` 通过，Tavo/开场页回归通过 |
+| WC26 | 首页底栏历史会话、高级搜索和加载更多修复 | Done | 2026-07-04 移动底栏第四项由“收藏”改为“历史对话”；首页筛选图标改为高级搜索面板，支持关键词、分类、榜单、排序、每页数量和无图模式；`sort=random` 增加稳定 `seed` 分页并去重，加载更多按钮增加移动端底部留白。线上浏览器验证 12 张追加到 24 张、无重复、无 console/page error；线上 API page1/page2 各 12 条、0 重叠、同 seed 首屏稳定。 |
 
 ## 本轮完成记录
 

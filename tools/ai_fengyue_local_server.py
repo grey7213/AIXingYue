@@ -395,7 +395,7 @@ def site_settings_defaults() -> dict:
                 "home": "首页",
                 "group": "群聊",
                 "workshop": "创作",
-                "favorites": "收藏",
+                "histories": "历史对话",
                 "me": "我的",
             },
             "shell_profile_title": "进入我的",
@@ -422,6 +422,15 @@ def site_settings_defaults() -> dict:
             "summary_fallback": "点击开始对话",
             "load_more_text": "加载更多",
             "end_text": "已经到底啦 ✦",
+            "advanced_filter_title": "高级搜索",
+            "advanced_keyword_label": "关键词",
+            "advanced_category_label": "分类",
+            "advanced_rank_label": "榜单",
+            "advanced_sort_label": "排序",
+            "advanced_page_size_label": "每页数量",
+            "advanced_pictureless_label": "无图模式",
+            "advanced_apply_text": "应用搜索",
+            "advanced_reset_text": "重置",
             "redirect_text": "正在跳转到",
             "redirect_link_text": "首页",
             "category_labels": {
@@ -1138,6 +1147,15 @@ def sanitize_site_settings(data: dict | None) -> dict:
         "summary_fallback": 120,
         "load_more_text": 40,
         "end_text": 40,
+        "advanced_filter_title": 40,
+        "advanced_keyword_label": 30,
+        "advanced_category_label": 30,
+        "advanced_rank_label": 30,
+        "advanced_sort_label": 30,
+        "advanced_page_size_label": 30,
+        "advanced_pictureless_label": 40,
+        "advanced_apply_text": 40,
+        "advanced_reset_text": 40,
         "redirect_text": 60,
         "redirect_link_text": 40,
     }.items():
@@ -3814,6 +3832,7 @@ class Store:
 
     def list_local_apps(self, *, source: str | None = None, owner_user_id: str | None = None,
                         search: str = "", tag: str = "", sort: str = "default",
+                        random_seed: int | None = None,
                         page: int = 1, page_size: int = 30,
                         only_public: bool = True, only_published: bool = True,
                         lightweight: bool = False) -> tuple[list, int]:
@@ -3838,17 +3857,22 @@ class Store:
         where_sql = " where " + " and ".join(where) if where else ""
         offset = (max(1, page) - 1) * page_size
         sort_key = (sort or "default").strip().lower()
-        order_by = {
-            "popular": "players_count desc, like_count desc, sort_weight desc, updated_at desc",
-            "latest": "created_at desc, updated_at desc",
-            "updated": "updated_at desc, sort_weight desc",
-            "random": "abs(random())",
-            "daily": "players_count desc, updated_at desc",
-            "weekly": "players_count desc, like_count desc, updated_at desc",
-            "monthly": "sort_weight desc, players_count desc, updated_at desc",
-            "overall": "sort_weight desc, players_count desc, like_count desc, updated_at desc",
-            "default": "sort_weight desc, updated_at desc",
-        }.get(sort_key, "sort_weight desc, updated_at desc")
+        order_params: list = []
+        if sort_key == "random" and random_seed is not None:
+            order_by = "abs(((rowid * (? + 1) * 1103515245) + 12345) % 2147483647), updated_at desc"
+            order_params.append(int(random_seed) & 0x7FFFFFFF)
+        else:
+            order_by = {
+                "popular": "players_count desc, like_count desc, sort_weight desc, updated_at desc",
+                "latest": "created_at desc, updated_at desc",
+                "updated": "updated_at desc, sort_weight desc",
+                "random": "abs(random())",
+                "daily": "players_count desc, updated_at desc",
+                "weekly": "players_count desc, like_count desc, updated_at desc",
+                "monthly": "sort_weight desc, players_count desc, updated_at desc",
+                "overall": "sort_weight desc, players_count desc, like_count desc, updated_at desc",
+                "default": "sort_weight desc, updated_at desc",
+            }.get(sort_key, "sort_weight desc, updated_at desc")
         select_cols = "*"
         if lightweight:
             select_cols = (
@@ -3859,7 +3883,7 @@ class Store:
             total = self.conn.execute(f"select count(*) from local_apps{where_sql}", params).fetchone()[0]
             rows = self.conn.execute(
                 f"select {select_cols} from local_apps{where_sql} order by {order_by} limit ? offset ?",
-                (*params, page_size, offset),
+                (*params, *order_params, page_size, offset),
             ).fetchall()
         return [dict(r) for r in rows], int(total)
 
@@ -9737,8 +9761,9 @@ class Handler(BaseHTTPRequestHandler):
             kw = (params.get("keyword") or params.get("q") or [""])[0].strip()
             tag = (params.get("tag") or params.get("category") or [""])[0].strip()
             sort = (params.get("sort") or params.get("rank") or ["default"])[0].strip()
+            random_seed = parse_query_int(query, "seed", 0, 0, 2147483647) or None
             pictureless = (params.get("pictureless") or [""])[0].strip().lower() in ("1", "true", "yes")
-            rows, total = self.store.list_local_apps(search=kw, tag=tag, sort=sort, page=page, page_size=page_size, lightweight=True)
+            rows, total = self.store.list_local_apps(search=kw, tag=tag, sort=sort, random_seed=random_seed, page=page, page_size=page_size, lightweight=True)
             if rows:
                 cards = []
                 for r in rows:

@@ -2026,6 +2026,65 @@ select.xy-input option,
   color: #fff;
 }
 
+.advanced-search-panel {
+  margin: 8px 26px 4px;
+  padding: 14px;
+  border: 1px solid var(--fy-border);
+  border-radius: 16px;
+  background: var(--fy-panel);
+  box-shadow: var(--fy-shadow);
+}
+
+.advanced-search-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(120px, 1fr)) minmax(120px, .8fr);
+  gap: 12px;
+  align-items: end;
+}
+
+.advanced-search-field {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.advanced-search-field span,
+.advanced-search-toggle span {
+  color: var(--fy-text-soft);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.advanced-search-field .xy-input {
+  height: 40px;
+  width: 100%;
+}
+
+.advanced-search-toggle {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid var(--fy-border);
+  border-radius: 12px;
+  background: var(--fy-panel-2);
+}
+
+.advanced-search-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--fy-accent-2);
+}
+
+.advanced-search-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
 .home-section {
   padding: 4px 26px 0;
 }
@@ -2215,6 +2274,11 @@ select.xy-input option,
 
 .home-recommend-grid {
   padding: 0 0 96px;
+}
+
+.home-load-more {
+  text-align: center;
+  padding: 8px 26px 130px;
 }
 
 /* Detail / lists / hubs */
@@ -2415,6 +2479,28 @@ select.xy-input option,
     width: 40px;
     height: 40px;
   }
+  .advanced-search-panel {
+    margin: 8px 14px 4px;
+    padding: 12px;
+    border-radius: 14px;
+  }
+  .advanced-search-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+  .advanced-search-field:first-child {
+    grid-column: 1 / -1;
+  }
+  .advanced-search-toggle {
+    min-height: 38px;
+  }
+  .advanced-search-actions {
+    justify-content: stretch;
+  }
+  .advanced-search-actions .xy-btn {
+    flex: 1;
+    justify-content: center;
+  }
   .home-section {
     padding-left: 14px;
     padding-right: 14px;
@@ -2456,6 +2542,9 @@ select.xy-input option,
   }
   .home-recommend-grid {
     padding: 0 0 96px;
+  }
+  .home-load-more {
+    padding: 8px 14px calc(124px + env(safe-area-inset-bottom));
   }
   .char-card__body {
     padding: 10px 11px 0;
