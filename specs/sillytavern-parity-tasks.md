@@ -1,6 +1,6 @@
 # AI星月 SillyTavern 能力补齐任务
 
-Updated: 2026-07-04
+Updated: 2026-07-05
 
 | ID | 任务 | 状态 | 验证 |
 |----|------|------|------|
@@ -27,6 +27,14 @@ Updated: 2026-07-04
 | ST20 | Tavo `.thm` 深色主题对比兜底 | Done | 2026-07-03 确认用户提供的 `.thm` 是深色主题；高级渲染 iframe 现在内置对应 SmartTheme 深色变量和深色 body/控件兜底，避免透明 iframe 叠在浅色 AI星月聊天皮肤上导致白字不可见。线上 Tavo 高级渲染、沙箱安全和目标开场视觉页验证通过 |
 | ST21 | `E:\迅雷下载\卡\卡.zip` 全量可用角色卡导入 | Done | 2026-07-04 按用户要求不做题材筛选；6692 个 PNG/JSON 候选中 6608 个有 metadata，6523 个可用角色卡导入为公开官方卡，85 个空壳与 84 个无 metadata/非 PNG 未导入；2626 张保留并提升 Regex/TavernHelper 脚本，6411 个封面上传；线上验证 `expected_found=6523`、`public_found=6523`、`empty_imported=0`、样本详情/封面/流式聊天通过，总官方卡数 8778 |
 | ST22 | 站点级 SillyTavern Prompt Preset | Done | 2026-07-05 后台“模型配置”新增全局提示词预设编辑器，支持粘贴 SillyTavern preset JSON 并按 `prompt_order` 解析为 `system_before`、`system_after`、`post_history`；后端在所有角色请求中注入全局预设，不修改角色卡本身。用户提供的 `E:\迅雷下载\Tavo_v_3.51_15nuf(1).json` 已应用到线上，解析为 33 个真实块（40 个 enabled prompt 中 7 个为 marker），其中 System 前置 3 个、历史后 30 个；公开 `/model-presets` 不暴露预设正文或 API Key，后台面板 Playwright 验证通过 |
+| ST23 | 长期记忆当前存档绑定与后台阈值 | Done | 新增后台记忆策略：AI 回复读取记忆开关、自动摘要开关、首次摘要消息数、刷新间隔、当前存档绑定和最大读取条数；复制历史会话时复制当前存档绑定的长期记忆。线上验证 `memory in context`、自动摘要、复制会话记忆数量和后台配置均通过。 |
+
+## 2026-07-05 长期记忆当前存档绑定与后台阈值
+
+- 后台“模型配置”新增“长期记忆”策略面板，可控制 AI 回复是否读取摘要/记忆、是否自动摘要、首次摘要消息数、刷新间隔、新记忆是否绑定当前存档、是否读取同角色旧记忆以及每次最多读取条数。
+- 后端 `chat_memories` 新增 `conversation_id`，当前存档按会话 ID 绑定；记忆列表优先返回当前存档记忆，再按配置返回同角色/全局记忆。`chat_context()` 在读取开关关闭时不会注入摘要或长期记忆。
+- 自动摘要使用后台阈值，线上当前策略为首次 `10` 条消息后摘要、后续每 `8` 条新消息刷新；复制历史会话会复制消息、swipes、摘要、变量和当前存档绑定的长期记忆。
+- 验证：本地 `D:\Anconda3\python.exe .\output\verify_image_memory_local.py` 通过；线上 `verify_memory_remote.py` 返回记忆绑定、记忆进入上下文、自动摘要创建、复制记忆数量和策略字段均正确；浏览器后台“模型配置”面板无 console/page error，截图 `output/playwright/admin-image-memory-20260705.png`。
 
 ## 2026-07-03 开场视觉 Regex 和 TavernHelper 交互兼容
 

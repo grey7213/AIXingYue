@@ -9,7 +9,7 @@
   <link rel="apple-touch-icon" sizes="180x180" href="/assets/img/apple-touch-icon.png">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="/assets/css/custom.css?v=20260703-fengyue-ui2">
-  <script type="module" src="/assets/js/admin-app.js?v=20260705-global-prompt"></script>
+  <script type="module" src="/assets/js/admin-app.js?v=20260705-image-memory"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
@@ -733,6 +733,109 @@
                     </template>
                   </div>
                 </div>
+                <div class="rounded-xl border border-sky-300/15 bg-sky-400/5 p-4 space-y-4">
+                  <div class="flex items-start justify-between gap-3 flex-wrap">
+                    <div>
+                      <h3 class="font-semibold text-white">图片模型</h3>
+                      <p class="text-xs text-slate-400 mt-1">用于 `/app/image-chat.html` 的图片生成。Key 只保存在服务端，不会下发给用户。</p>
+                    </div>
+                    <label class="flex items-center gap-2 text-sm text-slate-200">
+                      <input type="checkbox" x-model="llmForm.image_model.enabled" class="accent-sky-500">
+                      启用图片模型
+                    </label>
+                  </div>
+                  <div class="grid md:grid-cols-2 gap-3">
+                    <div>
+                      <label class="xy-label">显示名称</label>
+                      <input class="xy-input" x-model="llmForm.image_model.name" placeholder="CelestiAI 图片模型">
+                    </div>
+                    <div>
+                      <label class="xy-label">模型名</label>
+                      <input class="xy-input" x-model="llmForm.image_model.model" placeholder="gpt-image-1">
+                    </div>
+                    <div>
+                      <label class="xy-label">Base URL</label>
+                      <input class="xy-input" x-model="llmForm.image_model.base_url" placeholder="https://api.celestiai.xyz/v1">
+                    </div>
+                    <div>
+                      <label class="xy-label">端点路径</label>
+                      <input class="xy-input" x-model="llmForm.image_model.endpoint_path" placeholder="/images/generations">
+                    </div>
+                    <div>
+                      <label class="xy-label">尺寸</label>
+                      <input class="xy-input" x-model="llmForm.image_model.size" placeholder="1024x1024">
+                    </div>
+                    <div>
+                      <label class="xy-label">返回格式</label>
+                      <select class="xy-input" x-model="llmForm.image_model.response_format">
+                        <option value="">自动</option>
+                        <option value="url">图片 URL</option>
+                        <option value="b64_json">Base64 图片</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label class="xy-label">图片数量</label>
+                      <input type="number" min="1" max="4" class="xy-input" x-model.number="llmForm.image_model.n">
+                    </div>
+                    <div>
+                      <label class="xy-label">超时秒数</label>
+                      <input type="number" min="10" max="300" class="xy-input" x-model.number="llmForm.image_model.timeout">
+                    </div>
+                    <div>
+                      <label class="xy-label">质量参数</label>
+                      <input class="xy-input" x-model="llmForm.image_model.quality" placeholder="留空为自动">
+                    </div>
+                    <div>
+                      <label class="xy-label">API Key</label>
+                      <input type="password" class="xy-input" x-model="llmForm.image_model.api_key" autocomplete="new-password" :placeholder="llmForm.image_model.has_api_key ? ('留空保留 ' + (llmForm.image_model.api_key_preview || '已配置密钥')) : '填写图片模型 API Key'">
+                    </div>
+                  </div>
+                  <label class="flex items-center gap-2 text-xs text-slate-400">
+                    <input type="checkbox" x-model="llmForm.image_model.clear_api_key" class="accent-red-500">
+                    清空图片模型 API Key
+                  </label>
+                </div>
+                <div class="rounded-xl border border-fuchsia-300/15 bg-fuchsia-400/5 p-4 space-y-4">
+                  <div class="flex items-start justify-between gap-3 flex-wrap">
+                    <div>
+                      <h3 class="font-semibold text-white">长期记忆</h3>
+                      <p class="text-xs text-slate-400 mt-1">控制 AI 回复时是否读取当前存档摘要和长期记忆，以及自动摘要触发频率。</p>
+                    </div>
+                    <label class="flex items-center gap-2 text-sm text-slate-200">
+                      <input type="checkbox" x-model="llmForm.memory_settings.enabled" class="accent-fuchsia-500">
+                      AI 回复读取记忆
+                    </label>
+                  </div>
+                  <div class="grid md:grid-cols-2 gap-3">
+                    <label class="flex items-center gap-2 text-sm text-slate-200">
+                      <input type="checkbox" x-model="llmForm.memory_settings.auto_summary_enabled" class="accent-emerald-500">
+                      自动摘要
+                    </label>
+                    <label class="flex items-center gap-2 text-sm text-slate-200">
+                      <input type="checkbox" x-model="llmForm.memory_settings.bind_memories_to_conversation" class="accent-emerald-500">
+                      新记忆绑定当前存档
+                    </label>
+                    <label class="flex items-center gap-2 text-sm text-slate-200">
+                      <input type="checkbox" x-model="llmForm.memory_settings.include_role_memories" class="accent-emerald-500">
+                      读取同角色旧记忆
+                    </label>
+                  </div>
+                  <div class="grid md:grid-cols-3 gap-3">
+                    <div>
+                      <label class="xy-label">几条消息后首次摘要</label>
+                      <input type="number" min="2" max="200" class="xy-input" x-model.number="llmForm.memory_settings.auto_summary_message_threshold">
+                    </div>
+                    <div>
+                      <label class="xy-label">新增几条后刷新摘要</label>
+                      <input type="number" min="1" max="200" class="xy-input" x-model.number="llmForm.memory_settings.auto_summary_delta_messages">
+                    </div>
+                    <div>
+                      <label class="xy-label">每次最多读取记忆</label>
+                      <input type="number" min="0" max="20" class="xy-input" x-model.number="llmForm.memory_settings.max_memories">
+                    </div>
+                  </div>
+                  <div class="text-xs text-slate-500">“当前存档”对应当前 conversation_id；复制历史对话时，会一并复制该存档绑定的摘要、变量和长期记忆。</div>
+                </div>
                 <div class="rounded-lg border border-cyan-300/15 bg-cyan-400/5 p-3 text-xs text-slate-400 leading-relaxed">
                   用户创建角色时只能选择已启用的模型预设。API Key 只保存在服务端，不会下发给用户浏览器。
                 </div>
@@ -773,6 +876,14 @@
                   <div>
                     <div class="text-xs text-slate-400 mb-1">预设数量</div>
                     <span class="text-slate-200" x-text="(llmSettings?.presets || []).length"></span>
+                  </div>
+                  <div>
+                    <div class="text-xs text-slate-400 mb-1">图片模型</div>
+                    <span :class="llmSettings?.image_model?.enabled ? 'text-sky-300' : 'text-slate-500'" x-text="llmSettings?.image_model?.enabled ? ((llmSettings?.image_model?.model || '已启用') + (llmSettings?.image_model?.has_api_key ? ' · 已配置 Key' : ' · 未配置 Key')) : '未启用'"></span>
+                  </div>
+                  <div>
+                    <div class="text-xs text-slate-400 mb-1">长期记忆</div>
+                    <span :class="llmSettings?.memory_settings?.enabled ? 'text-fuchsia-300' : 'text-slate-500'" x-text="llmSettings?.memory_settings?.enabled ? ('读取开启 · ' + (llmSettings?.memory_settings?.auto_summary_message_threshold || 10) + ' 条后摘要') : '读取关闭'"></span>
                   </div>
                 </div>
               </aside>

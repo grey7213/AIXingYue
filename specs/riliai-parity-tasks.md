@@ -11,6 +11,14 @@
 | RP7 | 部署到 `patcher.villainy.top` | Done | `D:\Anconda3\python.exe .\tools\deploy_ai_fengyue_villainy.py --skip-apk --skip-mail-install --skip-certbot` 成功；`ai-fengyue-backend.service` 和 `nginx` active；`/health` OK；`CONTENT_MODE=local_only` |
 | RP8 | 线上 API 和浏览器截图验收 | Done | API 摘要：本地库 `apps.total=451`、探索 3 条、Pictureless 3 条；浏览器截图见 `output\riliai-parity-final-explore-desktop.png`、`output\riliai-parity-final-home-mobile.png`、`output\riliai-parity-final-chat-desktop.png` |
 | RP9 | 优化 `/app/` 首页首屏加载 | Done | 2026-06-29 列表接口改为轻量卡片、首页并发加载、去掉 Tailwind CDN、Alpine 本地化、预加载默认第一页和模块依赖；线上浏览器首张卡约 `1795ms`，列表约 `10.9KB`，无 console/page error |
+| RP10 | 图片聊天接入真实图片模型 | Done | `/console/api/web/image-chat` 从占位日志改为可调用后台图片模型配置；后台可维护 Base URL、模型名、API Key、尺寸、返回格式和超时，返回 URL/base64 图片并展示在 `/app/image-chat.html`。线上真实图片生成返回 `mode=image_model`、`model=gpt-image-2`、有图片 URL 且文件存在。 |
+
+## 2026-07-05 图片聊天真实图片模型
+
+- 后台“模型配置”新增图片模型配置，支持启用状态、显示名称、Base URL、端点路径、模型名、尺寸、返回格式、图片数量、超时、质量参数和 API Key；管理员读取时只返回 Key 状态/预览，普通用户接口不暴露图片模型和 Key。
+- `/console/api/web/image-chat` 已改为在图片模型配置完整时调用 OpenAI-compatible `/images/generations`；支持 provider 返回 `url`、`b64_json`、`base64`、`data_url`，base64 会保存到 `/media-cache/generated/` 后返回可访问 URL。
+- 线上 CelestiAI 模型探测后选择 `gpt-image-2` 作为默认图片模型；`gpt-image-1` 对当前 token 无访问权限，因此没有作为默认值。
+- 验证：本地 `verify_image_memory_local.py` 通过图片保存和路径调用断言；线上 `verify_image_memory_remote.py` 确认后台图片模型已启用、Key 脱敏且公开模型列表无 Key；`verify_real_image_chat_remote.py` 返回 `status=200`、`ok=true`、`mode=image_model`、`model=gpt-image-2`、`has_image_url=true`、`image_file_exists=true`；浏览器 `verify_image_memory_browser.py` 确认图片聊天页和后台面板无 console/page error，截图 `output/playwright/image-chat-model-20260705.png`。
 
 ## 2026-06-18 验收记录
 
@@ -32,5 +40,4 @@
 
 ## 剩余说明
 
-- Image Chat 当前是 AI星月本地占位回复和日志记录，尚未接入真实图片模型。
 - 角色库内容来自现有 AI星月本地数据库，部分卡片文案带成人向内容；本次没有清洗或替换既有角色数据。

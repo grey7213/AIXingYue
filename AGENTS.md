@@ -428,3 +428,8 @@
   Cause: `.list-row` 是三列 grid，但历史页把头像和文字一起包进第一个 `<a>` 子元素，链接默认只占第一列头像宽度，文字被挤压截断。
   Fix: 给历史主链接加 `.history-row__main`，桌面跨 `grid-column: 1 / 3`，移动端跨整行；操作按钮保留在独立 actions 区。
   Verify: 2026-07-05 Playwright 移动端验证历史标题为 `桐生莉音中文摘要验证`、预览为 `历史页应该显示这条预览`，点赞/收藏/继续/复制/删除按钮均可见且 console/page error 为 0。
+
+- Symptom: 部署后 AI星月后端启动失败，日志出现 `no such column: conversation_id`，通常发生在给旧 SQLite 表新增列并同时新增索引时。
+  Cause: `create table if not exists` 不会给既有表补新列；如果初始化 `executescript` 里的 `create index` 先引用新列，迁移函数还没来得及 `alter table` 就会失败。
+  Fix: 新列相关索引只能放到显式迁移函数里，在确认 `alter table ... add column` 完成后再创建；初始化脚本只保留老库一定存在的列索引。
+  Verify: 2026-07-05 移除初始脚本中的 `chat_memories(conversation_id)` 索引，改由 `ensure_chat_memory_columns()` 迁移后创建；重新部署后 `ai-fengyue-backend.service` active，公网 `/health` OK。

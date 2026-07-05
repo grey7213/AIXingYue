@@ -8,7 +8,7 @@
   <link rel="icon" href="/favicon.ico">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="/app/assets/css/app.css?v=20260703-fengyue-home3">
-  <script type="module" src="/app/assets/js/hub-pages.js?v=20260703-channels-closed"></script>
+  <script type="module" src="/app/assets/js/hub-pages.js?v=20260705-image-model"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
@@ -17,7 +17,7 @@
   <div class="app-shell" x-data="imageChatPage()" x-init="init()" x-cloak>
     <aside class="app-sidebar" data-app-sidebar></aside>
     <main class="app-main">
-      <header class="app-topbar"><h1 x-text="appNavText('image', '图片聊天')">图片聊天</h1><div class="grow"></div><span class="xy-badge xy-badge-purple" x-text="emptyText('image_status_badge', '星月占位模式')">星月占位模式</span></header>
+      <header class="app-topbar"><h1 x-text="appNavText('image', '图片聊天')">图片聊天</h1><div class="grow"></div><span class="xy-badge xy-badge-purple" x-text="emptyText('image_status_badge', '图片模型')">图片模型</span></header>
       <section class="app-page-pad max-w-5xl mx-auto grid lg:grid-cols-[.9fr_1.1fr] gap-5">
         <div class="form-panel space-y-4">
           <label class="drop-zone cursor-pointer">
@@ -30,10 +30,24 @@
           </button>
         </div>
         <div class="list-panel">
-          <template x-if="replies.length === 0"><div class="p-8 text-violet-200/70" x-text="emptyText('image_empty_text', '图片聊天请求会记录到操作记录里。接入图片模型后，这里会显示真实图像回复。')">图片聊天请求会记录到操作记录里。接入图片模型后，这里会显示真实图像回复。</div></template>
+          <template x-if="replies.length === 0"><div class="p-8 text-violet-200/70" x-text="emptyText('image_empty_text', '输入提示词后，这里会显示图片模型返回的图像。')">输入提示词后，这里会显示图片模型返回的图像。</div></template>
           <template x-for="r in replies" :key="r.created_at">
             <div class="list-row !grid-cols-[1fr]">
-              <div><div class="title" x-text="emptyText('image_reply_title', '图片回复')">图片回复</div><div class="meta whitespace-pre-line" x-text="r.reply"></div></div>
+              <div class="space-y-3">
+                <div class="title" x-text="emptyText('image_reply_title', '图片回复')">图片回复</div>
+                <template x-if="r.image_url">
+                  <img :src="r.image_url" alt="图片模型生成结果" class="w-full rounded-xl border border-white/10 bg-black/30 object-contain max-h-[620px]">
+                </template>
+                <template x-if="!r.image_url && r.images?.length">
+                  <div class="grid sm:grid-cols-2 gap-3">
+                    <template x-for="img in r.images" :key="img.url">
+                      <img :src="img.url" alt="图片模型生成结果" class="w-full rounded-xl border border-white/10 bg-black/30 object-contain max-h-[360px]">
+                    </template>
+                  </div>
+                </template>
+                <div class="meta whitespace-pre-line" x-text="r.reply"></div>
+                <div class="meta" x-show="r.model" x-text="'模型：' + r.model"></div>
+              </div>
             </div>
           </template>
         </div>

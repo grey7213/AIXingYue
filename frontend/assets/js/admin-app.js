@@ -617,6 +617,31 @@ function adminPanel() {
       default_model_preset_id: 'default',
       presets: [],
       global_prompt_preset: { enabled: false, name: '全局提示词预设', source: 'manual', blocks: [], stats: {} },
+      image_model: {
+        enabled: false,
+        name: 'CelestiAI 图片模型',
+        base_url: 'https://api.celestiai.xyz/v1',
+        model: 'gpt-image-1',
+        size: '1024x1024',
+        quality: '',
+        response_format: '',
+        endpoint_path: '/images/generations',
+        n: 1,
+        timeout: 90,
+        api_key: '',
+        clear_api_key: false,
+        has_api_key: false,
+        api_key_preview: '',
+      },
+      memory_settings: {
+        enabled: true,
+        auto_summary_enabled: true,
+        auto_summary_message_threshold: 10,
+        auto_summary_delta_messages: 8,
+        bind_memories_to_conversation: true,
+        include_role_memories: true,
+        max_memories: 6,
+      },
     },
     globalPromptImportRaw: '',
 
@@ -1196,6 +1221,91 @@ function adminPanel() {
       return clean;
     },
 
+    emptyImageModelSettings() {
+      return {
+        enabled: false,
+        name: 'CelestiAI 图片模型',
+        base_url: 'https://api.celestiai.xyz/v1',
+        model: 'gpt-image-1',
+        size: '1024x1024',
+        quality: '',
+        response_format: '',
+        endpoint_path: '/images/generations',
+        n: 1,
+        timeout: 90,
+        api_key: '',
+        clear_api_key: false,
+        has_api_key: false,
+        api_key_preview: '',
+      };
+    },
+
+    normalizeImageModelSettings(data = {}) {
+      const base = this.emptyImageModelSettings();
+      const value = data && typeof data === 'object' ? data : {};
+      return {
+        ...base,
+        enabled: !!value.enabled,
+        name: String(value.name || base.name).slice(0, 120),
+        base_url: String(value.base_url || base.base_url).trim(),
+        model: String(value.model || base.model).trim(),
+        size: String(value.size || base.size).trim(),
+        quality: String(value.quality || '').trim(),
+        response_format: ['', 'url', 'b64_json'].includes(String(value.response_format || '').trim()) ? String(value.response_format || '').trim() : '',
+        endpoint_path: String(value.endpoint_path || base.endpoint_path).trim() || base.endpoint_path,
+        n: Math.max(1, Math.min(4, Number(value.n || base.n))),
+        timeout: Math.max(10, Math.min(300, Number(value.timeout || base.timeout))),
+        api_key: '',
+        clear_api_key: false,
+        has_api_key: !!value.has_api_key,
+        api_key_preview: value.api_key_preview || '',
+      };
+    },
+
+    serializeImageModelSettings() {
+      const current = this.llmForm.image_model || this.emptyImageModelSettings();
+      return {
+        enabled: !!current.enabled,
+        name: String(current.name || '').trim(),
+        base_url: String(current.base_url || '').trim(),
+        model: String(current.model || '').trim(),
+        size: String(current.size || '1024x1024').trim(),
+        quality: String(current.quality || '').trim(),
+        response_format: String(current.response_format || '').trim(),
+        endpoint_path: String(current.endpoint_path || '/images/generations').trim(),
+        n: Math.max(1, Math.min(4, Number(current.n || 1))),
+        timeout: Math.max(10, Math.min(300, Number(current.timeout || 90))),
+        api_key: String(current.api_key || '').trim(),
+        clear_api_key: !!current.clear_api_key,
+      };
+    },
+
+    emptyMemorySettings() {
+      return {
+        enabled: true,
+        auto_summary_enabled: true,
+        auto_summary_message_threshold: 10,
+        auto_summary_delta_messages: 8,
+        bind_memories_to_conversation: true,
+        include_role_memories: true,
+        max_memories: 6,
+      };
+    },
+
+    normalizeMemorySettings(data = {}) {
+      const base = this.emptyMemorySettings();
+      const value = data && typeof data === 'object' ? data : {};
+      return {
+        enabled: value.enabled !== false,
+        auto_summary_enabled: value.auto_summary_enabled !== false,
+        auto_summary_message_threshold: Math.max(2, Math.min(200, Number(value.auto_summary_message_threshold || base.auto_summary_message_threshold))),
+        auto_summary_delta_messages: Math.max(1, Math.min(200, Number(value.auto_summary_delta_messages || base.auto_summary_delta_messages))),
+        bind_memories_to_conversation: value.bind_memories_to_conversation !== false,
+        include_role_memories: value.include_role_memories !== false,
+        max_memories: Math.max(0, Math.min(20, Number(value.max_memories ?? base.max_memories))),
+      };
+    },
+
     async loadLlmSettings() {
       this.loading = true;
       try {
@@ -1238,6 +1348,8 @@ function adminPanel() {
           default_model_preset_id: data.default_model_preset_id || presets[0]?.id || 'default',
           presets,
           global_prompt_preset: this.normalizeGlobalPromptPreset(data.global_prompt_preset || {}),
+          image_model: this.normalizeImageModelSettings(data.image_model || {}),
+          memory_settings: this.normalizeMemorySettings(data.memory_settings || {}),
         };
         this.globalPromptImportRaw = '';
       } catch (err) {
@@ -1256,6 +1368,8 @@ function adminPanel() {
           clear_api_key: !!this.llmForm.clear_api_key,
           default_model_preset_id: this.llmForm.default_model_preset_id,
           global_prompt_preset: this.serializeGlobalPromptPreset(),
+          image_model: this.serializeImageModelSettings(),
+          memory_settings: this.normalizeMemorySettings(this.llmForm.memory_settings || {}),
           presets: this.llmForm.presets.map(p => ({
             id: String(p.id || '').trim(),
             name: String(p.name || '').trim(),
@@ -1285,8 +1399,12 @@ function adminPanel() {
         const r = await api.admin.saveLlmSettings(payload);
         this.llmSettings = r.data || r;
         this.llmForm.global_prompt_preset = this.normalizeGlobalPromptPreset(this.llmSettings.global_prompt_preset || payload.global_prompt_preset);
+        this.llmForm.image_model = this.normalizeImageModelSettings(this.llmSettings.image_model || payload.image_model);
+        this.llmForm.memory_settings = this.normalizeMemorySettings(this.llmSettings.memory_settings || payload.memory_settings);
         this.llmForm.api_key = '';
         this.llmForm.clear_api_key = false;
+        this.llmForm.image_model.api_key = '';
+        this.llmForm.image_model.clear_api_key = false;
         this.showToast('模型配置已保存', 'success');
       } catch (err) {
         this.showToast(err.message || '保存模型配置失败', 'error');

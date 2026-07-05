@@ -1314,7 +1314,7 @@ function chatPage() {
         return;
       }
       try {
-        const r = await api.memories({ app_id: this.appId });
+        const r = await api.memories({ app_id: this.appId, conversation_id: this.conversation?.id || '' });
         this.memories = r?.data?.list || r?.list || [];
       } catch {
         this.memories = [];
@@ -1352,6 +1352,7 @@ function chatPage() {
           .filter(Boolean);
         await api.saveMemory({
           app_id: this.appId || '',
+          conversation_id: this.conversation?.id || '',
           title: this.memoryDraft.title.trim(),
           content,
           keywords,

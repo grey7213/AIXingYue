@@ -846,7 +846,7 @@
       .quick-replies { bottom: 176px; }
     }
   </style>
-  <script type="module" src="/app/assets/js/chat.js?v=20260705-fullwidth-rollback"></script>
+  <script type="module" src="/app/assets/js/chat.js?v=20260705-memory-settings"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
@@ -914,6 +914,7 @@
 
         <aside class="memory-panel" x-show="memoryOpen" @click.outside="memoryOpen=false" x-transition>
           <h3 x-text="chatText('memory_title', '记忆')"></h3>
+          <div class="memory-item__tags" x-show="conversation?.id" x-text="'当前存档：' + conversation.id.slice(0, 8) + '，新增记忆会随这个存档保存'"></div>
           <label x-text="chatText('summary_label', '会话摘要')"></label>
           <textarea rows="4" x-model="summaryDraft" :placeholder="chatText('summary_placeholder', '当前会话摘要')"></textarea>
           <div class="memory-actions">
@@ -940,7 +941,7 @@
                 <span class="memory-del" @click="deleteMemory(m)" x-text="chatText('delete_text', '删除')"></span>
               </div>
               <div class="memory-item__body" x-text="m.content"></div>
-              <div class="memory-item__tags" x-show="m.keywords?.length" x-text="m.keywords.join(' / ')"></div>
+              <div class="memory-item__tags" x-text="(m.conversation_id ? '当前存档记忆' : '角色/全局记忆') + (m.keywords?.length ? ' · ' + m.keywords.join(' / ') : '')"></div>
             </div>
           </template>
         </aside>

@@ -61,6 +61,8 @@ LLM_UPSTREAM_USER_AGENT = os.environ.get(
 AIFADIAN_URL = os.environ.get("AIFADIAN_URL", "").strip()
 SITE_SETTINGS_KEY = "site_settings"
 GLOBAL_PROMPT_PRESET_KEY = "global_prompt_preset"
+IMAGE_MODEL_SETTINGS_KEY = "image_model_settings"
+MEMORY_SETTINGS_KEY = "memory_settings"
 ACTIVE_STORE = None
 MEDIA_DIR = None  # 在 main() 里根据 --db 推导，默认 <db_dir>/media
 
@@ -116,6 +118,99 @@ def split_model_names(value: object) -> list[str]:
 def model_selection_id(preset_id: str, model: str) -> str:
     slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(model or "")).strip("-")
     return f"{preset_id}::{slug or hashlib.sha1(str(model).encode('utf-8')).hexdigest()[:10]}"
+
+
+def _bounded_float(value: object, default: float, low: float, high: float) -> float:
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        num = default
+    return max(low, min(high, num))
+
+
+def _bounded_int(value: object, default: int = 0, low: int = 0, high: int = 1000000) -> int:
+    try:
+        num = int(value)
+    except (TypeError, ValueError):
+        num = default
+    return max(low, min(high, num))
+
+
+def secret_preview(value: str) -> str:
+    text = str(value or "").strip()
+    return ("..." + text[-4:]) if text else ""
+
+
+def _dict_from_jsonish(value: object) -> dict:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+            return dict(parsed) if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def normalize_image_model_settings(value: object, *, include_secret: bool = False, existing_api_key: str = "") -> dict:
+    data = _dict_from_jsonish(value)
+    base_url = str(data.get("base_url") or data.get("baseUrl") or "").strip().rstrip("/")
+    model = str(data.get("model") or "gpt-image-1").strip() or "gpt-image-1"
+    api_key = str(data.get("api_key") or data.get("apiKey") or "").strip()
+    if not api_key and existing_api_key:
+        api_key = str(existing_api_key or "").strip()
+    response_format = str(data.get("response_format") or data.get("responseFormat") or "").strip().lower()
+    if response_format not in {"", "url", "b64_json"}:
+        response_format = ""
+    size = str(data.get("size") or "1024x1024").strip() or "1024x1024"
+    quality = str(data.get("quality") or "").strip()
+    endpoint_path = str(data.get("endpoint_path") or data.get("endpointPath") or "/images/generations").strip()
+    if not endpoint_path.startswith("/"):
+        endpoint_path = "/" + endpoint_path
+    payload = {
+        "enabled": bool(data.get("enabled", True)),
+        "name": str(data.get("name") or "CelestiAI 图片模型").strip()[:120],
+        "base_url": base_url,
+        "model": model,
+        "size": size[:40],
+        "quality": quality[:40],
+        "response_format": response_format,
+        "endpoint_path": endpoint_path[:80],
+        "n": _bounded_int(data.get("n"), 1, 1, 4),
+        "timeout": _bounded_int(data.get("timeout"), 90, 10, 300),
+    }
+    if include_secret:
+        payload["api_key"] = api_key
+    else:
+        payload["has_api_key"] = bool(api_key)
+        payload["api_key_preview"] = secret_preview(api_key)
+    return payload
+
+
+def normalize_memory_settings(value: object) -> dict:
+    data = _dict_from_jsonish(value)
+    return {
+        "enabled": bool(data.get("enabled", True)),
+        "auto_summary_enabled": bool(data.get("auto_summary_enabled", data.get("autoSummaryEnabled", True))),
+        "auto_summary_message_threshold": _bounded_int(
+            data.get("auto_summary_message_threshold", data.get("autoSummaryMessageThreshold")),
+            10,
+            2,
+            200,
+        ),
+        "auto_summary_delta_messages": _bounded_int(
+            data.get("auto_summary_delta_messages", data.get("autoSummaryDeltaMessages")),
+            8,
+            1,
+            200,
+        ),
+        "bind_memories_to_conversation": bool(
+            data.get("bind_memories_to_conversation", data.get("bindMemoriesToConversation", True))
+        ),
+        "include_role_memories": bool(data.get("include_role_memories", data.get("includeRoleMemories", True))),
+        "max_memories": _bounded_int(data.get("max_memories", data.get("maxMemories")), 6, 0, 20),
+    }
 
 
 def rebrand_text(value: str) -> str:
@@ -954,11 +1049,11 @@ def site_settings_defaults() -> dict:
             "logs_empty_title": "暂无操作记录",
             "redemptions_empty_title": "暂无兑换记录",
             "workshop_empty_title": "你还没有创建过角色，点击右上角去新建吧",
-            "image_status_badge": "星月占位模式",
+            "image_status_badge": "图片模型",
             "image_drop_text": "点击选择图片，或只输入提示词进行对话",
             "image_prompt_placeholder": "描述你想让星月分析或生成的画面...",
             "image_send_button": "发送图片对话",
-            "image_empty_text": "图片聊天请求会记录到操作记录里。接入图片模型后，这里会显示真实图像回复。",
+            "image_empty_text": "输入提示词后，这里会显示图片模型返回的图像。",
             "image_reply_title": "图片回复",
             "workshop_eyebrow": "创作者工具",
             "workshop_title": "把你的角色卡\n送进 AI星月同库。",
@@ -1878,6 +1973,7 @@ class Store:
                     id text primary key,
                     user_id text not null,
                     app_id text,
+                    conversation_id text,
                     title text,
                     content text not null,
                     keywords text,
@@ -2062,6 +2158,7 @@ class Store:
         self.ensure_user_admin_column()
         self.ensure_local_apps_columns()
         self.ensure_messages_columns()
+        self.ensure_chat_memory_columns()
         self.ensure_user_model_preset_columns()
         self.ensure_default_user()
 
@@ -2112,6 +2209,20 @@ class Store:
             for name, column_type in wanted.items():
                 if name not in columns:
                     self.conn.execute(f"alter table messages add column {name} {column_type}")
+            self.conn.commit()
+
+    def ensure_chat_memory_columns(self) -> None:
+        with self.lock:
+            columns = {
+                row["name"]
+                for row in self.conn.execute("pragma table_info(chat_memories)").fetchall()
+            }
+            if "conversation_id" not in columns:
+                self.conn.execute("alter table chat_memories add column conversation_id text")
+            self.conn.execute(
+                "create index if not exists idx_chat_memories_user_conv "
+                "on chat_memories(user_id, conversation_id, updated_at desc)"
+            )
             self.conn.commit()
 
     def ensure_user_model_preset_columns(self) -> None:
@@ -3298,6 +3409,36 @@ class Store:
                         ts,
                     ),
                 )
+            memory_rows = self.conn.execute(
+                """
+                select * from chat_memories
+                where user_id=? and conversation_id=?
+                order by created_at asc
+                """,
+                (user_id, conv_id),
+            ).fetchall()
+            for idx, memory_row in enumerate(memory_rows):
+                mem = dict(memory_row)
+                self.conn.execute(
+                    """
+                    insert into chat_memories(id,user_id,app_id,conversation_id,title,content,keywords,enabled,pinned,created_at,updated_at,last_used_at)
+                    values(?,?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        str(uuid.uuid4()),
+                        user_id,
+                        mem.get("app_id") or source.get("app_id") or "",
+                        new_id,
+                        mem.get("title") or "",
+                        mem.get("content") or "",
+                        mem.get("keywords") or "[]",
+                        int(mem.get("enabled") if mem.get("enabled") is not None else 1),
+                        int(mem.get("pinned") if mem.get("pinned") is not None else 0),
+                        ts + len(msg_rows) + idx + 1,
+                        ts,
+                        None,
+                    ),
+                )
             var_rows = self.conn.execute(
                 """
                 select name,value_json from template_variables
@@ -3331,23 +3472,53 @@ class Store:
             d["keywords"] = []
         d["enabled"] = bool(d.get("enabled", 1))
         d["pinned"] = bool(d.get("pinned", 0))
+        d["conversation_id"] = str(d.get("conversation_id") or "")
         return d
 
-    def list_memories(self, user_id: str, app_id: str = "", *, include_global: bool = True, limit: int = 100) -> list[dict]:
+    def list_memories(self, user_id: str, app_id: str = "", *, conversation_id: str = "", include_global: bool = True, limit: int = 100) -> list[dict]:
         with self.lock:
             clean_app = str(app_id or "").strip()
-            if clean_app and include_global:
+            clean_conv = str(conversation_id or "").strip()
+            policy = self.memory_settings()
+            include_role = include_global and bool(policy.get("include_role_memories", True))
+            if clean_conv:
+                if include_role and clean_app:
+                    rows = self.conn.execute(
+                        """
+                        select * from chat_memories
+                        where user_id=?
+                          and (
+                            conversation_id=?
+                            or ((conversation_id='' or conversation_id is null) and (app_id=? or app_id='' or app_id is null))
+                          )
+                        order by
+                          case when conversation_id=? then 0 else 1 end,
+                          pinned desc, updated_at desc
+                        limit ?
+                        """,
+                        (user_id, clean_conv, clean_app, clean_conv, limit),
+                    ).fetchall()
+                else:
+                    rows = self.conn.execute(
+                        """
+                        select * from chat_memories
+                        where user_id=? and conversation_id=?
+                        order by pinned desc, updated_at desc limit ?
+                        """,
+                        (user_id, clean_conv, limit),
+                    ).fetchall()
+            elif clean_app and include_global:
                 rows = self.conn.execute(
                     """
                     select * from chat_memories
-                    where user_id=? and (app_id=? or app_id='' or app_id is null)
+                    where user_id=? and (conversation_id='' or conversation_id is null) and (app_id=? or app_id='' or app_id is null)
                     order by pinned desc, updated_at desc limit ?
                     """,
                     (user_id, clean_app, limit),
                 ).fetchall()
             elif clean_app:
                 rows = self.conn.execute(
-                    "select * from chat_memories where user_id=? and app_id=? order by pinned desc, updated_at desc limit ?",
+                    "select * from chat_memories where user_id=? and app_id=? and (conversation_id='' or conversation_id is null) order by pinned desc, updated_at desc limit ?",
                     (user_id, clean_app, limit),
                 ).fetchall()
             else:
@@ -3364,6 +3535,9 @@ class Store:
         memory_id = str(data.get("id") or "").strip() or str(uuid.uuid4())
         title = str(data.get("title") or "").strip()[:120]
         app_id = str(data.get("app_id") or "").strip()[:120]
+        conversation_id = str(data.get("conversation_id") or data.get("conv_id") or "").strip()[:120]
+        if not self.memory_settings().get("bind_memories_to_conversation", True):
+            conversation_id = ""
         keywords = data.get("keywords")
         if isinstance(keywords, str):
             keywords = [x.strip() for x in re.split(r"[,，\n]", keywords) if x.strip()]
@@ -3382,11 +3556,12 @@ class Store:
                 self.conn.execute(
                     """
                     update chat_memories
-                    set app_id=?, title=?, content=?, keywords=?, enabled=?, pinned=?, updated_at=?
+                    set app_id=?, conversation_id=?, title=?, content=?, keywords=?, enabled=?, pinned=?, updated_at=?
                     where id=? and user_id=?
                     """,
                     (
                         app_id,
+                        conversation_id,
                         title,
                         content[:4000],
                         json.dumps(keywords[:24], ensure_ascii=False),
@@ -3400,13 +3575,14 @@ class Store:
             else:
                 self.conn.execute(
                     """
-                    insert into chat_memories(id,user_id,app_id,title,content,keywords,enabled,pinned,created_at,updated_at)
-                    values(?,?,?,?,?,?,?,?,?,?)
+                    insert into chat_memories(id,user_id,app_id,conversation_id,title,content,keywords,enabled,pinned,created_at,updated_at)
+                    values(?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
                         memory_id,
                         user_id,
                         app_id,
+                        conversation_id,
                         title,
                         content[:4000],
                         json.dumps(keywords[:24], ensure_ascii=False),
@@ -3485,20 +3661,38 @@ class Store:
         return self.save_summary(user_id, conv_id, conv["app_id"] or "", summary, len(messages))
 
     def maybe_refresh_summary(self, user_id: str, conv_id: str) -> dict:
+        policy = self.memory_settings()
+        if not policy.get("auto_summary_enabled", True):
+            return self.get_summary(user_id, conv_id)
         messages = self.list_messages(conv_id, user_id, limit=120)
         count = len(messages)
-        if count < 10:
+        threshold = int(policy.get("auto_summary_message_threshold") or 10)
+        delta = int(policy.get("auto_summary_delta_messages") or 8)
+        if count < threshold:
             return self.get_summary(user_id, conv_id)
         current = self.get_summary(user_id, conv_id)
         old_count = int(current.get("message_count") or 0) if current else 0
-        if not current or count - old_count >= 8:
+        if not current or count - old_count >= delta:
             return self.auto_summarize_conversation(user_id, conv_id)
         return current
 
-    def relevant_memories(self, user_id: str, app_id: str, text: str, limit: int = 6) -> list[dict]:
+    def relevant_memories(self, user_id: str, app_id: str, conversation_id: str, text: str, limit: int | None = None) -> list[dict]:
+        policy = self.memory_settings()
+        if not policy.get("enabled", True):
+            return []
+        if limit is None:
+            limit = int(policy.get("max_memories") or 6)
+        if limit <= 0:
+            return []
         search = str(text or "").lower()
         picked: list[dict] = []
-        for mem in self.list_memories(user_id, app_id, include_global=True, limit=200):
+        for mem in self.list_memories(
+            user_id,
+            app_id,
+            conversation_id=conversation_id,
+            include_global=bool(policy.get("include_role_memories", True)),
+            limit=200,
+        ):
             if not mem.get("enabled"):
                 continue
             title = str(mem.get("title") or "")
@@ -3598,12 +3792,15 @@ class Store:
     def chat_context(self, user_id: str, app_id: str, conv_id: str, content: str, history: list[dict]) -> dict:
         recent = "\n".join(str(m.get("content") or "") for m in (history or [])[-20:])
         search_text = f"{recent}\n{content}"
+        policy = self.memory_settings()
+        memory_enabled = bool(policy.get("enabled", True))
         base_context = {
-            "summary": self.get_summary(user_id, conv_id) if conv_id else {},
-            "memories": self.relevant_memories(user_id, app_id, search_text),
+            "summary": self.get_summary(user_id, conv_id) if conv_id and memory_enabled else {},
+            "memories": self.relevant_memories(user_id, app_id, conv_id, search_text) if memory_enabled else [],
             "history": history or [],
             "recent_text": search_text,
             "user_message": content,
+            "memory_settings": policy,
         }
         out = dict(base_context)
         out.update(self.template_context(user_id, app_id, conv_id, base_context))
@@ -4321,6 +4518,17 @@ class Store:
         saved = self.get_api_settings_raw()
         return normalize_global_prompt_preset(saved.get(GLOBAL_PROMPT_PRESET_KEY) or "")
 
+    def image_model_settings(self, include_secret: bool = False) -> dict:
+        saved = self.get_api_settings_raw()
+        return normalize_image_model_settings(
+            saved.get(IMAGE_MODEL_SETTINGS_KEY) or "",
+            include_secret=include_secret,
+        )
+
+    def memory_settings(self) -> dict:
+        saved = self.get_api_settings_raw()
+        return normalize_memory_settings(saved.get(MEMORY_SETTINGS_KEY) or "")
+
     def effective_llm_settings(self, app: dict | None = None, user_id: str = "") -> dict:
         presets, default_id = self.llm_presets(include_secrets=True)
         global_prompt = self.global_prompt_preset()
@@ -4395,6 +4603,8 @@ class Store:
             "api_key_preview": preview,
             "source": "database_or_env",
             "global_prompt_preset": self.global_prompt_preset(),
+            "image_model": self.image_model_settings(include_secret=False),
+            "memory_settings": self.memory_settings(),
         }
 
     def public_model_presets(self) -> dict:
@@ -4604,6 +4814,26 @@ class Store:
         if "global_prompt_preset" in data:
             updates[GLOBAL_PROMPT_PRESET_KEY] = json.dumps(
                 normalize_global_prompt_preset(data.get("global_prompt_preset")),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        if "image_model" in data:
+            current_image = self.image_model_settings(include_secret=True)
+            raw_image = data.get("image_model") if isinstance(data.get("image_model"), dict) else {}
+            image_payload = dict(raw_image)
+            if image_payload.get("clear_api_key"):
+                image_payload["api_key"] = ""
+            elif not str(image_payload.get("api_key") or "").strip():
+                image_payload["api_key"] = current_image.get("api_key") or ""
+            image_settings = normalize_image_model_settings(image_payload, include_secret=True)
+            updates[IMAGE_MODEL_SETTINGS_KEY] = json.dumps(
+                image_settings,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        if "memory_settings" in data:
+            updates[MEMORY_SETTINGS_KEY] = json.dumps(
+                normalize_memory_settings(data.get("memory_settings")),
                 ensure_ascii=False,
                 separators=(",", ":"),
             )
@@ -8312,6 +8542,141 @@ def call_user_llm(app: dict, content: str, messages: list[dict] | None = None, s
         return process_model_reply(app, fallback, char_name=char_name, user_name=user_name, template_context=template_context)
 
 
+def _image_ext_for_mime(mime: str) -> str:
+    value = str(mime or "").split(";", 1)[0].strip().lower()
+    return {
+        "image/jpeg": ".jpg",
+        "image/jpg": ".jpg",
+        "image/png": ".png",
+        "image/webp": ".webp",
+        "image/gif": ".gif",
+        "image/avif": ".avif",
+    }.get(value, ".png")
+
+
+def save_generated_image_blob(raw: bytes, mime: str = "image/png") -> str:
+    if not raw:
+        return ""
+    base_dir = MEDIA_DIR or (DEFAULT_STATE_DIR / "media")
+    dest_dir = base_dir / "generated"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    ext = _image_ext_for_mime(mime)
+    name = safe_filename(f"image-{now_ms()}-{uuid.uuid4().hex[:8]}{ext}", "generated.png")
+    dest = dest_dir / name
+    dest.write_bytes(raw)
+    return public_url(f"/media-cache/generated/{name}")
+
+
+def save_generated_image_b64(value: str, mime: str = "image/png") -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if text.startswith("data:"):
+        match = re.match(r"^data:([^;,]+)[^,]*,([\s\S]+)$", text)
+        if match:
+            mime = match.group(1) or mime
+            text = match.group(2)
+    try:
+        raw = base64.b64decode(text, validate=False)
+    except Exception:
+        return ""
+    return save_generated_image_blob(raw, mime)
+
+
+def extract_image_generation_items(payload: object) -> list[dict]:
+    if not isinstance(payload, dict):
+        return []
+    raw_items = payload.get("data") or payload.get("images") or payload.get("result") or []
+    if isinstance(raw_items, dict):
+        raw_items = [raw_items]
+    if isinstance(raw_items, str):
+        raw_items = [{"url": raw_items}]
+    if not isinstance(raw_items, list):
+        return []
+    out: list[dict] = []
+    for item in raw_items:
+        if isinstance(item, str):
+            item = {"url": item}
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or item.get("image_url") or item.get("output_url") or "").strip()
+        mime = str(item.get("mime_type") or item.get("mime") or "image/png").strip() or "image/png"
+        b64 = str(item.get("b64_json") or item.get("base64") or item.get("image") or item.get("data_url") or "").strip()
+        if not url and b64.startswith(("http://", "https://")):
+            url, b64 = b64, ""
+        local_url = ""
+        if b64:
+            local_url = save_generated_image_b64(b64, mime)
+        final_url = local_url or url
+        if final_url:
+            out.append({
+                "url": final_url,
+                "remote_url": url if url and url != final_url else "",
+                "mime": mime,
+                "revised_prompt": str(item.get("revised_prompt") or item.get("prompt") or "").strip(),
+            })
+    return out
+
+
+def call_image_model(prompt: str, settings: dict) -> dict:
+    clean_prompt = str(prompt or "").strip()
+    if not clean_prompt:
+        raise ValueError("prompt is required")
+    base_url = str(settings.get("base_url") or "").strip().rstrip("/")
+    api_key = str(settings.get("api_key") or "").strip()
+    model = str(settings.get("model") or "").strip()
+    if not settings.get("enabled", True) or not base_url or not api_key or not model:
+        raise ValueError("image model is not configured")
+    endpoint_path = str(settings.get("endpoint_path") or "/images/generations").strip()
+    if not endpoint_path.startswith("/"):
+        endpoint_path = "/" + endpoint_path
+    endpoint = base_url if base_url.endswith(endpoint_path) else base_url + endpoint_path
+    payload = {
+        "model": model,
+        "prompt": clean_prompt,
+        "n": _bounded_int(settings.get("n"), 1, 1, 4),
+        "size": str(settings.get("size") or "1024x1024").strip() or "1024x1024",
+    }
+    quality = str(settings.get("quality") or "").strip()
+    if quality:
+        payload["quality"] = quality
+    response_format = str(settings.get("response_format") or "").strip()
+    if response_format in {"url", "b64_json"}:
+        payload["response_format"] = response_format
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": LLM_UPSTREAM_USER_AGENT,
+        "Origin": PUBLIC_BASE_URL,
+        "Referer": PUBLIC_BASE_URL + "/",
+    }
+    req = Request(endpoint, data=json_bytes(payload), method="POST", headers=headers)
+    with urlopen(req, timeout=_bounded_int(settings.get("timeout"), 90, 10, 300)) as resp:
+        raw = resp.read()
+    text = raw.decode("utf-8", errors="replace").strip()
+    try:
+        data = json.loads(text) if text else {}
+    except Exception as exc:
+        raise ValueError("image provider returned non-JSON response") from exc
+    images = extract_image_generation_items(data)
+    if not images:
+        message = ""
+        if isinstance(data, dict):
+            err = data.get("error")
+            if isinstance(err, dict):
+                message = str(err.get("message") or "")
+            message = message or str(data.get("message") or data.get("msg") or "")
+        raise ValueError(message or "image provider returned no image")
+    return {
+        "images": images,
+        "image_url": images[0].get("url") or "",
+        "model": model,
+        "provider": settings.get("name") or "图片模型",
+        "raw_count": len(images),
+    }
+
+
 def extract_stream_delta(payload: object) -> str:
     if not isinstance(payload, dict):
         return ""
@@ -10085,9 +10450,31 @@ class Handler(BaseHTTPRequestHandler):
             image_name = str(body.get("filename") or body.get("image_name") or "").strip()
             if not prompt and not image_name:
                 return error_response("prompt or image is required")
-            reply = "图片聊天已接入 AI星月本地工作台。当前站点会保存你的图片聊天请求；接入图片模型后会在这里返回真实图像理解或生成结果。"
-            payload = {"reply": reply, "prompt": prompt, "image_name": image_name, "created_at": now_ms(), "mode": "local_placeholder"}
-            self.store.log_event(user["id"], "image_chat", "图片聊天请求", {"prompt": prompt[:120], "image_name": image_name})
+            settings = self.store.image_model_settings(include_secret=True)
+            if settings.get("enabled") and settings.get("base_url") and settings.get("api_key") and settings.get("model") and prompt:
+                try:
+                    generated = call_image_model(prompt, settings)
+                except Exception as exc:
+                    log(f"image model failed: {exc}")
+                    return error_response("图片模型调用失败：" + str(exc)[:180], 502)
+                reply = "图片已生成。"
+                payload = {
+                    "reply": reply,
+                    "prompt": prompt,
+                    "image_name": image_name,
+                    "created_at": now_ms(),
+                    "mode": "image_model",
+                    **generated,
+                }
+            else:
+                reply = "图片聊天已接入 AI星月本地工作台。当前站点会保存你的图片聊天请求；配置图片模型后会在这里返回真实图像。"
+                payload = {"reply": reply, "prompt": prompt, "image_name": image_name, "created_at": now_ms(), "mode": "local_placeholder"}
+            self.store.log_event(
+                user["id"],
+                "image_chat",
+                "图片聊天请求",
+                {"prompt": prompt[:120], "image_name": image_name, "mode": payload.get("mode"), "model": payload.get("model", "")},
+            )
             return ok_response(payload)
 
         if (
@@ -10554,7 +10941,8 @@ class Handler(BaseHTTPRequestHandler):
                     return error_response(str(exc), 400)
                 return ok_response(memory)
             app_id = parse_query_str(query, "app_id", "")
-            memories = self.store.list_memories(user["id"], app_id, include_global=True)
+            conversation_id = parse_query_str(query, "conversation_id", "")
+            memories = self.store.list_memories(user["id"], app_id, conversation_id=conversation_id, include_global=True)
             return ok_response({"list": memories, "total": len(memories)})
 
         if normalized.startswith("console/api/web/memories/") and normalized.endswith("/delete"):
@@ -11034,6 +11422,7 @@ def main() -> int:
     MEDIA_DIR = Path(os.environ.get("MEDIA_DIR") or (args.db.resolve().parent / "media"))
     (MEDIA_DIR / "cover").mkdir(parents=True, exist_ok=True)
     (MEDIA_DIR / "profile").mkdir(parents=True, exist_ok=True)
+    (MEDIA_DIR / "generated").mkdir(parents=True, exist_ok=True)
     server = LocalServer((args.host, args.port), Handler, store)
     log(f"listening on http://{args.host}:{args.port}/")
     log(f"sqlite db: {args.db}")
