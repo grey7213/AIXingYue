@@ -89,6 +89,13 @@ export const api = {
   tagGroups: () => rawRequest('/go/api/explore/tag-groups'),
   installedApps: () => rawRequest('/console/api/installed-apps'),
   appDetails: (appId) => rawRequest(`/console/api/apps/${encodeURIComponent(appId)}`),
+  appComments: (appId, params = {}) => {
+    const qs = new URLSearchParams(params);
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return rawRequest(`/console/api/web/apps/${encodeURIComponent(appId)}/comments${suffix}`);
+  },
+  createAppComment: (appId, content) => rawRequest(`/console/api/web/apps/${encodeURIComponent(appId)}/comments`, { method: 'POST', body: { content } }),
+  toggleCommentLike: (commentId) => rawRequest(`/console/api/web/comments/${encodeURIComponent(commentId)}/like`, { method: 'POST', body: {} }),
   homeStats: () => rawRequest('/console/api/web/home-stats'),
   favorites: (params = {}) => {
     const qs = new URLSearchParams(params);

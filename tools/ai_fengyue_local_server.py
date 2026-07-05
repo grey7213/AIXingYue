@@ -2105,6 +2105,27 @@ class Store:
                     primary key(user_id, app_id)
                 );
                 create index if not exists idx_user_likes_user on user_likes(user_id, created_at desc);
+                create table if not exists app_comments (
+                    id text primary key,
+                    app_id text not null,
+                    user_id text not null,
+                    content text not null,
+                    like_count integer not null default 0,
+                    created_at integer not null,
+                    updated_at integer not null
+                );
+                create index if not exists idx_app_comments_app_top
+                    on app_comments(app_id, like_count desc, created_at desc);
+                create index if not exists idx_app_comments_user
+                    on app_comments(user_id, created_at desc);
+                create table if not exists app_comment_likes (
+                    comment_id text not null,
+                    user_id text not null,
+                    created_at integer not null,
+                    primary key(comment_id, user_id)
+                );
+                create index if not exists idx_app_comment_likes_user
+                    on app_comment_likes(user_id, created_at desc);
                 create table if not exists user_events (
                     id integer primary key autoincrement,
                     user_id text not null,
@@ -4344,6 +4365,142 @@ class Store:
             self.conn.commit()
         self.log_event(user_id, "like", ("点赞角色" if liked else "取消点赞"), {"app_id": app_id, "liked": liked})
         return {"app_id": app_id, "liked": liked, "like_count": int(row["c"] if row else 0)}
+
+    @staticmethod
+    def app_comment_payload(row: sqlite3.Row | dict, current_user_id: str = "") -> dict:
+        d = dict(row or {})
+        return {
+            "id": str(d.get("id") or ""),
+            "app_id": str(d.get("app_id") or ""),
+            "user_id": str(d.get("user_id") or ""),
+            "user_name": str(d.get("user_name") or d.get("name") or "星月用户"),
+            "content": str(d.get("content") or ""),
+            "like_count": int(d.get("like_count") or 0),
+            "liked": bool(d.get("liked")),
+            "mine": bool(current_user_id and str(d.get("user_id") or "") == current_user_id),
+            "created_at": int(d.get("created_at") or 0),
+            "updated_at": int(d.get("updated_at") or d.get("created_at") or 0),
+        }
+
+    def list_app_comments(self, app_id: str, user_id: str = "", *, limit: int = 3) -> dict:
+        clean_app = str(app_id or "").strip()
+        clean_user = str(user_id or "").strip()
+        clean_limit = max(1, min(int(limit or 3), 100))
+        if not clean_app:
+            return {"list": [], "total": 0, "has_more": False, "limit": clean_limit}
+        with self.lock:
+            total = int(self.conn.execute(
+                "select count(*) from app_comments where app_id=?",
+                (clean_app,),
+            ).fetchone()[0])
+            rows = self.conn.execute(
+                """
+                select c.*, coalesce(u.name, '') as user_name,
+                       case when cl.comment_id is not null then 1 else 0 end as liked
+                from app_comments c
+                left join users u on u.id=c.user_id
+                left join app_comment_likes cl on cl.comment_id=c.id and cl.user_id=?
+                where c.app_id=?
+                order by c.like_count desc, c.created_at desc
+                limit ?
+                """,
+                (clean_user, clean_app, clean_limit),
+            ).fetchall()
+        return {
+            "list": [self.app_comment_payload(row, clean_user) for row in rows],
+            "total": total,
+            "has_more": total > len(rows),
+            "limit": clean_limit,
+        }
+
+    def create_app_comment(self, user_id: str, app_id: str, content: str) -> dict:
+        clean_user = str(user_id or "").strip()
+        clean_app = str(app_id or "").strip()
+        clean_content = re.sub(r"\s+\n", "\n", str(content or "").replace("\r\n", "\n").replace("\r", "\n")).strip()
+        clean_content = re.sub(r"\n{4,}", "\n\n\n", clean_content)
+        if not clean_user:
+            raise ValueError("unauthorized")
+        if not clean_app:
+            raise ValueError("app_id is required")
+        if not clean_content:
+            raise ValueError("评论内容不能为空")
+        if len(clean_content) > 1000:
+            clean_content = clean_content[:1000].rstrip()
+        ts = now_ms()
+        comment_id = "comment-" + uuid.uuid4().hex[:20]
+        with self.lock:
+            exists = self.conn.execute("select 1 from local_apps where id=?", (clean_app,)).fetchone()
+            if not exists:
+                raise ValueError("not found")
+            self.conn.execute(
+                """
+                insert into app_comments(id,app_id,user_id,content,like_count,created_at,updated_at)
+                values(?,?,?,?,?,?,?)
+                """,
+                (comment_id, clean_app, clean_user, clean_content, 0, ts, ts),
+            )
+            row = self.conn.execute(
+                """
+                select c.*, coalesce(u.name, '') as user_name, 0 as liked
+                from app_comments c left join users u on u.id=c.user_id
+                where c.id=?
+                """,
+                (comment_id,),
+            ).fetchone()
+            self.conn.commit()
+        self.log_event(clean_user, "comment", "评论角色", {"app_id": clean_app, "comment_id": comment_id})
+        return self.app_comment_payload(row, clean_user)
+
+    def toggle_app_comment_like(self, user_id: str, comment_id: str) -> dict:
+        clean_user = str(user_id or "").strip()
+        clean_comment = str(comment_id or "").strip()
+        if not clean_user:
+            raise ValueError("unauthorized")
+        if not clean_comment:
+            raise ValueError("comment_id is required")
+        ts = now_ms()
+        with self.lock:
+            row = self.conn.execute("select * from app_comments where id=?", (clean_comment,)).fetchone()
+            if not row:
+                raise ValueError("not found")
+            exists = self.conn.execute(
+                "select 1 from app_comment_likes where comment_id=? and user_id=?",
+                (clean_comment, clean_user),
+            ).fetchone()
+            if exists:
+                self.conn.execute(
+                    "delete from app_comment_likes where comment_id=? and user_id=?",
+                    (clean_comment, clean_user),
+                )
+                self.conn.execute(
+                    "update app_comments set like_count=case when coalesce(like_count,0)>0 then like_count-1 else 0 end, updated_at=? where id=?",
+                    (ts, clean_comment),
+                )
+                liked = False
+            else:
+                self.conn.execute(
+                    "insert or ignore into app_comment_likes(comment_id,user_id,created_at) values(?,?,?)",
+                    (clean_comment, clean_user, ts),
+                )
+                self.conn.execute(
+                    "update app_comments set like_count=coalesce(like_count,0)+1, updated_at=? where id=?",
+                    (ts, clean_comment),
+                )
+                liked = True
+            updated = self.conn.execute(
+                """
+                select c.*, coalesce(u.name, '') as user_name,
+                       case when cl.comment_id is not null then 1 else 0 end as liked
+                from app_comments c
+                left join users u on u.id=c.user_id
+                left join app_comment_likes cl on cl.comment_id=c.id and cl.user_id=?
+                where c.id=?
+                """,
+                (clean_user, clean_comment),
+            ).fetchone()
+            self.conn.commit()
+        self.log_event(clean_user, "comment_like", ("点赞评论" if liked else "取消评论点赞"), {"comment_id": clean_comment, "app_id": row["app_id"]})
+        return self.app_comment_payload(updated, clean_user)
 
     def is_liked(self, user_id: str | None, app_id: str) -> bool:
         if not user_id or not app_id:
@@ -8009,6 +8166,7 @@ VISIBLE_REPLY_JSON_KEYS = (
 INTERNAL_REPLY_JSON_KEYS = {
     "thought",
     "thoughts",
+    "thinking",
     "reasoning",
     "analysis",
     "plan",
@@ -8036,6 +8194,18 @@ INTERNAL_SECTION_MARKERS = (
     "reflection",
     "deliberation",
     "strategy",
+)
+
+CHINESE_INTERNAL_SECTION_MARKERS = (
+    "思考",
+    "思考过程",
+    "推理",
+    "推理过程",
+    "分析",
+    "分析过程",
+    "计划",
+    "内部推理",
+    "创作思路",
 )
 
 
@@ -8130,6 +8300,9 @@ def _is_internal_section_heading(line: str) -> bool:
     heading = _clean_internal_heading(line)
     if not heading or len(heading) > 120:
         return False
+    compact = re.sub(r"[\s:：，。,.、-]+", "", heading)
+    if compact in CHINESE_INTERNAL_SECTION_MARKERS:
+        return True
     if re.search(r"[\u4e00-\u9fff]", heading):
         return False
     lower = heading.lower()
@@ -8156,8 +8329,41 @@ def _strip_internal_markdown_sections(text: str) -> str:
 def _strip_internal_xml_tags(text: str) -> str:
     value = str(text or "")
     for tag in ("think", "thinking", "reasoning", "analysis", "scratchpad"):
-        value = re.sub(rf"<{tag}\b[^>]*>[\s\S]*?</{tag}>", "", value, flags=re.IGNORECASE)
+        value = re.sub(rf"<{tag}\b[^>]*>[\s\S]*</{tag}\s*>", "", value, flags=re.IGNORECASE)
+        value = re.sub(rf"<{tag}\b[^>]*>[\s\S]*$", "", value, flags=re.IGNORECASE)
+        value = re.sub(rf"</{tag}\s*>", "", value, flags=re.IGNORECASE)
     return value
+
+
+def _strip_format_instruction_leaks(text: str) -> str:
+    value = str(text or "")
+    if not value.strip():
+        return value
+    noisy_line = re.compile(
+        r"(?im)^.*(?:"
+        r"<\s*/?\s*(?:think|thinking|reasoning|analysis|scratchpad)\b[^>]*>|"
+        r"检查需要生成的内容格式|检测所有需要输出的标签格式|"
+        r"创作前必须有思考过程|格式加强|思考范围|真正的思考截止|自动识别到|这样的问题|"
+        r"不得有遗漏|不得有改写|多添或缺少|标签格式"
+        r").*$"
+    )
+    value = noisy_line.sub("", value)
+    return re.sub(r"\n{3,}", "\n\n", value).strip()
+
+
+def _extract_visible_content_tag(text: str) -> str | None:
+    value = str(text or "").strip()
+    if not value:
+        return None
+    match = re.search(r"<content\b[^>]*>([\s\S]*)</content\s*>", value, flags=re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    match = re.search(r"<content\b[^>]*>([\s\S]+)$", value, flags=re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    if re.search(r"</content\s*>", value, flags=re.IGNORECASE):
+        return re.sub(r"</?content\b[^>]*>", "", value, flags=re.IGNORECASE).strip()
+    return None
 
 
 def _strip_leading_reply_labels(text: str) -> str:
@@ -8234,9 +8440,15 @@ def normalize_visible_chat_reply(text: object) -> str:
     if not original:
         return ""
     value = original
+    changed_any = False
     for _ in range(4):
         before = value
         value = _strip_internal_xml_tags(value).strip()
+        content_tag = _extract_visible_content_tag(value)
+        if content_tag is not None:
+            value = content_tag.strip()
+        else:
+            value = _strip_format_instruction_leaks(value).strip()
         labeled = _extract_labeled_final_reply(value)
         if labeled:
             value = labeled.strip()
@@ -8249,10 +8461,12 @@ def normalize_visible_chat_reply(text: object) -> str:
         fenced = _single_fenced_block(value)
         if fenced and fenced[0] in {"text", "txt", "markdown", "md"}:
             value = fenced[1].strip()
+        if value != before:
+            changed_any = True
         if value == before:
             break
     value = re.sub(r"\n{4,}", "\n\n\n", value).strip()
-    return value or original
+    return value or ("" if changed_any else original)
 
 
 def process_model_reply(app: dict, reply: object, *, char_name: str = "", user_name: str = "", template_context: dict | None = None) -> str:
@@ -10237,6 +10451,33 @@ class Handler(BaseHTTPRequestHandler):
             if not local:
                 return error_response("not found", 404)
             return ok_response(self.store.toggle_like(user["id"], app_id))
+
+        if normalized.startswith("console/api/web/apps/") and normalized.endswith("/comments"):
+            parts = normalized.split("/")
+            app_id = parts[4] if len(parts) >= 6 else ""
+            if not self.store.get_local_app(app_id):
+                return error_response("not found", 404)
+            if self.command.upper() == "POST":
+                if not isinstance(body, dict):
+                    return error_response("invalid body")
+                try:
+                    comment = self.store.create_app_comment(user["id"], app_id, str(body.get("content") or ""))
+                except ValueError as exc:
+                    status = 404 if str(exc) == "not found" else 400
+                    return error_response(str(exc), status)
+                return ok_response(comment)
+            limit = parse_query_int(query, "limit", 3, 1, 100)
+            if parse_query_str(query, "expanded", "").lower() in ("1", "true", "yes"):
+                limit = max(limit, 50)
+            return ok_response(self.store.list_app_comments(app_id, user["id"], limit=limit))
+
+        if normalized.startswith("console/api/web/comments/") and normalized.endswith("/like"):
+            comment_id = normalized.split("/")[4] if len(normalized.split("/")) >= 5 else ""
+            try:
+                return ok_response(self.store.toggle_app_comment_like(user["id"], comment_id))
+            except ValueError as exc:
+                status = 404 if str(exc) == "not found" else 400
+                return error_response(str(exc), status)
 
         if normalized == "console/api/web/logs":
             page = parse_query_int(query, "page", 1, 1, 100000)

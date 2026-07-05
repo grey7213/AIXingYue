@@ -433,3 +433,8 @@
   Cause: `create table if not exists` 不会给既有表补新列；如果初始化 `executescript` 里的 `create index` 先引用新列，迁移函数还没来得及 `alter table` 就会失败。
   Fix: 新列相关索引只能放到显式迁移函数里，在确认 `alter table ... add column` 完成后再创建；初始化脚本只保留老库一定存在的列索引。
   Verify: 2026-07-05 移除初始脚本中的 `chat_memories(conversation_id)` 索引，改由 `ensure_chat_memory_columns()` 迁移后创建；重新部署后 `ai-fengyue-backend.service` active，公网 `/health` OK。
+
+- Symptom: 聊天回复可见内容里出现 `<thinking>`、`</thinking>`、`真正的思考截止`、`格式加强` 或 `<content>` 包裹格式，像模型把内部格式说明直接发给用户。
+  Cause: 旧清洗只做非贪婪标签移除，遇到截图式嵌套/残缺思考标签或格式说明行时会留下内部文本；同时没有把 `<content>正文</content>` 解包为最终正文。
+  Fix: `normalize_visible_chat_reply()` 和前端 `normalizeVisibleAssistantContent()` 先贪婪移除内部 XML 标签并处理未闭合标签，再解包 `<content>`，最后删除格式说明泄露行；如果清洗后没有可见正文则返回空字符串而不是回退原文。
+  Verify: 2026-07-06 本地函数级断言覆盖 `<thinking>内部</thinking><content>你好 星月</content>`、未闭合 `<thinking>`、纯 `<content>` 和截图式格式泄露；`py_compile`、`node --check` 通过。

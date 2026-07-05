@@ -109,13 +109,16 @@ const VISIBLE_REPLY_JSON_KEYS = [
   'final', 'final_reply', 'finalResponse', 'reply', 'response', 'answer',
   'dialogue', 'narration', 'message', 'content', 'text', 'output', 'body', 'html',
 ];
-const INTERNAL_REPLY_JSON_KEYS = new Set(['thought', 'thoughts', 'reasoning', 'analysis', 'plan', 'planning', 'scratchpad', 'debug', 'metadata']);
+const INTERNAL_REPLY_JSON_KEYS = new Set(['thought', 'thoughts', 'thinking', 'reasoning', 'analysis', 'plan', 'planning', 'scratchpad', 'debug', 'metadata']);
 const INTERNAL_SECTION_MARKERS = [
   'processing', 'initial input', 'initial inputs', 'continuing narrative',
   'narrative flow', 'guiding', 'reasoning', 'analysis', 'analyzing',
   'planning', 'response plan', 'drafting', 'thought', 'internal',
   'reflection', 'deliberation', 'strategy',
 ];
+const CHINESE_INTERNAL_SECTION_MARKERS = new Set([
+  '思考', '思考过程', '推理', '推理过程', '分析', '分析过程', '计划', '内部推理', '创作思路',
+]);
 const METADATA_FENCE_LANGS = new Set(['yaml', 'yml', 'json', 'jsonc', 'toml', 'ini', 'properties', 'meta', 'metadata']);
 const METADATA_FENCE_MARKERS = [
   '{{char}}', '{{user}}', 'persona', 'personality', 'scenario', 'worldbook', 'world_info',
@@ -197,7 +200,10 @@ function cleanInternalHeading(line) {
 
 function isInternalSectionHeading(line) {
   const heading = cleanInternalHeading(line);
-  if (!heading || heading.length > 120 || /[\u4e00-\u9fff]/.test(heading)) return false;
+  if (!heading || heading.length > 120) return false;
+  const compact = heading.replace(/[\s:：，。,.、-]+/g, '');
+  if (CHINESE_INTERNAL_SECTION_MARKERS.has(compact)) return true;
+  if (/[\u4e00-\u9fff]/.test(heading)) return false;
   const lower = heading.toLowerCase();
   return INTERNAL_SECTION_MARKERS.some(marker => lower.includes(marker));
 }
@@ -220,7 +226,31 @@ function stripInternalMarkdownSections(text) {
 }
 
 function stripInternalXmlTags(text) {
-  return String(text || '').replace(/<(think|thinking|reasoning|analysis|scratchpad)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
+  let value = String(text || '');
+  ['think', 'thinking', 'reasoning', 'analysis', 'scratchpad'].forEach(tag => {
+    value = value.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*<\\/${tag}\\s*>`, 'gi'), '');
+    value = value.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*$`, 'gi'), '');
+    value = value.replace(new RegExp(`<\\/${tag}\\s*>`, 'gi'), '');
+  });
+  return value;
+}
+
+function stripFormatInstructionLeaks(text) {
+  let value = String(text || '');
+  if (!value.trim()) return value;
+  value = value.replace(/^.*(?:<\s*\/?\s*(?:think|thinking|reasoning|analysis|scratchpad)\b[^>]*>|检查需要生成的内容格式|检测所有需要输出的标签格式|创作前必须有思考过程|格式加强|思考范围|真正的思考截止|自动识别到|这样的问题|不得有遗漏|不得有改写|多添或缺少|标签格式).*$/gim, '');
+  return value.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function extractVisibleContentTag(text) {
+  const value = String(text || '').trim();
+  if (!value) return null;
+  let match = value.match(/<content\b[^>]*>([\s\S]*)<\/content\s*>/i);
+  if (match) return match[1].trim();
+  match = value.match(/<content\b[^>]*>([\s\S]+)$/i);
+  if (match) return match[1].trim();
+  if (/<\/content\s*>/i.test(value)) return value.replace(/<\/?content\b[^>]*>/gi, '').trim();
+  return null;
 }
 
 function stripLeadingReplyLabels(text) {
@@ -277,9 +307,13 @@ function normalizeVisibleAssistantContent(content) {
   const original = String(content == null ? '' : content).trim();
   if (!original) return '';
   let value = original;
+  let changedAny = false;
   for (let i = 0; i < 4; i += 1) {
     const before = value;
     value = stripInternalXmlTags(value).trim();
+    const contentTag = extractVisibleContentTag(value);
+    if (contentTag !== null) value = contentTag.trim();
+    else value = stripFormatInstructionLeaks(value).trim();
     const labeled = extractLabeledFinalReply(value);
     if (labeled) value = labeled;
     const extracted = extractJsonVisibleReply(value);
@@ -289,10 +323,11 @@ function normalizeVisibleAssistantContent(content) {
     value = stripLeadingMetadataFences(value).trim();
     const fenced = singleFencedBlock(value);
     if (fenced && ['text', 'txt', 'markdown', 'md'].includes(fenced.lang)) value = fenced.body.trim();
+    if (value !== before) changedAny = true;
     if (value === before) break;
   }
   value = value.replace(/\n{4,}/g, '\n\n\n').trim();
-  return value || original;
+  return value || (changedAny ? '' : original);
 }
 
 function visibleMessageContent(content, role = '') {

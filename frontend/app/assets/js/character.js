@@ -1,4 +1,4 @@
-import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js';
+import { api, requireAuth, getCachedUser, setCachedUser, formatDateTime, ApiError } from '/app/assets/js/app-core.js';
 import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-channels-closed';
 
 const FIELD_LABELS = {
@@ -156,6 +156,14 @@ function characterPage() {
     loading: false,
     card: null,
     siteSettings: null,
+    comments: [],
+    commentsTotal: 0,
+    commentsHasMore: false,
+    commentsExpanded: false,
+    commentsLoading: false,
+    commentDraft: '',
+    commentSubmitting: false,
+    commentLikingId: '',
 
     async init() {
       injectLayout('home');
@@ -186,8 +194,10 @@ function characterPage() {
         const r = await api.appDetails(id);
         const card = normalizeCard(r);
         this.card = card.id ? card : null;
+        if (this.card?.id) await this.loadComments(false);
       } catch {
         this.card = null;
+        this.comments = [];
       } finally {
         this.loading = false;
       }
@@ -204,6 +214,64 @@ function characterPage() {
 
     favoriteLabel() {
       return this.card?.favorited ? '已收藏' : '收藏';
+    },
+
+    formatTime(ts) {
+      return ts ? formatDateTime(ts) : '';
+    },
+
+    async loadComments(expanded = this.commentsExpanded) {
+      if (!this.card?.id) return;
+      this.commentsLoading = true;
+      try {
+        const r = await api.appComments(this.card.id, { limit: expanded ? 50 : 3, expanded: expanded ? 1 : 0 });
+        const data = r?.data || r || {};
+        this.comments = Array.isArray(data.list) ? data.list : [];
+        this.commentsTotal = Number(data.total || this.comments.length || 0);
+        this.commentsHasMore = !!data.has_more;
+        this.commentsExpanded = !!expanded;
+      } catch {
+        this.comments = [];
+        this.commentsTotal = 0;
+        this.commentsHasMore = false;
+      } finally {
+        this.commentsLoading = false;
+      }
+    },
+
+    async submitComment() {
+      if (!this.card?.id || this.commentSubmitting) return;
+      const content = this.commentDraft.trim();
+      if (!content) return;
+      this.commentSubmitting = true;
+      try {
+        await api.createAppComment(this.card.id, content);
+        this.commentDraft = '';
+        await this.loadComments(this.commentsExpanded);
+      } finally {
+        this.commentSubmitting = false;
+      }
+    },
+
+    async toggleCommentsExpanded() {
+      await this.loadComments(!this.commentsExpanded);
+    },
+
+    commentLikeLabel(comment) {
+      const count = Number(comment?.like_count || 0);
+      return `${comment?.liked ? '已赞' : '点赞'}${count ? ` ${count}` : ''}`;
+    },
+
+    async toggleCommentLike(comment) {
+      if (!comment?.id || this.commentLikingId) return;
+      this.commentLikingId = comment.id;
+      try {
+        const r = await api.toggleCommentLike(comment.id);
+        const updated = r?.data || r || {};
+        this.comments = this.comments.map(item => item.id === comment.id ? { ...item, ...updated } : item);
+      } finally {
+        this.commentLikingId = '';
+      }
     },
 
     async toggleLike(event) {
@@ -231,13 +299,9 @@ function characterPage() {
       const descriptionSummary = this.card.description_detail?.structured || !looksStructuredNoise(this.card.description)
         ? this.card.description_detail?.summary
         : '';
-      const openingSummary = this.card.opening_detail?.structured || !looksStructuredNoise(this.card.opening_statement)
-        ? this.card.opening_detail?.summary
-        : '';
       return parsedSummary
         || descriptionSummary
         || plainSummary
-        || openingSummary
         || this.characterText('summary_fallback', '点击开始对话。');
     },
   };
