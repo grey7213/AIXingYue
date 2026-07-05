@@ -765,6 +765,19 @@ html, body { font-size: 16px; line-height: 1.5; color: var(--xy-app-text); }
 }
 .list-row .title { color:#fff; font-weight:600; font-size: 14px; line-height: 1.4; }
 .list-row .meta { color:rgba(232,226,255,.55); font-size:12px; margin-top:3px; line-height: 1.4; }
+.history-row__main {
+  grid-column: 1 / 3;
+}
+.history-row .row-actions {
+  display: flex;
+  gap: 8px;
+}
+.xy-btn.is-active,
+.history-row .xy-btn.is-active {
+  color: #fff;
+  border-color: rgba(244, 114, 182, 0.55);
+  background: rgba(244, 114, 182, 0.16);
+}
 
 .form-panel {
   border: 1px solid rgba(196, 181, 253, 0.18);
@@ -1299,6 +1312,8 @@ html, body { font-size: 16px; line-height: 1.5; color: var(--xy-app-text); }
   .detail-cover { min-height: 300px; }
   .list-row { grid-template-columns: 44px minmax(0,1fr); }
   .list-row .row-actions { grid-column: 1 / -1; display:flex; gap:8px; }
+  .history-row__main { grid-column: 1 / -1; }
+  .history-row .row-actions .xy-btn { flex: 1 1 auto; justify-content: center; padding-left: 10px; padding-right: 10px; }
 }
 @media (min-width: 769px) {
   .app-topbar .menu-btn { display: none !important; }

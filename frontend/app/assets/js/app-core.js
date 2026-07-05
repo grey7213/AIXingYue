@@ -95,6 +95,7 @@ export const api = {
     return rawRequest(`/console/api/web/favorites?${qs}`);
   },
   toggleFavorite: (appId) => rawRequest(`/console/api/web/favorites/${encodeURIComponent(appId)}/toggle`, { method: 'POST', body: {} }),
+  toggleLike: (appId) => rawRequest(`/console/api/web/apps/${encodeURIComponent(appId)}/like`, { method: 'POST', body: {} }),
   logs: (params = {}) => {
     const qs = new URLSearchParams(params);
     return rawRequest(`/console/api/web/logs?${qs}`);

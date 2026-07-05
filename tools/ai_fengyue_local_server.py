@@ -2002,6 +2002,13 @@ class Store:
                     primary key(user_id, app_id)
                 );
                 create index if not exists idx_user_favorites_user on user_favorites(user_id, created_at desc);
+                create table if not exists user_likes (
+                    user_id text not null,
+                    app_id text not null,
+                    created_at integer not null,
+                    primary key(user_id, app_id)
+                );
+                create index if not exists idx_user_likes_user on user_likes(user_id, created_at desc);
                 create table if not exists user_events (
                     id integer primary key autoincrement,
                     user_id text not null,
@@ -2962,10 +2969,40 @@ class Store:
     def list_conversations(self, user_id: str, limit: int = 50) -> list:
         with self.lock:
             rows = self.conn.execute(
-                "select * from conversations where user_id=? order by updated_at desc limit ?",
+                """
+                select c.*,
+                       a.name as current_app_name,
+                       a.cover_url as current_app_icon,
+                       a.summary as current_app_summary,
+                       a.like_count as app_like_count,
+                       case when f.app_id is not null then 1 else 0 end as favorited,
+                       case when l.app_id is not null then 1 else 0 end as liked
+                from conversations c
+                left join local_apps a on a.id=c.app_id
+                left join user_favorites f on f.user_id=c.user_id and f.app_id=c.app_id
+                left join user_likes l on l.user_id=c.user_id and l.app_id=c.app_id
+                where c.user_id=?
+                order by c.updated_at desc limit ?
+                """,
                 (user_id, limit),
             ).fetchall()
-            return [dict(r) for r in rows]
+        out = []
+        for row in rows:
+            item = dict(row)
+            app_name = str(item.get("app_name") or item.get("current_app_name") or item.get("title") or "").strip()
+            item["app_name"] = app_name or "未命名角色"
+            item["title"] = str(item.get("title") or app_name or "未命名会话").strip()
+            item["app_icon"] = str(item.get("app_icon") or item.get("current_app_icon") or "").strip()
+            item["app_summary"] = str(item.get("current_app_summary") or "").strip()
+            item["like_count"] = int(item.get("app_like_count") or 0)
+            item["favorited"] = bool(item.get("favorited"))
+            item["liked"] = bool(item.get("liked"))
+            item.pop("current_app_name", None)
+            item.pop("current_app_icon", None)
+            item.pop("current_app_summary", None)
+            item.pop("app_like_count", None)
+            out.append(item)
+        return out
 
     def _message_to_dict(self, row) -> dict:
         d = dict(row)
@@ -4081,6 +4118,44 @@ class Store:
             self.conn.commit()
         self.log_event(user_id, "favorite", ("收藏角色" if favored else "取消收藏"), {"app_id": app_id, "favorited": favored})
         return {"app_id": app_id, "favorited": favored}
+
+    def toggle_like(self, user_id: str, app_id: str) -> dict:
+        ts = now_ms()
+        with self.lock:
+            exists = self.conn.execute(
+                "select 1 from user_likes where user_id=? and app_id=?",
+                (user_id, app_id),
+            ).fetchone()
+            if exists:
+                self.conn.execute("delete from user_likes where user_id=? and app_id=?", (user_id, app_id))
+                self.conn.execute(
+                    "update local_apps set like_count=case when coalesce(like_count,0) > 0 then like_count - 1 else 0 end where id=?",
+                    (app_id,),
+                )
+                liked = False
+            else:
+                self.conn.execute(
+                    "insert or ignore into user_likes(user_id,app_id,created_at) values(?,?,?)",
+                    (user_id, app_id, ts),
+                )
+                self.conn.execute(
+                    "update local_apps set like_count=coalesce(like_count,0) + 1 where id=?",
+                    (app_id,),
+                )
+                liked = True
+            row = self.conn.execute("select coalesce(like_count,0) as c from local_apps where id=?", (app_id,)).fetchone()
+            self.conn.commit()
+        self.log_event(user_id, "like", ("点赞角色" if liked else "取消点赞"), {"app_id": app_id, "liked": liked})
+        return {"app_id": app_id, "liked": liked, "like_count": int(row["c"] if row else 0)}
+
+    def is_liked(self, user_id: str | None, app_id: str) -> bool:
+        if not user_id or not app_id:
+            return False
+        with self.lock:
+            return bool(self.conn.execute(
+                "select 1 from user_likes where user_id=? and app_id=?",
+                (user_id, app_id),
+            ).fetchone())
 
     def is_favorite(self, user_id: str | None, app_id: str) -> bool:
         if not user_id or not app_id:
@@ -9589,6 +9664,14 @@ class Handler(BaseHTTPRequestHandler):
             payload = self.store.toggle_favorite(user["id"], app_id)
             return ok_response(payload)
 
+        if normalized.startswith("console/api/apps/") and normalized.endswith("/like"):
+            app_id = normalized.split("/")[3] if len(normalized.split("/")) >= 4 else ""
+            local = self.store.get_local_app(app_id)
+            if not local:
+                return error_response("not found", 404)
+            payload = self.store.toggle_like(user["id"], app_id)
+            return ok_response(payload)
+
         if normalized in ("console/api/web/my-apps", "go/api/web/my-apps"):
             page = parse_query_int(query, "page", 1, 1, 100000)
             page_size = parse_query_int(query, "page_size", 30, 1, 100)
@@ -9765,7 +9848,15 @@ class Handler(BaseHTTPRequestHandler):
             page_size = parse_query_int(query, "page_size", 30, 1, 100)
             search = parse_query_str(query, "q", "").strip()
             rows, total = self.store.list_favorites(user["id"], page=page, page_size=page_size, search=search)
-            cards = [dict(local_app_to_card(r), favorited=True, favorited_at=r.get("favorited_at")) for r in rows]
+            cards = [
+                dict(
+                    local_app_to_card(r),
+                    favorited=True,
+                    liked=self.store.is_liked(user["id"], r.get("id") or ""),
+                    favorited_at=r.get("favorited_at"),
+                )
+                for r in rows
+            ]
             return ok_response({"list": cards, "apps": cards, "total": total, "page": page, "page_size": page_size})
 
         if normalized.startswith("console/api/web/favorites/") and normalized.endswith("/toggle"):
@@ -9774,6 +9865,13 @@ class Handler(BaseHTTPRequestHandler):
             if not local:
                 return error_response("not found", 404)
             return ok_response(self.store.toggle_favorite(user["id"], app_id))
+
+        if normalized.startswith("console/api/web/apps/") and normalized.endswith("/like"):
+            app_id = normalized.split("/")[4] if len(normalized.split("/")) >= 5 else ""
+            local = self.store.get_local_app(app_id)
+            if not local:
+                return error_response("not found", 404)
+            return ok_response(self.store.toggle_like(user["id"], app_id))
 
         if normalized == "console/api/web/logs":
             page = parse_query_int(query, "page", 1, 1, 100000)
@@ -10054,6 +10152,8 @@ class Handler(BaseHTTPRequestHandler):
                 local = self.store.get_local_app(app_id)
                 if local:
                     card = local_app_to_card(dict(local))
+                    card["favorited"] = self.store.is_favorite(user["id"] if user else None, card["id"])
+                    card["liked"] = self.store.is_liked(user["id"] if user else None, card["id"])
                     return go_response(card) if normalized.startswith("go/") else ok_response(card)
             data = app_config_json(app_id)
             fallback = go_response(data) if normalized.startswith("go/") else data
@@ -10181,6 +10281,7 @@ class Handler(BaseHTTPRequestHandler):
                 for r in rows:
                     card = local_app_to_list_card(r)
                     card["favorited"] = self.store.is_favorite(user["id"] if user else None, card["id"])
+                    card["liked"] = self.store.is_liked(user["id"] if user else None, card["id"])
                     if pictureless:
                         card["pictureless"] = True
                         card["cover"] = ""

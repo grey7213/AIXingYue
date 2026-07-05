@@ -7,8 +7,8 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
   <link rel="icon" href="/favicon.ico">
   <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260703-fengyue-home3">
-  <script type="module" src="/app/assets/js/character.js?v=20260705-comments-section"></script>
+  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260705-cn-summary-actions">
+  <script type="module" src="/app/assets/js/character.js?v=20260705-cn-summary-actions"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
@@ -40,6 +40,10 @@
               <div>
                 <h2 class="text-3xl font-bold text-white mb-2" x-text="card?.name || characterText('unnamed_role', '未命名角色')"></h2>
                 <p class="text-violet-100/85 leading-relaxed" x-text="cardSummary()"></p>
+                <div class="flex flex-wrap gap-2 mt-4">
+                  <button type="button" class="xy-btn xy-btn-ghost text-xs" :class="{ 'is-active': card?.liked }" @click="toggleLike($event)" x-text="likeLabel()">点赞</button>
+                  <button type="button" class="xy-btn xy-btn-ghost text-xs" :class="{ 'is-active': card?.favorited }" @click="toggleFavorite($event)" x-text="favoriteLabel()">收藏</button>
+                </div>
               </div>
               <span class="xy-badge xy-badge-purple" x-text="card?.source === 'user' ? characterText('user_badge', '用户角色') : characterText('official_badge', '角色设定')"></span>
             </div>

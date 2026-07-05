@@ -78,7 +78,7 @@ export function favoritesPage() {
 export function historiesPage() {
   return {
     user: null, points: 0, loading: false, conversations: [], siteSettings: null,
-    copyingId: '', deletingId: '',
+    copyingId: '', deletingId: '', likingId: '', favoritingId: '',
     async init() { injectLayout('histories'); await loadSiteSettings(this); if (await loadUser(this)) await this.loadList(); },
     emptyText(key, fallback = '') { return emptyText(this, key, fallback); },
     appNavText(key, fallback = '') { return appNavText(this, key, fallback); },
@@ -86,12 +86,63 @@ export function historiesPage() {
     conversationHref(c) {
       return `/app/chat.html?conv_id=${encodeURIComponent(c?.id || '')}`;
     },
+    conversationTitle(c) {
+      return c?.app_name || c?.title || this.chatText('unnamed_conversation', '未命名会话');
+    },
+    conversationPreview(c) {
+      return c?.last_message || c?.app_summary || this.chatText('continue_preview', '点击继续对话');
+    },
+    likeLabel(c) {
+      const count = Number(c?.like_count || 0);
+      return `${c?.liked ? '已赞' : '点赞'}${count ? ` ${count}` : ''}`;
+    },
+    favoriteLabel(c) {
+      return c?.favorited ? '已收藏' : '收藏';
+    },
+    patchConversation(id, patch) {
+      const index = this.conversations.findIndex(item => item.id === id);
+      if (index >= 0) this.conversations.splice(index, 1, { ...this.conversations[index], ...patch });
+    },
     async loadList() {
       this.loading = true;
       try {
         const r = await api.conversations();
-        this.conversations = r?.data?.list || [];
+        this.conversations = (r?.data?.list || []).map(item => ({
+          ...item,
+          favorited: !!item.favorited,
+          liked: !!item.liked,
+          like_count: Number(item.like_count || 0),
+        }));
       } finally { this.loading = false; }
+    },
+    async toggleLike(c, event) {
+      if (event) event.preventDefault();
+      if (!c?.app_id || this.likingId) return;
+      this.likingId = c.id;
+      try {
+        const r = await api.toggleLike(c.app_id);
+        this.patchConversation(c.id, {
+          liked: !!r?.data?.liked,
+          like_count: Number(r?.data?.like_count ?? c.like_count ?? 0),
+        });
+      } catch (err) {
+        alert(err.message || '点赞失败');
+      } finally {
+        this.likingId = '';
+      }
+    },
+    async toggleFavorite(c, event) {
+      if (event) event.preventDefault();
+      if (!c?.app_id || this.favoritingId) return;
+      this.favoritingId = c.id;
+      try {
+        const r = await api.toggleFavorite(c.app_id);
+        this.patchConversation(c.id, { favorited: !!r?.data?.favorited });
+      } catch (err) {
+        alert(err.message || '收藏失败');
+      } finally {
+        this.favoritingId = '';
+      }
     },
     async copyConversation(c, event) {
       if (event) event.preventDefault();

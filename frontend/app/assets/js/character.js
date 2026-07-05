@@ -16,8 +16,14 @@ const FIELD_LABELS = {
   height: '身高',
   relationship: '关系',
   description: '角色介绍',
+  profile: '角色介绍',
   personality: '性格',
   scenario: '场景',
+  background: '背景',
+  setting: '设定',
+  appearance: '外貌',
+  likes: '喜好',
+  dislikes: '雷点',
   first_mes: '开场白',
   greeting: '开场白',
   mes_example: '对话示例',
@@ -38,6 +44,14 @@ function tryParseJsonLike(text) {
   try { return JSON.parse(value); } catch { return null; }
 }
 
+function looksStructuredNoise(text) {
+  const value = stripJsonFence(text);
+  if (!value) return false;
+  if (tryParseJsonLike(value)) return true;
+  if (/^\s*[\[{]/.test(value) && value.length > 60) return true;
+  return /(^|[\n,{])\s*["']?(name_romaji|first_mes|mes_example|scenario|personality|character_book|extensions|creator_notes|alternate_greetings)["']?\s*:/i.test(value);
+}
+
 function valueToText(value) {
   if (value == null || value === '') return '';
   if (Array.isArray(value)) {
@@ -50,7 +64,7 @@ function valueToText(value) {
       .map(([k, v]) => `${FIELD_LABELS[k] || k}：${valueToText(v)}`);
     return pairs.join('\n');
   }
-  return String(value).trim();
+  return String(value).replace(/\uFFFD/g, '').trim();
 }
 
 function compactText(value, limit = 160) {
@@ -97,7 +111,7 @@ function structuredDetail(rawText) {
   if (extraItems.length) sections.push({ title: '其他信息', items: extraItems });
 
   const summarySource = valueToText(source.description || source.profile || source.summary)
-    || basics.map(item => `${item.label}：${item.value}`).join('，')
+    || basics.filter(item => item.key !== 'name_romaji').map(item => `${item.label}：${item.value}`).join('，')
     || raw;
   return {
     structured: sections.length > 0,
@@ -110,14 +124,17 @@ function structuredDetail(rawText) {
 
 function normalizeCard(raw) {
   const data = raw?.data || raw || {};
+  const summary = data.summary || data.intro || '';
   const description = data.description || data.prompt || '';
   const opening = data.opening_statement || data.opening || '';
+  const summaryDetail = structuredDetail(summary);
   const descriptionDetail = structuredDetail(description);
   const openingDetail = structuredDetail(opening);
   return {
     id: String(data.id || data.app_id || ''),
     name: data.name || data.app_name || data.title || '',
-    summary: data.summary || data.intro || '',
+    summary,
+    summary_detail: summaryDetail,
     description,
     description_detail: descriptionDetail,
     opening_statement: opening,
@@ -126,6 +143,9 @@ function normalizeCard(raw) {
     icon: data.icon || data.icon_url || data.avatar || '',
     tags: Array.isArray(data.tags) ? data.tags : [],
     source: data.source || 'upstream',
+    favorited: !!data.favorited,
+    liked: !!data.liked,
+    like_count: Number(data.like_count || 0),
   };
 }
 
@@ -177,9 +197,48 @@ function characterPage() {
       return this.siteSettings?.character?.[key] || fallback;
     },
 
+    likeLabel() {
+      const count = Number(this.card?.like_count || 0);
+      return `${this.card?.liked ? '已赞' : '点赞'}${count ? ` ${count}` : ''}`;
+    },
+
+    favoriteLabel() {
+      return this.card?.favorited ? '已收藏' : '收藏';
+    },
+
+    async toggleLike(event) {
+      if (event) event.preventDefault();
+      if (!this.card?.id) return;
+      const r = await api.toggleLike(this.card.id);
+      this.card = {
+        ...this.card,
+        liked: !!r?.data?.liked,
+        like_count: Number(r?.data?.like_count ?? this.card.like_count ?? 0),
+      };
+    },
+
+    async toggleFavorite(event) {
+      if (event) event.preventDefault();
+      if (!this.card?.id) return;
+      const r = await api.toggleFavorite(this.card.id);
+      this.card = { ...this.card, favorited: !!r?.data?.favorited };
+    },
+
     cardSummary() {
       if (!this.card) return '';
-      return this.card.summary || this.card.description_detail?.summary || this.card.opening_detail?.summary || this.characterText('summary_fallback', '点击开始对话。');
+      const parsedSummary = this.card.summary_detail?.structured ? this.card.summary_detail.summary : '';
+      const plainSummary = looksStructuredNoise(this.card.summary) ? '' : compactText(this.card.summary);
+      const descriptionSummary = this.card.description_detail?.structured || !looksStructuredNoise(this.card.description)
+        ? this.card.description_detail?.summary
+        : '';
+      const openingSummary = this.card.opening_detail?.structured || !looksStructuredNoise(this.card.opening_statement)
+        ? this.card.opening_detail?.summary
+        : '';
+      return parsedSummary
+        || descriptionSummary
+        || plainSummary
+        || openingSummary
+        || this.characterText('summary_fallback', '点击开始对话。');
     },
   };
 }

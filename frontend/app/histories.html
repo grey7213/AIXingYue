@@ -7,8 +7,8 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
   <link rel="icon" href="/favicon.ico">
   <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260703-fengyue-home3">
-  <script type="module" src="/app/assets/js/hub-pages.js?v=20260705-history-actions"></script>
+  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260705-history-like-fav">
+  <script type="module" src="/app/assets/js/hub-pages.js?v=20260705-history-like-fav"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
@@ -27,15 +27,17 @@
             </div>
           </template>
           <template x-for="c in conversations" :key="c.id">
-            <div class="list-row">
-              <a class="flex items-center gap-4 min-w-0 flex-1 text-inherit no-underline" :href="conversationHref(c)">
+            <div class="list-row history-row">
+              <a class="history-row__main flex items-center gap-4 min-w-0 text-inherit no-underline" :href="conversationHref(c)">
                 <img :src="c.app_icon || '/assets/img/apk/avatar.webp'" alt="" onerror="this.src='/assets/img/apk/avatar.webp'">
                 <div class="min-w-0">
-                  <div class="title truncate" x-text="c.app_name || c.title || chatText('unnamed_conversation', '未命名会话')"></div>
-                  <div class="meta truncate" x-text="c.last_message || chatText('continue_preview', '点击继续对话')"></div>
+                  <div class="title truncate" x-text="conversationTitle(c)"></div>
+                  <div class="meta truncate" x-text="conversationPreview(c)"></div>
                 </div>
               </a>
               <div class="row-actions flex-wrap justify-end">
+                <button type="button" class="xy-btn xy-btn-ghost text-xs" :class="{ 'is-active': c.liked }" @click="toggleLike(c, $event)" :disabled="likingId === c.id" x-text="likingId === c.id ? '处理中' : likeLabel(c)">点赞</button>
+                <button type="button" class="xy-btn xy-btn-ghost text-xs" :class="{ 'is-active': c.favorited }" @click="toggleFavorite(c, $event)" :disabled="favoritingId === c.id" x-text="favoritingId === c.id ? '处理中' : favoriteLabel(c)">收藏</button>
                 <a class="xy-btn xy-btn-primary text-xs" :href="conversationHref(c)" x-text="chatText('continue_button_text', '继续')">继续</a>
                 <button type="button" class="xy-btn xy-btn-ghost text-xs" @click="copyConversation(c, $event)" :disabled="copyingId === c.id" x-text="copyingId === c.id ? chatText('copying_text', '复制中') : chatText('copy_text', '复制')">复制</button>
                 <button type="button" class="xy-btn xy-btn-ghost text-xs text-red-200" @click="deleteConversation(c, $event)" :disabled="deletingId === c.id" x-text="deletingId === c.id ? chatText('deleting_text', '删除中') : chatText('delete_text', '删除')">删除</button>

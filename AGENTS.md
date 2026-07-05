@@ -423,3 +423,8 @@
   Cause: 原消息操作只有 `deleteMessage()`，后端 `/console/api/web/messages/{id}/delete` 只删除该单条消息，不会删除后续上下文。
   Fix: 保留“删除”为单条删除；新增“回溯”按钮和 `/console/api/web/messages/{id}/rollback`，删除目标消息及其后的同会话消息，刷新会话 `last_message` 并清理摘要。
   Verify: 2026-07-05 本地 Store 验证和线上真实 API 验证均返回 `deleted_count=2`、`remaining_count=2`、`summary_cleared=true`；移动端 Playwright 验证气泡全宽、回溯按钮可见、点击回溯后后续消息消失且 console error 为 0。
+
+- Symptom: 历史会话列表只显示头像和按钮，标题/预览像是消失了。
+  Cause: `.list-row` 是三列 grid，但历史页把头像和文字一起包进第一个 `<a>` 子元素，链接默认只占第一列头像宽度，文字被挤压截断。
+  Fix: 给历史主链接加 `.history-row__main`，桌面跨 `grid-column: 1 / 3`，移动端跨整行；操作按钮保留在独立 actions 区。
+  Verify: 2026-07-05 Playwright 移动端验证历史标题为 `桐生莉音中文摘要验证`、预览为 `历史页应该显示这条预览`，点赞/收藏/继续/复制/删除按钮均可见且 console/page error 为 0。
