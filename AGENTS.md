@@ -418,3 +418,8 @@
   Cause: 历史页旧链接只带 `app_id`，聊天页会按角色选择最新会话；同一角色存在多条历史时，点击指定历史行可能打开另一条最新会话。
   Fix: 历史页继续/复制后跳转统一使用 `/app/chat.html?conv_id=...`，`chat.js` 优先按 `conv_id` 加载会话；后端提供 `/console/api/web/conversations/{id}/copy` 复制消息、swipes、摘要和会话变量。
   Verify: 2026-07-05 线上临时用户 API 验证复制/删除成功；Playwright 验证历史页所有继续链接包含 `conv_id`，复制后跳到新的 `conv_id`，历史页复制行显示删除按钮。
+
+- Symptom: 用户不确定聊天消息下方“删除”是单条删除还是上下文回溯。
+  Cause: 原消息操作只有 `deleteMessage()`，后端 `/console/api/web/messages/{id}/delete` 只删除该单条消息，不会删除后续上下文。
+  Fix: 保留“删除”为单条删除；新增“回溯”按钮和 `/console/api/web/messages/{id}/rollback`，删除目标消息及其后的同会话消息，刷新会话 `last_message` 并清理摘要。
+  Verify: 2026-07-05 本地 Store 验证和线上真实 API 验证均返回 `deleted_count=2`、`remaining_count=2`、`summary_cleared=true`；移动端 Playwright 验证气泡全宽、回溯按钮可见、点击回溯后后续消息消失且 console error 为 0。

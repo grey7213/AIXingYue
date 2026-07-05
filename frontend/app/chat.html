@@ -707,9 +707,26 @@
       gap: 14px;
       background: var(--fy-bg);
     }
+    .msg-row {
+      width: 100%;
+      max-width: 100%;
+    }
+    .msg-row.user,
+    .msg-row.assistant {
+      align-self: stretch;
+    }
+    .msg-row .bubble,
     .bubble {
+      width: 100%;
+      max-width: 100%;
+      box-sizing: border-box;
       border-radius: 16px;
       box-shadow: none;
+    }
+    .msg-row.has-advanced-render,
+    .msg-row.has-status-panel {
+      width: 100%;
+      max-width: 100%;
     }
     .bubble.user {
       background: var(--fy-accent-2);
@@ -743,12 +760,16 @@
     }
 
     .chat-input {
+      width: 100%;
+      box-sizing: border-box;
       border-top: 1px solid var(--fy-border);
       background: var(--fy-panel);
       backdrop-filter: none;
       -webkit-backdrop-filter: none;
     }
     .chat-input textarea {
+      min-width: 0;
+      flex: 1 1 0;
       background: var(--fy-panel-2);
       border: 1px solid var(--fy-border);
       color: var(--fy-text);
@@ -817,12 +838,15 @@
       .chat-window { min-height: calc(100vh - 72px); }
       .chat-window__hero { height: 148px; }
       .chat-messages { padding: 16px 14px 138px; }
-      .bubble { max-width: 88%; }
+      .msg-row,
+      .msg-row.has-advanced-render,
+      .msg-row.has-status-panel,
+      .bubble { width: 100%; max-width: 100%; }
       .chat-input { bottom: 66px; padding: 10px 12px; }
       .quick-replies { bottom: 176px; }
     }
   </style>
-  <script type="module" src="/app/assets/js/chat.js?v=20260705-history-conv-id"></script>
+  <script type="module" src="/app/assets/js/chat.js?v=20260705-fullwidth-rollback"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
@@ -1014,6 +1038,10 @@
                     <span x-text="chatText('speak_text', '朗读')"></span>
                   </button>
                 </template>
+                <button class="msg-act" @click="rollbackMessage(m)" :title="chatText('rollback_text', '回溯')">
+                  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v6h6M21 17a9 9 0 00-15-6l-3 3"/></svg>
+                  <span x-text="chatText('rollback_text', '回溯')"></span>
+                </button>
                 <button class="msg-act" @click="deleteMessage(m)" :title="chatText('delete_text', '删除')">
                   <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
                   <span x-text="chatText('delete_text', '删除')"></span>

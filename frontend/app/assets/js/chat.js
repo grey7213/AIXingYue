@@ -1612,8 +1612,32 @@ function chatPage() {
         await api.deleteMessage(m.id);
         const idx = this.messages.findIndex(x => x.id === m.id);
         if (idx >= 0) this.messages.splice(idx, 1);
+        this.messageTotal = Math.max(0, this.messageTotal - 1);
+        await this.loadConversations();
       } catch (err) {
         alert(err.message || this.chatText('delete_failed_text', '删除失败'));
+      }
+    },
+
+    async rollbackMessage(m) {
+      if (!m?.id || this.replying) return;
+      if (!confirm(this.chatText('rollback_message_confirm', '回溯到这条消息？这条及之后的消息将从上下文中移除。'))) return;
+      try {
+        const idx = this.messages.findIndex(x => x.id === m.id);
+        const r = await api.rollbackMessage(m.id);
+        const data = r?.data || r || {};
+        if (idx >= 0) this.messages.splice(idx);
+        if (data.conversation) this.conversation = { ...this.conversation, ...data.conversation };
+        const remaining = parseInt(data.remaining_count ?? this.messages.length, 10);
+        this.messageTotal = Number.isNaN(remaining) ? this.messages.length : remaining;
+        this.hasOlderMessages = this.messages.length < this.messageTotal;
+        this.summary = null;
+        this.summaryDraft = '';
+        this.cancelEdit();
+        await this.loadConversations();
+        if (this.memoryOpen) await this.loadMemoryContext();
+      } catch (err) {
+        alert(err.message || this.chatText('rollback_failed_text', '回溯失败'));
       }
     },
 

@@ -659,6 +659,7 @@ def site_settings_defaults() -> dict:
             "regenerate_text": "重新生成",
             "edit_text": "编辑",
             "speak_text": "朗读",
+            "rollback_text": "回溯",
             "swipe_prev_title": "上一个",
             "swipe_next_title": "下一个 / 生成新回复",
             "current_model_label": "当前模型",
@@ -672,6 +673,8 @@ def site_settings_defaults() -> dict:
             "delete_memory_confirm": "删除这条记忆？",
             "delete_message_confirm": "删除这条消息？",
             "delete_failed_text": "删除失败",
+            "rollback_message_confirm": "回溯到这条消息？这条及之后的消息将从上下文中移除。",
+            "rollback_failed_text": "回溯失败",
             "save_memory_failed_text": "保存记忆失败",
             "delete_memory_failed_text": "删除记忆失败",
             "unsupported_speak_text": "当前浏览器不支持朗读",
@@ -1375,6 +1378,7 @@ def sanitize_site_settings(data: dict | None) -> dict:
             "regenerate_text": 40,
             "edit_text": 30,
             "speak_text": 30,
+            "rollback_text": 30,
             "swipe_prev_title": 40,
             "swipe_next_title": 80,
             "current_model_label": 40,
@@ -1388,6 +1392,8 @@ def sanitize_site_settings(data: dict | None) -> dict:
             "delete_memory_confirm": 120,
             "delete_message_confirm": 120,
             "delete_failed_text": 80,
+            "rollback_message_confirm": 180,
+            "rollback_failed_text": 80,
             "save_memory_failed_text": 80,
             "delete_memory_failed_text": 80,
             "unsupported_speak_text": 100,
@@ -3093,13 +3099,78 @@ class Store:
             self.conn.commit()
             return self.get_message(message_id, user_id)
 
+    def _refresh_conversation_snapshot(self, conv_id: str, user_id: str, ts: int | None = None) -> dict | None:
+        last = self.conn.execute(
+            "select * from messages where conversation_id=? and user_id=? order by created_at desc, rowid desc limit 1",
+            (conv_id, user_id),
+        ).fetchone()
+        last_message = (last["content"] if last else "") or ""
+        self.conn.execute(
+            "update conversations set last_message=?, updated_at=? where id=? and user_id=?",
+            (last_message[:120], int(ts or now_ms()), conv_id, user_id),
+        )
+        conv = self.conn.execute(
+            "select * from conversations where id=? and user_id=?", (conv_id, user_id),
+        ).fetchone()
+        return dict(conv) if conv else None
+
     def delete_message(self, message_id: str, user_id: str) -> bool:
         with self.lock:
+            row = self.conn.execute(
+                "select conversation_id from messages where id=? and user_id=?",
+                (message_id, user_id),
+            ).fetchone()
+            if not row:
+                return False
+            conv_id = row["conversation_id"]
             cur = self.conn.execute(
                 "delete from messages where id=? and user_id=?", (message_id, user_id),
             )
+            if cur.rowcount > 0:
+                self.conn.execute(
+                    "delete from conversation_summaries where conversation_id=? and user_id=?",
+                    (conv_id, user_id),
+                )
+                self._refresh_conversation_snapshot(conv_id, user_id)
             self.conn.commit()
             return cur.rowcount > 0
+
+    def rollback_conversation_to_message(self, message_id: str, user_id: str) -> dict | None:
+        with self.lock:
+            row = self.conn.execute(
+                "select rowid as _rowid, * from messages where id=? and user_id=?",
+                (message_id, user_id),
+            ).fetchone()
+            if not row:
+                return None
+            conv_id = row["conversation_id"]
+            created_at = int(row["created_at"] or 0)
+            rowid = int(row["_rowid"] or 0)
+            cur = self.conn.execute(
+                """
+                delete from messages
+                where conversation_id=? and user_id=?
+                  and (created_at > ? or (created_at = ? and rowid >= ?))
+                """,
+                (conv_id, user_id, created_at, created_at, rowid),
+            )
+            self.conn.execute(
+                "delete from conversation_summaries where conversation_id=? and user_id=?",
+                (conv_id, user_id),
+            )
+            conversation = self._refresh_conversation_snapshot(conv_id, user_id)
+            count_row = self.conn.execute(
+                "select count(*) as c from messages where conversation_id=? and user_id=?",
+                (conv_id, user_id),
+            ).fetchone()
+            self.conn.commit()
+            return {
+                "message_id": message_id,
+                "conversation_id": conv_id,
+                "deleted_count": int(cur.rowcount or 0),
+                "remaining_count": int(count_row["c"] if count_row else 0),
+                "conversation": conversation,
+            }
 
     def delete_conversation(self, conv_id: str, user_id: str) -> bool:
         with self.lock:
@@ -10352,6 +10423,14 @@ class Handler(BaseHTTPRequestHandler):
             message_id = parts[4] if len(parts) >= 5 else ""
             ok = self.store.delete_message(message_id, user["id"])
             return ok_response({"deleted": ok})
+
+        if normalized.startswith("console/api/web/messages/") and normalized.endswith("/rollback"):
+            parts = normalized.split("/")
+            message_id = parts[4] if len(parts) >= 5 else ""
+            result = self.store.rollback_conversation_to_message(message_id, user["id"])
+            if not result:
+                return error_response("message not found", 404)
+            return ok_response(result)
 
         # User persona (the {{user}} the model role-plays opposite)
         if normalized == "console/api/web/persona":

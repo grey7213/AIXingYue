@@ -143,6 +143,7 @@ export const api = {
   regenerate: (convId, modelId = '') => rawRequest('/console/api/web/regenerate', { method: 'POST', body: { conversation_id: convId, model_id: modelId || '' } }),
   swipeMessage: (messageId, dir, modelId = '') => rawRequest(`/console/api/web/messages/${encodeURIComponent(messageId)}/swipe`, { method: 'POST', body: { dir, model_id: modelId || '' } }),
   editMessage: (messageId, content) => rawRequest(`/console/api/web/messages/${encodeURIComponent(messageId)}/edit`, { method: 'POST', body: { content } }),
+  rollbackMessage: (messageId) => rawRequest(`/console/api/web/messages/${encodeURIComponent(messageId)}/rollback`, { method: 'POST', body: {} }),
   deleteMessage: (messageId) => rawRequest(`/console/api/web/messages/${encodeURIComponent(messageId)}/delete`, { method: 'POST', body: {} }),
   // 群聊
   groupChats: () => rawRequest('/console/api/web/group-chats'),
