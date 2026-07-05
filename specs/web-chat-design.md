@@ -46,7 +46,9 @@
 - `login.html` 保持现状。
 - `explore.html`：移动优先发现流，桌面保留侧栏，移动端使用底部导航。
 - `character.html`：新增角色详情页，作为探索页到聊天页之间的确认层。
+- `character.html`：对 JSON/Character Card 风格设定做可读化渲染，优先抽取姓名、年龄、性别、学校/身份、描述等常见字段，避免移动端直接显示一整段原始 JSON。
 - `chat.html`：桌面双栏，移动端聚焦单会话输入。
+- `histories.html`：历史会话列表支持继续、复制和删除；复制会话在服务端克隆 conversation/messages/summary，删除调用已有会话删除接口。
 - `create.html`：普通用户只填写角色设定，不暴露 API key。
 - `my-apps.html`：编辑/删除我的角色。
 - `me.html`：个人信息、积分、充值、账号共享说明。

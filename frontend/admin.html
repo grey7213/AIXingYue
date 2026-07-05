@@ -9,7 +9,7 @@
   <link rel="apple-touch-icon" sizes="180x180" href="/assets/img/apple-touch-icon.png">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="/assets/css/custom.css?v=20260703-fengyue-ui2">
-  <script type="module" src="/assets/js/admin-app.js?v=20260627-billing-logo"></script>
+  <script type="module" src="/assets/js/admin-app.js?v=20260705-global-prompt"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
@@ -652,6 +652,86 @@
                       </label>
                     </div>
                   </template>
+                </div>
+                <div class="rounded-xl border border-emerald-300/15 bg-emerald-400/5 p-4 space-y-4">
+                  <div class="flex items-start justify-between gap-3 flex-wrap">
+                    <div>
+                      <h3 class="font-semibold text-white">全局提示词预设</h3>
+                      <p class="text-xs text-slate-400 mt-1">应用到所有角色卡，不修改角色卡本身。支持粘贴 SillyTavern preset JSON 后按 prompt_order 解析。</p>
+                    </div>
+                    <label class="flex items-center gap-2 text-sm text-slate-200">
+                      <input type="checkbox" x-model="llmForm.global_prompt_preset.enabled" class="accent-emerald-500">
+                      启用全局预设
+                    </label>
+                  </div>
+                  <div class="grid md:grid-cols-2 gap-3">
+                    <div>
+                      <label class="xy-label">预设名称</label>
+                      <input class="xy-input" x-model="llmForm.global_prompt_preset.name" placeholder="例如：Tavo v3.51">
+                    </div>
+                    <div>
+                      <label class="xy-label">来源</label>
+                      <input class="xy-input" x-model="llmForm.global_prompt_preset.source" placeholder="sillytavern / manual">
+                    </div>
+                  </div>
+                  <div class="grid lg:grid-cols-[1fr_220px] gap-3">
+                    <div>
+                      <label class="xy-label">导入 SillyTavern 预设 JSON</label>
+                      <textarea class="xy-input text-xs" style="min-height:130px" x-model="globalPromptImportRaw" placeholder="{&quot;prompts&quot;:[...],&quot;prompt_order&quot;:[...]}"></textarea>
+                    </div>
+                    <div class="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-slate-400 space-y-2">
+                      <div class="flex justify-between"><span>总块数</span><span class="text-white" x-text="globalPromptStats().total"></span></div>
+                      <div class="flex justify-between"><span>启用块</span><span class="text-emerald-300" x-text="globalPromptStats().enabled"></span></div>
+                      <div class="flex justify-between"><span>System 前置</span><span x-text="globalPromptStats().before"></span></div>
+                      <div class="flex justify-between"><span>System 后置</span><span x-text="globalPromptStats().after"></span></div>
+                      <div class="flex justify-between"><span>历史后</span><span x-text="globalPromptStats().post"></span></div>
+                      <button type="button" class="xy-btn xy-btn-primary text-xs w-full mt-2" @click="importGlobalPromptPreset">解析导入</button>
+                      <button type="button" class="xy-btn xy-btn-ghost text-xs w-full" @click="addGlobalPromptBlock('system_before')">手动添加块</button>
+                    </div>
+                  </div>
+                  <template x-if="llmForm.global_prompt_preset.blocks.length === 0">
+                    <div class="rounded-lg border border-white/10 bg-black/20 p-4 text-sm text-slate-400">还没有全局提示词块。粘贴预设 JSON 后点击“解析导入”，或手动添加。</div>
+                  </template>
+                  <div class="space-y-3 max-h-[560px] overflow-y-auto pr-1">
+                    <template x-for="(block, idx) in llmForm.global_prompt_preset.blocks" :key="block.id">
+                      <div class="rounded-lg border border-white/10 bg-black/20 p-3 space-y-3">
+                        <div class="flex items-center justify-between gap-3 flex-wrap">
+                          <label class="flex items-center gap-2 text-xs text-slate-300">
+                            <input type="checkbox" x-model="block.enabled" class="accent-emerald-500">
+                            启用
+                          </label>
+                          <button type="button" class="text-red-300 hover:text-red-200 text-xs" @click="removeGlobalPromptBlock(idx)">删除块</button>
+                        </div>
+                        <div class="grid md:grid-cols-[1fr_150px_130px_100px] gap-3">
+                          <div>
+                            <label class="xy-label">名称</label>
+                            <input class="xy-input text-sm" x-model="block.name">
+                          </div>
+                          <div>
+                            <label class="xy-label">位置</label>
+                            <select class="xy-input text-sm" x-model="block.position">
+                              <option value="system_before">System 前置</option>
+                              <option value="system_after">System 后置</option>
+                              <option value="post_history">历史后</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label class="xy-label">Role</label>
+                            <select class="xy-input text-sm" x-model="block.role">
+                              <option value="system">system</option>
+                              <option value="user">user</option>
+                              <option value="assistant">assistant</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label class="xy-label">顺序</label>
+                            <input type="number" class="xy-input text-sm" x-model.number="block.order">
+                          </div>
+                        </div>
+                        <textarea class="xy-input text-xs" style="min-height:110px" x-model="block.content" placeholder="提示词内容，支持 {{char}} / {{user}} 和模板语法"></textarea>
+                      </div>
+                    </template>
+                  </div>
                 </div>
                 <div class="rounded-lg border border-cyan-300/15 bg-cyan-400/5 p-3 text-xs text-slate-400 leading-relaxed">
                   用户创建角色时只能选择已启用的模型预设。API Key 只保存在服务端，不会下发给用户浏览器。

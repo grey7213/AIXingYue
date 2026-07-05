@@ -614,7 +614,9 @@ function adminPanel() {
       clear_api_key: false,
       default_model_preset_id: 'default',
       presets: [],
+      global_prompt_preset: { enabled: false, name: '全局提示词预设', source: 'manual', blocks: [], stats: {} },
     },
+    globalPromptImportRaw: '',
 
     apps: [],
     appTotal: 0,
@@ -1031,6 +1033,167 @@ function adminPanel() {
       this.siteForm?.deposit?.subscriptions?.splice(index, 1);
     },
 
+    emptyGlobalPromptPreset() {
+      return { enabled: false, name: '全局提示词预设', source: 'manual', blocks: [], stats: {} };
+    },
+
+    normalizeGlobalPromptBlocks(value) {
+      const allowedPositions = new Set(['system_before', 'system_after', 'post_history']);
+      const allowedRoles = new Set(['system', 'user', 'assistant']);
+      const seen = new Set();
+      return (Array.isArray(value) ? value : [])
+        .map((raw, idx) => {
+          const content = String(raw?.content || '').trim();
+          if (!content) return null;
+          let id = String(raw?.id || raw?.identifier || `global-prompt-${idx + 1}`).replace(/[^A-Za-z0-9_.:-]+/g, '-').replace(/^-+|-+$/g, '');
+          if (!id) id = `global-prompt-${idx + 1}`;
+          if (seen.has(id)) id = `${id}-${idx + 1}`;
+          seen.add(id);
+          let position = String(raw?.position || 'system_before');
+          if (!allowedPositions.has(position)) position = 'system_before';
+          let role = String(raw?.role || 'system').toLowerCase();
+          if (!allowedRoles.has(role)) role = 'system';
+          const order = Number.isFinite(Number(raw?.order)) ? Math.max(0, Math.min(9999, Number(raw.order))) : idx + 1;
+          return {
+            id,
+            name: String(raw?.name || `全局提示词 ${idx + 1}`).slice(0, 120),
+            position,
+            role,
+            order,
+            enabled: raw?.enabled !== false && !['0', 'false', 'no', 'off', 'disabled'].includes(String(raw?.enabled ?? 'true').toLowerCase()),
+            content: content.slice(0, 16000),
+          };
+        })
+        .filter(Boolean)
+        .sort((a, b) => String(a.position).localeCompare(String(b.position)) || Number(a.order) - Number(b.order));
+    },
+
+    sillyPresetToGlobalPrompt(data) {
+      const prompts = Array.isArray(data?.prompts) ? data.prompts : [];
+      const byId = Object.fromEntries(prompts.map(p => [String(p?.identifier || p?.id || ''), p]).filter(([id]) => id));
+      let orderItems = [];
+      if (Array.isArray(data?.prompt_order) && data.prompt_order[0]?.order) orderItems = data.prompt_order[0].order;
+      if (!orderItems.length) {
+        orderItems = prompts.map(p => ({ identifier: p?.identifier || p?.id, enabled: p?.enabled !== false }));
+      }
+      let afterHistory = false;
+      let markerCount = 0;
+      let enabledCount = 0;
+      const blocks = [];
+      for (const item of orderItems) {
+        const ident = String(item?.identifier || item?.id || '').trim();
+        if (!ident) continue;
+        const prompt = byId[ident] || {};
+        const enabled = item?.enabled ?? prompt?.enabled ?? true;
+        if (enabled === false || ['0', 'false', 'no', 'off', 'disabled'].includes(String(enabled).toLowerCase())) continue;
+        enabledCount += 1;
+        const content = String(prompt?.content || '').trim();
+        const isMarker = !!prompt?.marker || (!content && !!prompt?.system_prompt);
+        if (ident === 'chatHistory') afterHistory = true;
+        if (isMarker || !content) {
+          markerCount += 1;
+          continue;
+        }
+        blocks.push({
+          id: ident,
+          name: String(prompt?.name || ident),
+          position: afterHistory ? 'post_history' : 'system_before',
+          role: String(prompt?.role || 'system').toLowerCase(),
+          order: blocks.length + 1,
+          enabled: true,
+          content,
+        });
+      }
+      return {
+        enabled: true,
+        name: String(data?.name || data?.preset_name || 'SillyTavern 全局预设').slice(0, 120),
+        source: 'sillytavern',
+        blocks: this.normalizeGlobalPromptBlocks(blocks),
+        stats: {
+          source_prompt_count: prompts.length,
+          enabled_prompt_count: enabledCount,
+          marker_count: markerCount,
+          block_count: blocks.length,
+        },
+      };
+    },
+
+    normalizeGlobalPromptPreset(data) {
+      if (!data || typeof data !== 'object') return this.emptyGlobalPromptPreset();
+      if (Array.isArray(data.prompts)) return this.sillyPresetToGlobalPrompt(data);
+      const preset = {
+        enabled: !!data.enabled,
+        name: String(data.name || '全局提示词预设').slice(0, 120),
+        source: String(data.source || 'manual').slice(0, 40),
+        blocks: this.normalizeGlobalPromptBlocks(data.blocks || []),
+        stats: data.stats && typeof data.stats === 'object' ? { ...data.stats } : {},
+      };
+      preset.stats.block_count = preset.blocks.length;
+      preset.stats.enabled_block_count = preset.blocks.filter(b => b.enabled !== false).length;
+      preset.stats.system_before = preset.blocks.filter(b => b.position === 'system_before').length;
+      preset.stats.system_after = preset.blocks.filter(b => b.position === 'system_after').length;
+      preset.stats.post_history = preset.blocks.filter(b => b.position === 'post_history').length;
+      return preset;
+    },
+
+    importGlobalPromptPreset() {
+      const raw = String(this.globalPromptImportRaw || '').trim();
+      if (!raw) {
+        this.showToast('请先粘贴 SillyTavern 预设 JSON', 'error');
+        return;
+      }
+      try {
+        const parsed = JSON.parse(raw);
+        this.llmForm.global_prompt_preset = this.normalizeGlobalPromptPreset(parsed);
+        this.showToast(`已导入 ${this.llmForm.global_prompt_preset.blocks.length} 个全局提示词块`, 'success');
+      } catch (err) {
+        this.showToast('JSON 解析失败，请检查文件内容', 'error');
+      }
+    },
+
+    addGlobalPromptBlock(position = 'system_before') {
+      if (!this.llmForm.global_prompt_preset) this.llmForm.global_prompt_preset = this.emptyGlobalPromptPreset();
+      const next = this.llmForm.global_prompt_preset.blocks.length + 1;
+      this.llmForm.global_prompt_preset.blocks.push({
+        id: `global-prompt-${Date.now().toString(36)}-${next}`,
+        name: `全局提示词 ${next}`,
+        position,
+        role: 'system',
+        order: next,
+        enabled: true,
+        content: '',
+      });
+    },
+
+    removeGlobalPromptBlock(index) {
+      this.llmForm.global_prompt_preset?.blocks?.splice(index, 1);
+    },
+
+    globalPromptBlocks(position = '') {
+      const blocks = this.llmForm.global_prompt_preset?.blocks || [];
+      return position ? blocks.filter(block => block.position === position) : blocks;
+    },
+
+    globalPromptStats() {
+      const blocks = this.llmForm.global_prompt_preset?.blocks || [];
+      return {
+        total: blocks.length,
+        enabled: blocks.filter(block => block.enabled !== false).length,
+        before: blocks.filter(block => block.position === 'system_before').length,
+        after: blocks.filter(block => block.position === 'system_after').length,
+        post: blocks.filter(block => block.position === 'post_history').length,
+      };
+    },
+
+    serializeGlobalPromptPreset() {
+      const current = this.llmForm.global_prompt_preset || this.emptyGlobalPromptPreset();
+      const clean = this.normalizeGlobalPromptPreset(current);
+      clean.enabled = !!current.enabled;
+      clean.name = String(current.name || clean.name || '全局提示词预设').trim();
+      clean.source = String(current.source || clean.source || 'manual').trim();
+      return clean;
+    },
+
     async loadLlmSettings() {
       this.loading = true;
       try {
@@ -1072,7 +1235,9 @@ function adminPanel() {
           clear_api_key: false,
           default_model_preset_id: data.default_model_preset_id || presets[0]?.id || 'default',
           presets,
+          global_prompt_preset: this.normalizeGlobalPromptPreset(data.global_prompt_preset || {}),
         };
+        this.globalPromptImportRaw = '';
       } catch (err) {
         this.showToast(err.message || '加载模型配置失败', 'error');
       } finally { this.loading = false; }
@@ -1088,6 +1253,7 @@ function adminPanel() {
           temperature: Number(this.llmForm.temperature || 0.8),
           clear_api_key: !!this.llmForm.clear_api_key,
           default_model_preset_id: this.llmForm.default_model_preset_id,
+          global_prompt_preset: this.serializeGlobalPromptPreset(),
           presets: this.llmForm.presets.map(p => ({
             id: String(p.id || '').trim(),
             name: String(p.name || '').trim(),
@@ -1116,6 +1282,7 @@ function adminPanel() {
         }
         const r = await api.admin.saveLlmSettings(payload);
         this.llmSettings = r.data || r;
+        this.llmForm.global_prompt_preset = this.normalizeGlobalPromptPreset(this.llmSettings.global_prompt_preset || payload.global_prompt_preset);
         this.llmForm.api_key = '';
         this.llmForm.clear_api_key = false;
         this.showToast('模型配置已保存', 'success');

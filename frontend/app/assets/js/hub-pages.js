@@ -78,16 +78,49 @@ export function favoritesPage() {
 export function historiesPage() {
   return {
     user: null, points: 0, loading: false, conversations: [], siteSettings: null,
+    copyingId: '', deletingId: '',
     async init() { injectLayout('histories'); await loadSiteSettings(this); if (await loadUser(this)) await this.loadList(); },
     emptyText(key, fallback = '') { return emptyText(this, key, fallback); },
     appNavText(key, fallback = '') { return appNavText(this, key, fallback); },
     chatText(key, fallback = '') { return chatText(this, key, fallback); },
+    conversationHref(c) {
+      return `/app/chat.html?conv_id=${encodeURIComponent(c?.id || '')}`;
+    },
     async loadList() {
       this.loading = true;
       try {
         const r = await api.conversations();
         this.conversations = r?.data?.list || [];
       } finally { this.loading = false; }
+    },
+    async copyConversation(c, event) {
+      if (event) event.preventDefault();
+      if (!c?.id || this.copyingId) return;
+      this.copyingId = c.id;
+      try {
+        const r = await api.copyConversation(c.id);
+        const copied = r?.data?.conversation || r?.conversation;
+        await this.loadList();
+        if (copied?.id) location.href = this.conversationHref(copied);
+      } catch (err) {
+        alert(err.message || this.chatText('copy_failed_text', '复制失败'));
+      } finally {
+        this.copyingId = '';
+      }
+    },
+    async deleteConversation(c, event) {
+      if (event) event.preventDefault();
+      if (!c?.id || this.deletingId) return;
+      if (!confirm(this.chatText('delete_conversation_confirm', '删除这个对话？聊天记录将无法恢复。'))) return;
+      this.deletingId = c.id;
+      try {
+        await api.deleteConversation(c.id);
+        this.conversations = this.conversations.filter(item => item.id !== c.id);
+      } catch (err) {
+        alert(err.message || this.chatText('delete_failed_text', '删除失败'));
+      } finally {
+        this.deletingId = '';
+      }
     },
   };
 }

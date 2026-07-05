@@ -60,6 +60,7 @@ LLM_UPSTREAM_USER_AGENT = os.environ.get(
 )
 AIFADIAN_URL = os.environ.get("AIFADIAN_URL", "").strip()
 SITE_SETTINGS_KEY = "site_settings"
+GLOBAL_PROMPT_PRESET_KEY = "global_prompt_preset"
 ACTIVE_STORE = None
 MEDIA_DIR = None  # 在 main() 里根据 --db 推导，默认 <db_dir>/media
 
@@ -3113,6 +3114,98 @@ class Store:
             self.conn.commit()
             return True
 
+    def copy_conversation(self, conv_id: str, user_id: str) -> dict | None:
+        with self.lock:
+            row = self.conn.execute(
+                "select * from conversations where id=? and user_id=?", (conv_id, user_id),
+            ).fetchone()
+            if not row:
+                return None
+            source = dict(row)
+            new_id = str(uuid.uuid4())
+            ts = now_ms()
+            base_title = str(source.get("title") or source.get("app_name") or "对话").strip() or "对话"
+            title = (base_title + " 副本")[:80]
+            self.conn.execute(
+                """
+                insert into conversations(id,user_id,app_id,app_name,app_icon,title,last_message,created_at,updated_at)
+                values(?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    new_id,
+                    user_id,
+                    source.get("app_id") or "",
+                    source.get("app_name") or "",
+                    source.get("app_icon") or "",
+                    title,
+                    source.get("last_message") or "",
+                    ts,
+                    ts,
+                ),
+            )
+            msg_rows = self.conn.execute(
+                "select * from messages where conversation_id=? and user_id=? order by created_at asc",
+                (conv_id, user_id),
+            ).fetchall()
+            for idx, msg_row in enumerate(msg_rows):
+                msg = dict(msg_row)
+                self.conn.execute(
+                    """
+                    insert into messages(id,conversation_id,user_id,role,content,created_at,swipes,swipe_index)
+                    values(?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        str(uuid.uuid4()),
+                        new_id,
+                        user_id,
+                        msg.get("role") or "",
+                        msg.get("content") or "",
+                        ts + idx + 1,
+                        msg.get("swipes"),
+                        int(msg.get("swipe_index") or 0),
+                    ),
+                )
+            summary = self.conn.execute(
+                "select * from conversation_summaries where conversation_id=? and user_id=?",
+                (conv_id, user_id),
+            ).fetchone()
+            if summary:
+                s = dict(summary)
+                self.conn.execute(
+                    """
+                    insert or replace into conversation_summaries(conversation_id,user_id,app_id,summary,message_count,created_at,updated_at)
+                    values(?,?,?,?,?,?,?)
+                    """,
+                    (
+                        new_id,
+                        user_id,
+                        s.get("app_id") or source.get("app_id") or "",
+                        s.get("summary") or "",
+                        int(s.get("message_count") or len(msg_rows)),
+                        ts,
+                        ts,
+                    ),
+                )
+            var_rows = self.conn.execute(
+                """
+                select name,value_json from template_variables
+                where user_id=? and scope='conversation' and scope_id=?
+                """,
+                (user_id, conv_id),
+            ).fetchall()
+            for var_row in var_rows:
+                v = dict(var_row)
+                self.conn.execute(
+                    """
+                    insert or replace into template_variables(user_id,scope,scope_id,name,value_json,updated_at)
+                    values(?,?,?,?,?,?)
+                    """,
+                    (user_id, "conversation", new_id, v.get("name") or "", v.get("value_json") or "null", ts),
+                )
+            self.conn.commit()
+            copied = self.conn.execute("select * from conversations where id=?", (new_id,)).fetchone()
+            return dict(copied) if copied else None
+
     def _memory_to_dict(self, row) -> dict:
         d = dict(row) if row else {}
         raw = d.get("keywords")
@@ -4074,8 +4167,13 @@ class Store:
             default_id = normalized[0]["id"] if normalized else "default"
         return normalized, default_id
 
+    def global_prompt_preset(self) -> dict:
+        saved = self.get_api_settings_raw()
+        return normalize_global_prompt_preset(saved.get(GLOBAL_PROMPT_PRESET_KEY) or "")
+
     def effective_llm_settings(self, app: dict | None = None, user_id: str = "") -> dict:
         presets, default_id = self.llm_presets(include_secrets=True)
+        global_prompt = self.global_prompt_preset()
         enabled = [p for p in presets if p.get("enabled")]
         candidates = enabled or presets
         selected_key = ""
@@ -4096,6 +4194,7 @@ class Store:
                     "preset_id": "user:" + str(selected_user.get("id") or user_preset_id),
                     "preset_name": selected_user.get("name") or selected_user.get("model") or "",
                     "source": "user",
+                    "global_prompt_preset": global_prompt,
                 }
         selected = None
         selected_model = ""
@@ -4126,6 +4225,7 @@ class Store:
             "temperature": float(selected.get("temperature", USER_LLM_TEMPERATURE)),
             "preset_id": selected.get("id") or default_id,
             "preset_name": selected.get("name") or selected.get("model") or "",
+            "global_prompt_preset": global_prompt,
         }
 
     def public_llm_settings(self) -> dict:
@@ -4144,6 +4244,7 @@ class Store:
             "has_api_key": bool(api_key),
             "api_key_preview": preview,
             "source": "database_or_env",
+            "global_prompt_preset": self.global_prompt_preset(),
         }
 
     def public_model_presets(self) -> dict:
@@ -4350,6 +4451,12 @@ class Store:
                 updates["api_key"] = incoming_key
             elif "api_key" in current and normalized_presets is None:
                 updates["api_key"] = current.get("api_key") or ""
+        if "global_prompt_preset" in data:
+            updates[GLOBAL_PROMPT_PRESET_KEY] = json.dumps(
+                normalize_global_prompt_preset(data.get("global_prompt_preset")),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
         ts = now_ms()
         with self.lock:
             for key, value in updates.items():
@@ -6532,6 +6639,175 @@ def normalize_prompt_blocks(value: object) -> list:
     return out
 
 
+def normalize_global_prompt_blocks(value: object) -> list:
+    """Normalize site-wide Prompt Preset blocks saved by admins."""
+    if not isinstance(value, list):
+        return []
+    allowed_positions = {"system_before", "system_after", "post_history"}
+    allowed_roles = {"system", "user", "assistant"}
+    out: list[dict] = []
+    seen_ids: set[str] = set()
+    for idx, raw in enumerate(value[:160]):
+        if not isinstance(raw, dict):
+            continue
+        content = str(raw.get("content") or "").strip()[:16000]
+        if not content:
+            continue
+        block_id = str(raw.get("id") or raw.get("identifier") or f"global-prompt-{idx + 1}")[:120]
+        block_id = re.sub(r"[^A-Za-z0-9_.:-]+", "-", block_id).strip("-") or f"global-prompt-{idx + 1}"
+        if block_id in seen_ids:
+            block_id = f"{block_id}-{idx + 1}"
+        seen_ids.add(block_id)
+        position = str(raw.get("position") or "system_before").strip()
+        if position not in allowed_positions:
+            position = "system_before"
+        role = str(raw.get("role") or "system").strip().lower()
+        if role not in allowed_roles:
+            role = "system"
+        try:
+            order = int(raw.get("order") if raw.get("order") is not None else idx + 1)
+        except Exception:
+            order = idx + 1
+        out.append({
+            "id": block_id,
+            "name": str(raw.get("name") or f"全局提示词 {idx + 1}")[:120],
+            "position": position,
+            "role": role,
+            "order": max(0, min(order, 9999)),
+            "enabled": raw.get("enabled", True) is not False and str(raw.get("enabled", "true")).strip().lower() not in ("0", "false", "no", "off", "disabled"),
+            "content": content,
+        })
+    out.sort(key=lambda item: (item.get("position", ""), item.get("order", 0), item.get("name", "")))
+    return out
+
+
+def normalize_sillytavern_prompt_preset(value: dict) -> dict:
+    prompts = value.get("prompts") if isinstance(value.get("prompts"), list) else []
+    prompt_by_id = {
+        str(item.get("identifier") or item.get("id") or ""): item
+        for item in prompts
+        if isinstance(item, dict)
+    }
+    order_items = []
+    prompt_order = value.get("prompt_order")
+    if isinstance(prompt_order, list) and prompt_order:
+        first = prompt_order[0]
+        if isinstance(first, dict) and isinstance(first.get("order"), list):
+            order_items = first.get("order") or []
+    if not order_items:
+        order_items = [
+            {
+                "identifier": item.get("identifier") or item.get("id"),
+                "enabled": item.get("enabled", True),
+            }
+            for item in prompts
+            if isinstance(item, dict)
+        ]
+
+    seen_chat_history = False
+    blocks: list[dict] = []
+    marker_count = 0
+    enabled_count = 0
+    for idx, item in enumerate(order_items):
+        if not isinstance(item, dict):
+            continue
+        ident = str(item.get("identifier") or item.get("id") or "").strip()
+        if not ident:
+            continue
+        prompt = prompt_by_id.get(ident, {})
+        enabled = item.get("enabled", prompt.get("enabled", True))
+        if enabled is False or str(enabled).strip().lower() in ("0", "false", "no", "off", "disabled"):
+            continue
+        enabled_count += 1
+        content = str(prompt.get("content") or "").strip()
+        is_marker = bool(prompt.get("marker")) or (not content and bool(prompt.get("system_prompt")))
+        if ident == "chatHistory":
+            seen_chat_history = True
+        if is_marker or not content:
+            marker_count += 1
+            continue
+        blocks.append({
+            "id": ident,
+            "name": str(prompt.get("name") or ident),
+            "position": "post_history" if seen_chat_history else "system_before",
+            "role": str(prompt.get("role") or "system").strip().lower() or "system",
+            "order": len(blocks) + 1,
+            "enabled": True,
+            "content": content,
+        })
+
+    name = str(value.get("name") or value.get("preset_name") or value.get("display_name") or "SillyTavern 全局预设").strip()
+    return {
+        "enabled": True,
+        "name": name[:120],
+        "source": "sillytavern",
+        "blocks": normalize_global_prompt_blocks(blocks),
+        "stats": {
+            "source_prompt_count": len(prompts),
+            "enabled_prompt_count": enabled_count,
+            "marker_count": marker_count,
+            "block_count": len(blocks),
+        },
+    }
+
+
+def normalize_global_prompt_preset(value: object) -> dict:
+    default = {
+        "enabled": False,
+        "name": "全局提示词预设",
+        "source": "manual",
+        "blocks": [],
+        "stats": {"block_count": 0, "system_before": 0, "system_after": 0, "post_history": 0},
+    }
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return default
+        try:
+            value = json.loads(raw)
+        except Exception:
+            return default
+    if not isinstance(value, dict):
+        return default
+    if isinstance(value.get("prompts"), list):
+        parsed = normalize_sillytavern_prompt_preset(value)
+    else:
+        raw_blocks = value.get("blocks")
+        if raw_blocks is None:
+            raw_blocks = []
+            for position in ("system_before", "system_after", "post_history"):
+                items = value.get(position)
+                if isinstance(items, list):
+                    for item in items:
+                        if isinstance(item, dict):
+                            merged = dict(item)
+                            merged["position"] = position
+                            raw_blocks.append(merged)
+        parsed = {
+            "enabled": value.get("enabled", False) is not False and str(value.get("enabled", "false")).strip().lower() in ("1", "true", "yes", "on", "enabled", "启用", "是"),
+            "name": str(value.get("name") or "全局提示词预设").strip()[:120],
+            "source": str(value.get("source") or "manual").strip()[:40],
+            "blocks": normalize_global_prompt_blocks(raw_blocks),
+            "stats": dict(value.get("stats") or {}) if isinstance(value.get("stats"), dict) else {},
+        }
+    blocks = normalize_global_prompt_blocks(parsed.get("blocks") or [])
+    stats = dict(parsed.get("stats") or {})
+    stats.update({
+        "block_count": len(blocks),
+        "system_before": sum(1 for block in blocks if block.get("position") == "system_before"),
+        "system_after": sum(1 for block in blocks if block.get("position") == "system_after"),
+        "post_history": sum(1 for block in blocks if block.get("position") == "post_history"),
+        "enabled_block_count": sum(1 for block in blocks if block.get("enabled", True)),
+    })
+    return {
+        "enabled": bool(parsed.get("enabled")),
+        "name": str(parsed.get("name") or "全局提示词预设").strip()[:120],
+        "source": str(parsed.get("source") or "manual").strip()[:40],
+        "blocks": blocks,
+        "stats": stats,
+    }
+
+
 def normalize_quick_replies(value: object) -> list:
     if not isinstance(value, list):
         return []
@@ -7094,6 +7370,39 @@ def prompt_block_texts(extras: dict, position: str, *, char_name: str = "", user
     return out
 
 
+def global_prompt_messages(preset: object, position: str, *, char_name: str = "", user_name: str = "", max_chars: int = 40000, template_context: dict | None = None) -> list[dict]:
+    config = normalize_global_prompt_preset(preset)
+    if not config.get("enabled"):
+        return []
+    out: list[dict] = []
+    total = 0
+    for block in config.get("blocks") or []:
+        if not isinstance(block, dict) or not block.get("enabled", True) or block.get("position") != position:
+            continue
+        content = render_tavern_template(
+            str(block.get("content") or "").strip(),
+            char_name,
+            user_name,
+            template_context=template_context,
+            phase="generate",
+        )
+        if not content:
+            continue
+        if total + len(content) > max_chars:
+            content = content[: max(0, max_chars - total)]
+        if not content:
+            break
+        role = str(block.get("role") or "system").strip().lower()
+        if role not in {"system", "user", "assistant"}:
+            role = "system"
+        name = str(block.get("name") or "全局提示词").strip()
+        out.append({"role": role, "content": f"【{name}】\n{content}"})
+        total += len(content)
+        if total >= max_chars:
+            break
+    return out
+
+
 def build_system_prompt(app: dict, persona: dict | None, recent_text: str, *, template_context: dict | None = None) -> str:
     """组装 SillyTavern 风格系统提示（已做宏替换）。开场白不在此处。"""
     char_name = str(app.get("name") or "Ta").strip() or "Ta"
@@ -7640,7 +7949,28 @@ def build_user_llm_request(app: dict, content: str, messages: list[dict] | None 
     trimmed_history = (messages or [])[-history_length:]
     recent_text = "\n".join(str(m.get("content") or "") for m in trimmed_history) + "\n" + content
     apply_initial_template_variables(extras.get("world_info") or [], template_context, char_name=char_name, user_name=user_name)
+    global_preset = settings.get("global_prompt_preset") if isinstance(settings, dict) else None
     system_prompt = build_system_prompt(app, persona, recent_text, template_context=template_context)
+    global_before = global_prompt_messages(
+        global_preset,
+        "system_before",
+        char_name=char_name,
+        user_name=user_name,
+        template_context=template_context,
+    )
+    global_after = global_prompt_messages(
+        global_preset,
+        "system_after",
+        char_name=char_name,
+        user_name=user_name,
+        template_context=template_context,
+    )
+    if global_before or global_after:
+        system_prompt = "\n\n".join(
+            [msg["content"] for msg in global_before if msg.get("content")]
+            + [system_prompt]
+            + [msg["content"] for msg in global_after if msg.get("content")]
+        )
     chat_messages = [{"role": "system", "content": system_prompt}]
     chat_messages.extend(memory_context_messages(context, char_name=char_name, user_name=user_name, template_context=template_context))
     for msg in trimmed_history:
@@ -7666,6 +7996,13 @@ def build_user_llm_request(app: dict, content: str, messages: list[dict] | None 
     last = chat_messages[-1] if chat_messages else {}
     if not (last.get("role") == "user" and str(last.get("content") or "").strip() == user_content):
         chat_messages.append({"role": "user", "content": user_content})
+    chat_messages.extend(global_prompt_messages(
+        global_preset,
+        "post_history",
+        char_name=char_name,
+        user_name=user_name,
+        template_context=template_context,
+    ))
     extras_for_phi = app.get("extra_settings")
     if isinstance(extras_for_phi, str) and extras_for_phi.strip():
         try: extras_for_phi = json.loads(extras_for_phi)
@@ -9849,6 +10186,15 @@ class Handler(BaseHTTPRequestHandler):
                 conv_id = parts[4]
                 ok = self.store.delete_conversation(conv_id, user["id"])
                 return ok_response({"deleted": ok})
+
+        if normalized.startswith("console/api/web/conversations/") and normalized.endswith("/copy"):
+            parts = normalized.split("/")
+            if len(parts) >= 5:
+                conv_id = parts[4]
+                copied = self.store.copy_conversation(conv_id, user["id"])
+                if not copied:
+                    return error_response("conversation not found", 404)
+                return ok_response({"conversation": copied})
 
         # Start a fresh conversation, seeding the opening greeting as the first assistant message.
         if normalized == "console/api/web/conversations/start":

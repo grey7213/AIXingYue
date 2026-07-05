@@ -413,3 +413,8 @@
   Cause: SQLite `order by random()` 每次请求都会重新洗牌，分页 `offset` 不能稳定对应 page 1/page 2。
   Fix: 前端对 `sort=random` 生成同一轮搜索的 `seed` 并传给 `/go/api/explore/search`；后端用 `rowid` 和 seed 生成稳定伪随机排序，前端追加时按角色 id 去重。
   Verify: 首页浏览器验证中 page 1 后点击“加载更多”卡片数量增加且 id 不重复，console/page error 为 0。
+
+- Symptom: 历史会话里点击某一条后像是“一次生成两个”或打开了同角色的另一条对话。
+  Cause: 历史页旧链接只带 `app_id`，聊天页会按角色选择最新会话；同一角色存在多条历史时，点击指定历史行可能打开另一条最新会话。
+  Fix: 历史页继续/复制后跳转统一使用 `/app/chat.html?conv_id=...`，`chat.js` 优先按 `conv_id` 加载会话；后端提供 `/console/api/web/conversations/{id}/copy` 复制消息、swipes、摘要和会话变量。
+  Verify: 2026-07-05 线上临时用户 API 验证复制/删除成功；Playwright 验证历史页所有继续链接包含 `conv_id`，复制后跳到新的 `conv_id`，历史页复制行显示删除按钮。

@@ -1004,7 +1004,7 @@ function chatPage() {
 
       const params = new URLSearchParams(location.search);
       const incomingAppId = params.get('app_id');
-      const incomingConvId = params.get('conv_id');
+      const incomingConvId = params.get('conv_id') || params.get('conversation_id');
       if (incomingConvId) {
         const c = this.conversations.find(x => x.id === incomingConvId);
         if (c) { await this.selectConversation(c); return; }

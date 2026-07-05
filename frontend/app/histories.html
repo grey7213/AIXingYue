@@ -8,7 +8,7 @@
   <link rel="icon" href="/favicon.ico">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="/app/assets/css/app.css?v=20260703-fengyue-home3">
-  <script type="module" src="/app/assets/js/hub-pages.js?v=20260703-channels-closed"></script>
+  <script type="module" src="/app/assets/js/hub-pages.js?v=20260705-history-actions"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
@@ -27,14 +27,20 @@
             </div>
           </template>
           <template x-for="c in conversations" :key="c.id">
-            <a class="list-row text-inherit no-underline" :href="`/app/chat.html?app_id=${encodeURIComponent(c.app_id || '')}`">
-              <img :src="c.app_icon || '/assets/img/apk/avatar.webp'" alt="" onerror="this.src='/assets/img/apk/avatar.webp'">
-              <div class="min-w-0">
-                <div class="title truncate" x-text="c.app_name || c.title || chatText('unnamed_conversation', '未命名会话')"></div>
-                <div class="meta truncate" x-text="c.last_message || chatText('continue_preview', '点击继续对话')"></div>
+            <div class="list-row">
+              <a class="flex items-center gap-4 min-w-0 flex-1 text-inherit no-underline" :href="conversationHref(c)">
+                <img :src="c.app_icon || '/assets/img/apk/avatar.webp'" alt="" onerror="this.src='/assets/img/apk/avatar.webp'">
+                <div class="min-w-0">
+                  <div class="title truncate" x-text="c.app_name || c.title || chatText('unnamed_conversation', '未命名会话')"></div>
+                  <div class="meta truncate" x-text="c.last_message || chatText('continue_preview', '点击继续对话')"></div>
+                </div>
+              </a>
+              <div class="row-actions flex-wrap justify-end">
+                <a class="xy-btn xy-btn-primary text-xs" :href="conversationHref(c)" x-text="chatText('continue_button_text', '继续')">继续</a>
+                <button type="button" class="xy-btn xy-btn-ghost text-xs" @click="copyConversation(c, $event)" :disabled="copyingId === c.id" x-text="copyingId === c.id ? chatText('copying_text', '复制中') : chatText('copy_text', '复制')">复制</button>
+                <button type="button" class="xy-btn xy-btn-ghost text-xs text-red-200" @click="deleteConversation(c, $event)" :disabled="deletingId === c.id" x-text="deletingId === c.id ? chatText('deleting_text', '删除中') : chatText('delete_text', '删除')">删除</button>
               </div>
-              <div class="row-actions"><span class="xy-btn xy-btn-ghost text-xs" x-text="chatText('continue_preview', '继续')">继续</span></div>
-            </a>
+            </div>
           </template>
         </div>
       </section>

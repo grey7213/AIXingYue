@@ -138,6 +138,7 @@ export const api = {
   sendChat: (payload) => rawRequest('/console/api/web/chat', { method: 'POST', body: payload }),
   sendChatStream: (payload, handlers) => sseRequest('/console/api/web/chat/stream', payload, handlers),
   startConversation: (payload) => rawRequest('/console/api/web/conversations/start', { method: 'POST', body: payload }),
+  copyConversation: (convId) => rawRequest(`/console/api/web/conversations/${encodeURIComponent(convId)}/copy`, { method: 'POST', body: {} }),
   deleteConversation: (convId) => rawRequest(`/console/api/web/conversations/${encodeURIComponent(convId)}/delete`, { method: 'POST', body: {} }),
   regenerate: (convId, modelId = '') => rawRequest('/console/api/web/regenerate', { method: 'POST', body: { conversation_id: convId, model_id: modelId || '' } }),
   swipeMessage: (messageId, dir, modelId = '') => rawRequest(`/console/api/web/messages/${encodeURIComponent(messageId)}/swipe`, { method: 'POST', body: { dir, model_id: modelId || '' } }),

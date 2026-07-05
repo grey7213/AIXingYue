@@ -36,6 +36,7 @@ Updated: 2026-06-26
 - 每个块支持 `name`、`position`、`order`、`enabled`、`content`。
 - `system_before` 注入在角色基础设定前；`system_after` 注入在角色/世界书/示例后；`post_history` 注入在对话历史和用户消息后、生成前。
 - 内容支持 `{{char}}` / `{{user}}` 宏替换。
+- 管理员可在后台模型配置中维护一个站点级全局 Prompt Preset。导入 SillyTavern preset JSON 时按 `prompt_order` 读取启用项，跳过空 marker；`chatHistory` 前的启用提示作为全局 `system_before`，`chatHistory` 后的启用提示作为全局 `post_history`。该预设应用于所有角色卡，不修改每张卡的本地字段，用户侧不暴露原始预设内容。
 
 ### 高级世界书
 

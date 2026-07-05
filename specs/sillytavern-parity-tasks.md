@@ -26,6 +26,7 @@ Updated: 2026-07-04
 | ST19 | 开场视觉 Regex 和 TavernHelper 交互兼容 | Done | 2026-07-03 修复目标卡 `admin-rczip-9721d5969c2effd819af` 的开场可视化：开场白也执行 Prompt Template + Regex；Regex 从 `extensions` 读取完整大段替换并支持 JS `$1/$&/$<name>` 替换；iframe sandbox 增加 ST top/storage/worldbook 兼容代理。线上验证首屏 `晚上好，欢迎回来`、入口齐全、章节弹窗打开，沙箱仍无 same-origin |
 | ST20 | Tavo `.thm` 深色主题对比兜底 | Done | 2026-07-03 确认用户提供的 `.thm` 是深色主题；高级渲染 iframe 现在内置对应 SmartTheme 深色变量和深色 body/控件兜底，避免透明 iframe 叠在浅色 AI星月聊天皮肤上导致白字不可见。线上 Tavo 高级渲染、沙箱安全和目标开场视觉页验证通过 |
 | ST21 | `E:\迅雷下载\卡\卡.zip` 全量可用角色卡导入 | Done | 2026-07-04 按用户要求不做题材筛选；6692 个 PNG/JSON 候选中 6608 个有 metadata，6523 个可用角色卡导入为公开官方卡，85 个空壳与 84 个无 metadata/非 PNG 未导入；2626 张保留并提升 Regex/TavernHelper 脚本，6411 个封面上传；线上验证 `expected_found=6523`、`public_found=6523`、`empty_imported=0`、样本详情/封面/流式聊天通过，总官方卡数 8778 |
+| ST22 | 站点级 SillyTavern Prompt Preset | Done | 2026-07-05 后台“模型配置”新增全局提示词预设编辑器，支持粘贴 SillyTavern preset JSON 并按 `prompt_order` 解析为 `system_before`、`system_after`、`post_history`；后端在所有角色请求中注入全局预设，不修改角色卡本身。用户提供的 `E:\迅雷下载\Tavo_v_3.51_15nuf(1).json` 已应用到线上，解析为 33 个真实块（40 个 enabled prompt 中 7 个为 marker），其中 System 前置 3 个、历史后 30 个；公开 `/model-presets` 不暴露预设正文或 API Key，后台面板 Playwright 验证通过 |
 
 ## 2026-07-03 开场视觉 Regex 和 TavernHelper 交互兼容
 
@@ -75,6 +76,13 @@ Updated: 2026-07-04
   - Temporary-user streaming chat against that sample returned 3 delta events, `message_end=true`, 27 reply characters, and points changed `5000 -> 4950`; cleanup left 0 temporary users.
   - `ai-fengyue-backend.service` and `nginx` remained active, local health returned `OK`, public `https://patcher.villainy.top/health` returned `OK`, and `CONTENT_MODE=local_only`.
   - Public/local `/go/api/explore/search?page=1&page_size=12&sort=latest` returned `total=8778`, 12 lightweight items, first source `admin`, first id `admin-rccardzip-154e7129ab39e0053988`.
+
+## 2026-07-05 站点级 SillyTavern Prompt Preset
+
+- 现象：用户希望把 `E:\迅雷下载\Tavo_v_3.51_15nuf(1).json` 作为所有角色卡的全局预设应用，并在后台提供管理员可调入口。
+- 实现：`tools/ai_fengyue_local_server.py` 新增 `global_prompt_preset` 归一化、保存和注入逻辑；SillyTavern preset 的 `prompts/prompt_order` 会转换为全局提示词块，`chatHistory` 前为 `system_before`，其后为 `post_history`，marker/空内容仅计入统计不注入。`build_user_llm_request()` 会在角色系统提示前后合并全局 system 块，并把 `post_history` 块追加到历史和用户输入之后。`frontend/admin.html` 与 `frontend/assets/js/admin-app.js` 增加“全局提示词预设”面板，支持启用、导入、统计、手动增删块和保存。
+- 线上应用：已将用户提供的 Tavo v3.51 JSON 应用到 live SQLite；解析结果为 `enabled=true`、`block_count=33`、`system_before=3`、`post_history=30`、`enabled_prompt_count=40`、`marker_count=7`。
+- 验证：本地 `py_compile` 与 `node --check` 通过；函数级验证确认 LLM payload 含全局块。线上 `/console/api/web/model-presets` 返回 `has_global_prompt_preset=false` 且 `has_api_key=false`；管理员 `/admin/api/llm-settings` 返回 `global_name=Tavo v3.51`、`block_count=33`、`stats_system_before=3`、`stats_post_history=30` 且没有明文 `api_key`；Playwright 打开后台“模型配置”看到全局预设面板和统计，console/page error 为 0，截图 `output/playwright/admin-global-prompt-20260705.png`。
 
 ## 2026-07-01 角色卡下载包导入
 
