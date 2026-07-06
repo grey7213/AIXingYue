@@ -36,8 +36,9 @@ def env_bool(name: str, default: bool = False) -> bool:
 
 
 CODE_TTL_SECONDS = 10 * 60
-NEW_USER_INITIAL_POINTS = 5000
-CHAT_MESSAGE_COST = 50
+CHAT_MESSAGE_COST = int(os.environ.get("CHAT_MESSAGE_COST", "50") or "50")
+NEW_USER_INITIAL_POINTS = int(os.environ.get("NEW_USER_INITIAL_POINTS", str(CHAT_MESSAGE_COST * 50)) or str(CHAT_MESSAGE_COST * 50))
+NEW_USER_INITIAL_CHAT_TIMES = max(0, NEW_USER_INITIAL_POINTS // max(1, CHAT_MESSAGE_COST))
 REGISTER_CODE_EMAIL_HOURLY_LIMIT = int(os.environ.get("REGISTER_CODE_EMAIL_HOURLY_LIMIT", "3") or "3")
 REGISTER_CODE_IP_HOURLY_LIMIT = int(os.environ.get("REGISTER_CODE_IP_HOURLY_LIMIT", "8") or "8")
 REGISTER_IP_DAILY_FREE_ACCOUNT_LIMIT = int(os.environ.get("REGISTER_IP_DAILY_FREE_ACCOUNT_LIMIT", "3") or "3")
@@ -523,7 +524,7 @@ def site_settings_defaults() -> dict:
             "primary_cta_href": "/app/login.html?next=%2Fapp%2F",
             "secondary_cta_text": "先看看 App",
             "secondary_cta_href": "/app/login.html?next=%2Fapp%2F",
-            "trust_text": "30 秒注册 · 5000 积分起步 · Android 5.0+ · 邮箱验证",
+            "trust_text": "30 秒注册 · 2500 积分起步 · 约 50 次回复 · 邮箱验证",
             "preview_title": "不只是聊天，而是一段真实的相遇",
             "preview_subtitle": "每一个角色都有独立的世界观、记忆和情感反应",
             "download_title": "网页端暂时开放",
@@ -533,7 +534,7 @@ def site_settings_defaults() -> dict:
             "features_subtitle": "为每一位创作者打造的 AI 角色扮演体验",
             "feature_cards": [
                 {"title": "多角色对话", "description": "海量预设角色，覆盖动漫、游戏、原创人设。可自定义性格、背景、说话风格。"},
-                {"title": "每日奖励", "description": "注册即赠 5000 积分，每日签到获得额外积分，已有额度网页与客户端共用。"},
+                {"title": "每日奖励", "description": "注册即赠 2500 积分，约 50 次角色回复；每日签到获得额外积分，已有额度网页与客户端共用。"},
                 {"title": "安全可靠", "description": "邮箱验证码注册，账号安全有保障。本地化数据存储，隐私不外泄。"},
                 {"title": "高速响应", "description": "专属服务器节点，低延迟流式输出，沉浸式体验毫无卡顿。"},
                 {"title": "智能创作", "description": "长上下文记忆，故事连贯发展。剧情自由分支，每次对话都是独一无二的体验。"},
@@ -548,7 +549,7 @@ def site_settings_defaults() -> dict:
             "download_note": "首次安装可能需要在系统设置中允许\"未知来源\"应用。如下载未自动开始，请在浏览器中使用复制链接到下载工具。",
             "faq_title": "常见问题",
             "faq_items": [
-                {"q": "如何注册账号？", "a": "在 APP 启动后选择「注册」，输入邮箱获取验证码，填写昵称和密码即可完成注册。注册成功后会自动登录并赠送 5000 积分。"},
+                {"q": "如何注册账号？", "a": "打开 Web App 后选择「注册」，输入邮箱获取验证码，填写昵称和密码即可完成注册。注册成功后会自动登录并赠送 2500 积分，约 50 次角色回复。"},
                 {"q": "积分是做什么用的？", "a": "积分用于消耗调用 AI 模型生成内容。不同模型每次对话消耗不同积分。每日签到可获得额外积分，也可通过充值获取更多积分。"},
                 {"q": "安装时提示风险怎么办？", "a": "由于本应用为定制版本未上架应用商店，部分系统会提示来源未知。请在系统「安全设置」中允许浏览器或文件管理器安装应用，并按提示安装即可。"},
                 {"q": "忘记密码怎么办？", "a": "当前版本暂未开放密码找回功能。如有需要请联系管理员或重新使用其他邮箱注册。我们计划在下个版本加入完整的密码重置流程。"},
@@ -658,7 +659,7 @@ def site_settings_defaults() -> dict:
             "dashboard_login_hint": "还没有账号？",
             "dashboard_register_link_text": "立即注册",
             "register_hint_email": "验证码将通过邮件发送至上述邮箱",
-            "register_hint_points": "注册后将自动获得 5000 积分",
+            "register_hint_points": "注册后将自动获得 2500 积分，约 50 次角色回复",
             "email_label": "邮箱",
             "email_placeholder": "you@example.com",
             "password_label": "密码",
@@ -1960,7 +1961,7 @@ class Store:
                     email text unique,
                     name text not null,
                     password_hash text,
-                    points integer not null default 5000,
+                    points integer not null default 2500,
                     is_admin integer not null default 0,
                     created_at integer not null,
                     updated_at integer not null
@@ -9610,7 +9611,7 @@ def public_site_settings_json(settings: dict) -> dict:
                 description = str(item.get("description") or "")
                 if "积分" in title or "充值" in description:
                     item["title"] = "每日奖励"
-                    item["description"] = "注册即赠 5000 积分，每日签到获得额外积分，已有额度网页与客户端共用。"
+                    item["description"] = "注册即赠 2500 积分，约 50 次角色回复；每日签到获得额外积分，已有额度网页与客户端共用。"
         deposit = public.setdefault("deposit", {})
         deposit.update({
             "aifadian_url": "",
