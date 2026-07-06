@@ -41,6 +41,10 @@ CHAT_MESSAGE_COST = 50
 REGISTER_CODE_EMAIL_HOURLY_LIMIT = int(os.environ.get("REGISTER_CODE_EMAIL_HOURLY_LIMIT", "3") or "3")
 REGISTER_CODE_IP_HOURLY_LIMIT = int(os.environ.get("REGISTER_CODE_IP_HOURLY_LIMIT", "8") or "8")
 REGISTER_IP_DAILY_FREE_ACCOUNT_LIMIT = int(os.environ.get("REGISTER_IP_DAILY_FREE_ACCOUNT_LIMIT", "3") or "3")
+BETA_MAX_REGISTERED_USERS = int(os.environ.get("BETA_MAX_REGISTERED_USERS", "250") or "250")
+GENERATION_GLOBAL_CONCURRENCY = int(os.environ.get("GENERATION_GLOBAL_CONCURRENCY", "20") or "20")
+GENERATION_USER_CONCURRENCY = int(os.environ.get("GENERATION_USER_CONCURRENCY", "2") or "2")
+GENERATION_IP_CONCURRENCY = int(os.environ.get("GENERATION_IP_CONCURRENCY", "5") or "5")
 APP_BRAND = os.environ.get("APP_BRAND", "AI星月")
 ADMIN_EMAILS = set(filter(None, os.environ.get("ADMIN_EMAILS", "local@ctf.test").split(",")))
 UPSTREAM_CONTENT_BASE = os.environ.get("UPSTREAM_CONTENT_BASE", "https://aifun.wiki/").rstrip("/") + "/"
@@ -73,6 +77,90 @@ def now_ms() -> int:
 
 def log(message: str) -> None:
     print(f"[ai-fengyue-local] {message}", flush=True)
+
+
+class GenerationLimitError(RuntimeError):
+    pass
+
+
+class GenerationLimiter:
+    def __init__(self, total_limit: int, user_limit: int, ip_limit: int):
+        self.total_limit = max(0, int(total_limit or 0))
+        self.user_limit = max(0, int(user_limit or 0))
+        self.ip_limit = max(0, int(ip_limit or 0))
+        self.lock = threading.Lock()
+        self.total = 0
+        self.by_user: dict[str, int] = {}
+        self.by_ip: dict[str, int] = {}
+
+    def acquire(self, user_id: str = "", remote_ip: str = "", label: str = "generation"):
+        return GenerationSlot(self, str(user_id or ""), str(remote_ip or ""), str(label or "generation"))
+
+    def _acquire(self, user_id: str, remote_ip: str, label: str) -> None:
+        with self.lock:
+            if self.total_limit and self.total >= self.total_limit:
+                raise GenerationLimitError("当前生成请求较多，请稍后再试")
+            if self.user_limit and user_id and self.by_user.get(user_id, 0) >= self.user_limit:
+                raise GenerationLimitError("你的生成请求正在处理中，请稍后再试")
+            if self.ip_limit and remote_ip and self.by_ip.get(remote_ip, 0) >= self.ip_limit:
+                raise GenerationLimitError("当前网络的生成请求较多，请稍后再试")
+            self.total += 1
+            if user_id:
+                self.by_user[user_id] = self.by_user.get(user_id, 0) + 1
+            if remote_ip:
+                self.by_ip[remote_ip] = self.by_ip.get(remote_ip, 0) + 1
+
+    def _release(self, user_id: str, remote_ip: str) -> None:
+        with self.lock:
+            self.total = max(0, self.total - 1)
+            if user_id:
+                next_count = self.by_user.get(user_id, 0) - 1
+                if next_count > 0:
+                    self.by_user[user_id] = next_count
+                else:
+                    self.by_user.pop(user_id, None)
+            if remote_ip:
+                next_count = self.by_ip.get(remote_ip, 0) - 1
+                if next_count > 0:
+                    self.by_ip[remote_ip] = next_count
+                else:
+                    self.by_ip.pop(remote_ip, None)
+
+    def snapshot(self) -> dict:
+        with self.lock:
+            return {
+                "total": self.total,
+                "total_limit": self.total_limit,
+                "user_limit": self.user_limit,
+                "ip_limit": self.ip_limit,
+            }
+
+
+class GenerationSlot:
+    def __init__(self, limiter: GenerationLimiter, user_id: str, remote_ip: str, label: str):
+        self.limiter = limiter
+        self.user_id = user_id
+        self.remote_ip = remote_ip
+        self.label = label
+        self.acquired = False
+
+    def __enter__(self):
+        self.limiter._acquire(self.user_id, self.remote_ip, self.label)
+        self.acquired = True
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if self.acquired:
+            self.limiter._release(self.user_id, self.remote_ip)
+            self.acquired = False
+        return False
+
+
+GENERATION_LIMITER = GenerationLimiter(
+    GENERATION_GLOBAL_CONCURRENCY,
+    GENERATION_USER_CONCURRENCY,
+    GENERATION_IP_CONCURRENCY,
+)
 
 
 def json_bytes(data: object) -> bytes:
@@ -2402,6 +2490,7 @@ class Store:
                 raise ValueError("invalid email")
             if self.get_user_by_email(clean_email):
                 raise ValueError("email already registered")
+            self.ensure_beta_registration_available(clean_email)
             clean_name = (name or clean_email.split("@")[0] or "用户").strip()[:64] or "用户"
             ts = now_ms()
             user_id = str(uuid.uuid4())
@@ -2486,6 +2575,30 @@ class Store:
                 "select count(*) from user_security_events where remote_addr=? and event_type='register_success' and created_at>=?",
                 (remote_addr, since_ms),
             ).fetchone()[0] or 0)
+
+    def public_user_count(self) -> int:
+        with self.lock:
+            rows = self.conn.execute("select id,email,is_admin from users").fetchall()
+            return sum(1 for row in rows if not is_admin(row))
+
+    def beta_registration_snapshot(self) -> dict:
+        registered = self.public_user_count()
+        max_users = max(0, int(BETA_MAX_REGISTERED_USERS or 0))
+        remaining = max(0, max_users - registered) if max_users else None
+        return {
+            "max_users": max_users,
+            "registered_users": registered,
+            "remaining": remaining,
+            "closed": bool(max_users and registered >= max_users),
+        }
+
+    def ensure_beta_registration_available(self, email: str | None = None) -> None:
+        clean_email = normalize_email(email or "")
+        if clean_email and self.get_user_by_email(clean_email):
+            return
+        snapshot = self.beta_registration_snapshot()
+        if snapshot.get("closed"):
+            raise ValueError("内测名额已满，暂时停止新用户注册")
 
     def set_user_admin(self, user_id: str, enabled: bool) -> sqlite3.Row | None:
         with self.lock:
@@ -9902,6 +10015,12 @@ class Handler(BaseHTTPRequestHandler):
         if not conv_id:
             conv_id = str(uuid.uuid4())
         title = content[:30] if not body.get("conversation_id") else None
+        try:
+            slot = GENERATION_LIMITER.acquire(user["id"], self.client_ip(), "web_chat_stream")
+            slot.__enter__()
+        except GenerationLimitError as exc:
+            self.send_json(429, error_response(str(exc), 429))
+            return
         self.send_sse_headers(200)
         self.write_sse_event("start", {"conversation_id": conv_id, "app_id": app_id})
         try:
@@ -9989,6 +10108,7 @@ class Handler(BaseHTTPRequestHandler):
             log(f"web chat stream failed: {exc}")
             self.write_sse_event("error", {"message": str(exc)[:500] or "stream failed"})
         finally:
+            slot.__exit__(None, None, None)
             self.close_connection = True
 
     def handle_any(self) -> None:
@@ -10067,6 +10187,10 @@ class Handler(BaseHTTPRequestHandler):
             if not is_valid_email(email_value):
                 return error_response("invalid email")
             try:
+                self.store.ensure_beta_registration_available(email_value)
+            except ValueError as exc:
+                return error_response(str(exc), 403)
+            try:
                 code = self.store.create_email_code(email_value, self.client_ip())
                 send_verification_email(email_value, code, str(lang))
                 return ok_response("sent")
@@ -10092,6 +10216,10 @@ class Handler(BaseHTTPRequestHandler):
                 return error_response("password is required")
             if self.store.get_user_by_email(email):
                 return error_response("email already registered", 409)
+            try:
+                self.store.ensure_beta_registration_available(email)
+            except ValueError as exc:
+                return error_response(str(exc), 403)
             remote_ip = self.client_ip()
             if remote_ip and self.store.recent_register_success_count(remote_ip, now_ms() - 24 * 60 * 60 * 1000) >= REGISTER_IP_DAILY_FREE_ACCOUNT_LIMIT:
                 return error_response("too many free accounts from this network, try later", 429)
@@ -10643,13 +10771,16 @@ class Handler(BaseHTTPRequestHandler):
                 if auto_reply:
                     group = self.store.get_group_chat(group_id, token_user["id"]) or group
                     try:
-                        reply, member, next_index = generate_group_reply(self.store, token_user["id"], group, app_id=str(body.get("app_id") or ""), prompt=content)
-                        created.append(reply)
-                        charge = self.store.spend_credit_points(
-                            token_user["id"],
-                            CHAT_MESSAGE_COST,
-                            payload={"group_id": group_id, "message_id": reply.get("id"), "app_id": member.get("app_id")},
-                        )
+                        with GENERATION_LIMITER.acquire(token_user["id"], self.client_ip(), "group_message"):
+                            reply, member, next_index = generate_group_reply(self.store, token_user["id"], group, app_id=str(body.get("app_id") or ""), prompt=content)
+                            created.append(reply)
+                            charge = self.store.spend_credit_points(
+                                token_user["id"],
+                                CHAT_MESSAGE_COST,
+                                payload={"group_id": group_id, "message_id": reply.get("id"), "app_id": member.get("app_id")},
+                            )
+                    except GenerationLimitError as exc:
+                        return error_response(str(exc), 429)
                     except Exception as exc:
                         return error_response(f"群聊回复失败：{exc}", 500)
                 group = self.store.get_group_chat(group_id, token_user["id"]) or group
@@ -10665,20 +10796,23 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError as exc:
                     return error_response(str(exc), 402)
                 try:
-                    reply, member, next_index = generate_group_reply(
-                        self.store,
-                        token_user["id"],
-                        group,
-                        app_id=str(body.get("app_id") or ""),
-                        prompt=str(body.get("prompt") or ""),
-                    )
+                    with GENERATION_LIMITER.acquire(token_user["id"], self.client_ip(), "group_reply"):
+                        reply, member, next_index = generate_group_reply(
+                            self.store,
+                            token_user["id"],
+                            group,
+                            app_id=str(body.get("app_id") or ""),
+                            prompt=str(body.get("prompt") or ""),
+                        )
+                        charge = self.store.spend_credit_points(
+                            token_user["id"],
+                            CHAT_MESSAGE_COST,
+                            payload={"group_id": group_id, "message_id": reply.get("id"), "app_id": member.get("app_id")},
+                        )
+                except GenerationLimitError as exc:
+                    return error_response(str(exc), 429)
                 except Exception as exc:
                     return error_response(f"群聊回复失败：{exc}", 500)
-                charge = self.store.spend_credit_points(
-                    token_user["id"],
-                    CHAT_MESSAGE_COST,
-                    payload={"group_id": group_id, "message_id": reply.get("id"), "app_id": member.get("app_id")},
-                )
                 group = self.store.get_group_chat(group_id, token_user["id"]) or group
                 payload = {"group": group, "message": reply, "messages": self.store.list_group_messages(group_id, token_user["id"]), "next_index": next_index}
                 payload.update(charge)
@@ -10694,7 +10828,10 @@ class Handler(BaseHTTPRequestHandler):
             settings = self.store.image_model_settings(include_secret=True)
             if settings.get("enabled") and settings.get("base_url") and settings.get("api_key") and settings.get("model") and prompt:
                 try:
-                    generated = call_image_model(prompt, settings)
+                    with GENERATION_LIMITER.acquire(user["id"], self.client_ip(), "image_chat"):
+                        generated = call_image_model(prompt, settings)
+                except GenerationLimitError as exc:
+                    return error_response(str(exc), 429)
                 except Exception as exc:
                     log(f"image model failed: {exc}")
                     return error_response("图片模型调用失败：" + str(exc)[:180], 502)
@@ -10740,23 +10877,27 @@ class Handler(BaseHTTPRequestHandler):
                 return error_response(str(exc), 402)
             conv_id = str(body.get("conversation_id") or "").strip() or str(uuid.uuid4())
             app_name = str(body.get("app_name") or "").strip() or app_name_from_cache(self.store, app_id)
-            self.store.upsert_conversation(conv_id, user["id"], app_id, app_name=app_name, title=str(body.get("conversation_name") or content[:30]))
-            self.store.append_message(conv_id, user["id"], "user", content)
-            app_row, answer = chat_reply_for_app(
-                self.store,
-                user["id"],
-                app_id,
-                content,
-                app_name=app_name,
-                conversation_id=conv_id,
-                response_mode=str(body.get("response_mode") or ""),
-            )
-            reply = self.store.append_message(conv_id, user["id"], "assistant", answer)
-            charge = self.store.spend_credit_points(
-                user["id"],
-                CHAT_MESSAGE_COST,
-                payload={"app_id": app_id, "conversation_id": conv_id, "message_id": reply["id"]},
-            )
+            try:
+                with GENERATION_LIMITER.acquire(user["id"], self.client_ip(), "legacy_chat"):
+                    self.store.upsert_conversation(conv_id, user["id"], app_id, app_name=app_name, title=str(body.get("conversation_name") or content[:30]))
+                    self.store.append_message(conv_id, user["id"], "user", content)
+                    app_row, answer = chat_reply_for_app(
+                        self.store,
+                        user["id"],
+                        app_id,
+                        content,
+                        app_name=app_name,
+                        conversation_id=conv_id,
+                        response_mode=str(body.get("response_mode") or ""),
+                    )
+                    reply = self.store.append_message(conv_id, user["id"], "assistant", answer)
+                    charge = self.store.spend_credit_points(
+                        user["id"],
+                        CHAT_MESSAGE_COST,
+                        payload={"app_id": app_id, "conversation_id": conv_id, "message_id": reply["id"]},
+                    )
+            except GenerationLimitError as exc:
+                return error_response(str(exc), 429)
             message = chat_message_payload(reply, conv_id, app_id, content, answer)
             message.update(charge)
             if str(body.get("response_mode") or "").lower() == "streaming":
@@ -11068,17 +11209,21 @@ class Handler(BaseHTTPRequestHandler):
                     last_user = str(m.get("content") or "")
                     break
             app_id = conv.get("app_id") or ""
-            app_row, reply = regenerate_reply_for_app(
-                self.store, user["id"], app_id,
-                history=history, last_user_content=last_user, app_name=conv.get("app_name") or "", conversation_id=conv_id,
-                model_override=model_override,
-            )
-            updated = self.store.append_swipe(target["id"], user["id"], reply)
-            charge = self.store.spend_credit_points(
-                user["id"],
-                CHAT_MESSAGE_COST,
-                payload={"app_id": app_id, "conversation_id": conv_id, "message_id": target["id"], "action": "regenerate"},
-            )
+            try:
+                with GENERATION_LIMITER.acquire(user["id"], self.client_ip(), "regenerate"):
+                    app_row, reply = regenerate_reply_for_app(
+                        self.store, user["id"], app_id,
+                        history=history, last_user_content=last_user, app_name=conv.get("app_name") or "", conversation_id=conv_id,
+                        model_override=model_override,
+                    )
+                    updated = self.store.append_swipe(target["id"], user["id"], reply)
+                    charge = self.store.spend_credit_points(
+                        user["id"],
+                        CHAT_MESSAGE_COST,
+                        payload={"app_id": app_id, "conversation_id": conv_id, "message_id": target["id"], "action": "regenerate"},
+                    )
+            except GenerationLimitError as exc:
+                return error_response(str(exc), 429)
             payload = {"message": updated, "conversation_id": conv_id}
             payload.update(charge)
             return ok_response(payload)
@@ -11123,17 +11268,21 @@ class Handler(BaseHTTPRequestHandler):
                     last_user = str(m.get("content") or "")
                     break
             app_id = (conv or {}).get("app_id") or ""
-            _app, reply = regenerate_reply_for_app(
-                self.store, user["id"], app_id,
-                history=history, last_user_content=last_user, app_name=(conv or {}).get("app_name") or "", conversation_id=conv_id,
-                model_override=model_override,
-            )
-            updated = self.store.append_swipe(message_id, user["id"], reply)
-            charge = self.store.spend_credit_points(
-                user["id"],
-                CHAT_MESSAGE_COST,
-                payload={"app_id": app_id, "conversation_id": conv_id, "message_id": message_id, "action": "swipe_new"},
-            )
+            try:
+                with GENERATION_LIMITER.acquire(user["id"], self.client_ip(), "swipe_new"):
+                    _app, reply = regenerate_reply_for_app(
+                        self.store, user["id"], app_id,
+                        history=history, last_user_content=last_user, app_name=(conv or {}).get("app_name") or "", conversation_id=conv_id,
+                        model_override=model_override,
+                    )
+                    updated = self.store.append_swipe(message_id, user["id"], reply)
+                    charge = self.store.spend_credit_points(
+                        user["id"],
+                        CHAT_MESSAGE_COST,
+                        payload={"app_id": app_id, "conversation_id": conv_id, "message_id": message_id, "action": "swipe_new"},
+                    )
+            except GenerationLimitError as exc:
+                return error_response(str(exc), 429)
             payload = {"message": updated}
             payload.update(charge)
             return ok_response(payload)
@@ -11210,26 +11359,30 @@ class Handler(BaseHTTPRequestHandler):
             if not conv_id:
                 conv_id = str(uuid.uuid4())
             title = content[:30] if not body.get("conversation_id") else None
-            self.store.upsert_conversation(conv_id, user["id"], app_id,
-                                           app_name=app_name, app_icon=app_icon, title=title)
-            self.store.append_message(conv_id, user["id"], "user", content)
-            self.store.log_event(user["id"], "chat", f"与 {app_name or app_id} 对话", {"app_id": app_id, "conversation_id": conv_id})
-            app_row, reply = chat_reply_for_app(
-                self.store,
-                user["id"],
-                app_id,
-                content,
-                app_name=app_name,
-                conversation_id=conv_id,
-                response_mode=str(body.get("response_mode") or ""),
-                model_override=model_override,
-            )
-            reply_row = self.store.append_message(conv_id, user["id"], "assistant", reply)
-            charge = self.store.spend_credit_points(
-                user["id"],
-                CHAT_MESSAGE_COST,
-                payload={"app_id": app_id, "conversation_id": conv_id, "message_id": reply_row["id"]},
-            )
+            try:
+                with GENERATION_LIMITER.acquire(user["id"], self.client_ip(), "web_chat"):
+                    self.store.upsert_conversation(conv_id, user["id"], app_id,
+                                                   app_name=app_name, app_icon=app_icon, title=title)
+                    self.store.append_message(conv_id, user["id"], "user", content)
+                    self.store.log_event(user["id"], "chat", f"与 {app_name or app_id} 对话", {"app_id": app_id, "conversation_id": conv_id})
+                    app_row, reply = chat_reply_for_app(
+                        self.store,
+                        user["id"],
+                        app_id,
+                        content,
+                        app_name=app_name,
+                        conversation_id=conv_id,
+                        response_mode=str(body.get("response_mode") or ""),
+                        model_override=model_override,
+                    )
+                    reply_row = self.store.append_message(conv_id, user["id"], "assistant", reply)
+                    charge = self.store.spend_credit_points(
+                        user["id"],
+                        CHAT_MESSAGE_COST,
+                        payload={"app_id": app_id, "conversation_id": conv_id, "message_id": reply_row["id"]},
+                    )
+            except GenerationLimitError as exc:
+                return error_response(str(exc), 429)
             try:
                 self.store.maybe_refresh_summary(user["id"], conv_id)
             except Exception as exc:
@@ -11326,6 +11479,8 @@ class Handler(BaseHTTPRequestHandler):
                     "redeem_code_unused_count": redeem_unused_count,
                     "redeem_points_issued": issued_redeem_points,
                     "content_cache": content_stats,
+                    "beta": self.store.beta_registration_snapshot(),
+                    "generation_concurrency": GENERATION_LIMITER.snapshot(),
                     "charts": {
                         "daily_users": daily_count_series(conn, "users", "created_at", 7),
                         "daily_requests": daily_count_series(conn, "request_log", "ts", 7),
