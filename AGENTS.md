@@ -443,3 +443,8 @@
   Cause: `.advanced-search-grid` 使用固定 6 列 `repeat(5, minmax(120px, 1fr)) minmax(120px, .8fr)`，没有给关键词列、中屏换行和 toggle 文本收缩留出稳定约束。
   Fix: `frontend/app/assets/css/app.css` 将高级搜索改为宽屏 `minmax(260px, 1.55fr) repeat(4, minmax(140px, 1fr)) minmax(170px, .85fr)`，中屏 `max-width:1320px` 降为 3 列并让关键词跨 2 列，移动端保持 2 列；toggle 文本设置 ellipsis。
   Verify: 2026-07-06 线上 Playwright `verify_password_reset_filter_browser.py` 在 2048/1180/390 宽度均返回 `outsideCount=0`、document 无横向 overflow，console/page error 为 0。
+
+- Symptom: 登录页重置密码时报 `api.sendPasswordResetCode is not a function`。
+  Cause: 登录页已更新到密码重置视图，但浏览器仍可能缓存旧的 `/assets/js/api.js` 或旧的共享 API 模块，导致新增方法不存在。
+  Fix: `frontend/app/assets/js/login.js` 对 `api.sendPasswordResetCode` 和 `api.resetPassword` 增加同源 `fetch` 兜底，并更新 `frontend/app/login.html` 的 `login.js` cache-buster。
+  Verify: 2026-07-07 本地和线上 Playwright 将 `/assets/js/api.js` 模拟成缺少重置方法的旧模块，点击“发送”仍命中 `/console/api/password-reset/email`，无 TypeError、console/page error 为 0；线上 service/nginx active，公网 `/health` OK，`CONTENT_MODE=local_only`。

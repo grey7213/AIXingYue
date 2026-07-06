@@ -1,6 +1,46 @@
 import { api, setToken, ApiError } from '/app/assets/js/app-core.js';
 import { loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-channels-closed';
 
+async function publicPost(path, body) {
+  let response;
+  try {
+    response = await fetch(path, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}),
+    });
+  } catch {
+    throw new ApiError('网络请求失败，请检查网络连接', 0, null);
+  }
+  const text = await response.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
+  if (!response.ok) {
+    throw new ApiError((data && (data.message || data.msg)) || `HTTP ${response.status}`, response.status, data);
+  }
+  if (data && data.result === 'failure') {
+    throw new ApiError(data.message || data.msg || '请求失败', parseInt(data.code) || response.status, data);
+  }
+  if (data && typeof data.code === 'number' && data.code !== 0 && data.msg) {
+    throw new ApiError(data.msg, data.code, data);
+  }
+  return data;
+}
+
+function sendPasswordResetCode(email) {
+  if (typeof api?.sendPasswordResetCode === 'function') {
+    return api.sendPasswordResetCode(email);
+  }
+  return publicPost('/console/api/password-reset/email', { email, lang: 'zh-Hans' });
+}
+
+function resetPassword(email, password, code) {
+  if (typeof api?.resetPassword === 'function') {
+    return api.resetPassword(email, password, code);
+  }
+  return publicPost('/console/api/password-reset', { email, password, code });
+}
+
 function loginPage() {
   return {
     view: 'login',
@@ -94,7 +134,7 @@ function loginPage() {
       }
       this.sendingResetCode = true;
       try {
-        await api.sendPasswordResetCode(email);
+        await sendPasswordResetCode(email);
         this.showToast(this.authText('reset_code_sent_text', '密码重置验证码已发送，请查收邮件'), 'success');
         this.resetCodeCountdown = 60;
         if (this.resetCountdownTimer) clearInterval(this.resetCountdownTimer);
@@ -129,7 +169,7 @@ function loginPage() {
     async doResetPassword() {
       this.loading = true;
       try {
-        const r = await api.resetPassword(
+        const r = await resetPassword(
           this.resetForm.email.trim(),
           this.resetForm.password,
           this.resetForm.code.trim()
