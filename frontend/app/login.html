@@ -7,8 +7,8 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
   <link rel="icon" href="/favicon.ico">
   <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260703-fengyue-home3">
-  <script type="module" src="/app/assets/js/login.js?v=20260703-channels-closed"></script>
+  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260706-password-reset">
+  <script type="module" src="/app/assets/js/login.js?v=20260706-password-reset"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen bg-[#0a0420]">
@@ -33,6 +33,7 @@
       <div class="xy-glass p-2 mb-6 flex">
         <button @click="view='login'" class="flex-1 py-2.5 rounded-xl text-sm font-medium transition" :class="view==='login' ? 'bg-violet-500/30 text-white' : 'text-slate-400 hover:text-white'" x-text="authText('login_tab_label', '登录')">登录</button>
         <button @click="view='register'" class="flex-1 py-2.5 rounded-xl text-sm font-medium transition" :class="view==='register' ? 'bg-violet-500/30 text-white' : 'text-slate-400 hover:text-white'" x-text="authText('register_tab_label', '注册')">注册</button>
+        <button @click="openReset()" class="flex-1 py-2.5 rounded-xl text-sm font-medium transition" :class="view==='reset' ? 'bg-violet-500/30 text-white' : 'text-slate-400 hover:text-white'" x-text="authText('reset_tab_label', '重置密码')">重置密码</button>
       </div>
 
       <!-- 登录 -->
@@ -45,6 +46,9 @@
           <div>
             <label class="xy-label" x-text="authText('password_label', '密码')">密码</label>
             <input type="password" x-model="loginForm.password" class="xy-input" :placeholder="authText('login_password_placeholder', '请输入密码')" required minlength="6" autocomplete="current-password">
+          </div>
+          <div class="flex justify-end -mt-1">
+            <button type="button" class="xy-link text-xs" @click="openReset()" x-text="authText('forgot_password_text', '忘记密码？')">忘记密码？</button>
           </div>
           <button type="submit" class="xy-btn xy-btn-primary w-full" :disabled="loading">
             <span x-show="!loading" x-text="authText('login_button_text', '进入 AI星月')">进入 AI星月</span>
@@ -82,6 +86,40 @@
           </div>
           <button type="submit" class="xy-btn xy-btn-primary w-full" :disabled="loading">
             <span x-show="!loading" x-text="authText('register_button_text', '完成注册')">完成注册</span>
+            <span x-show="loading" class="xy-loading"></span>
+          </button>
+        </form>
+      </div>
+
+      <!-- 重置密码 -->
+      <div x-show="view==='reset'" class="xy-glass p-7">
+        <div class="mb-5">
+          <h2 class="text-white text-lg font-semibold" x-text="authText('reset_title', '重置密码')">重置密码</h2>
+          <p class="text-xs text-slate-400 mt-1" x-text="authText('reset_subtitle', '输入注册邮箱，使用邮件验证码设置新密码。')">输入注册邮箱，使用邮件验证码设置新密码。</p>
+        </div>
+        <form @submit.prevent="doResetPassword" class="space-y-4">
+          <div>
+            <label class="xy-label" x-text="authText('email_label', '邮箱')">邮箱</label>
+            <input type="email" x-model="resetForm.email" class="xy-input" :placeholder="authText('email_placeholder', 'you@example.com')" required autocomplete="email">
+            <p class="text-xs text-slate-500 mt-2" x-text="authText('reset_email_hint', '验证码只会发送到已注册邮箱')">验证码只会发送到已注册邮箱</p>
+          </div>
+          <div>
+            <label class="xy-label" x-text="authText('code_label', '验证码')">验证码</label>
+            <div class="flex gap-2">
+              <input type="text" x-model="resetForm.code" class="xy-input flex-1" :placeholder="authText('code_placeholder', '6 位验证码')" required pattern="\d{6}">
+              <button type="button" @click="sendResetCode" class="xy-btn xy-btn-ghost text-sm whitespace-nowrap" :disabled="resetCodeCountdown > 0 || sendingResetCode">
+                <span x-show="!sendingResetCode && resetCodeCountdown===0" x-text="authText('send_code_button_text', '发送')">发送</span>
+                <span x-show="sendingResetCode" class="xy-loading"></span>
+                <span x-show="resetCodeCountdown>0" x-text="`${resetCodeCountdown}s`"></span>
+              </button>
+            </div>
+          </div>
+          <div>
+            <label class="xy-label" x-text="authText('password_label', '密码')">密码</label>
+            <input type="password" x-model="resetForm.password" class="xy-input" :placeholder="authText('reset_password_placeholder', '输入新密码，至少 6 位')" required minlength="6" autocomplete="new-password">
+          </div>
+          <button type="submit" class="xy-btn xy-btn-primary w-full" :disabled="loading">
+            <span x-show="!loading" x-text="authText('reset_button_text', '重置并登录')">重置并登录</span>
             <span x-show="loading" class="xy-loading"></span>
           </button>
         </form>

@@ -95,10 +95,14 @@ export const api = {
   siteSettings: () => request('/console/api/public/site-settings', { auth: false }),
   sendEmailCode: (email, lang = 'zh-Hans') =>
     request('/console/api/register/email', { method: 'POST', body: { email, lang }, auth: false }),
+  sendPasswordResetCode: (email, lang = 'zh-Hans') =>
+    request('/console/api/password-reset/email', { method: 'POST', body: { email, lang }, auth: false }),
   register: (email, password, code, name) =>
     request('/console/api/register', { method: 'POST', body: { email, password, code, name }, auth: false }),
   login: (email, password) =>
     request('/console/api/login', { method: 'POST', body: { email, password }, auth: false }),
+  resetPassword: (email, password, code) =>
+    request('/console/api/password-reset', { method: 'POST', body: { email, password, code }, auth: false }),
 
   // 用户接口
   profile: () => request('/console/api/account/profile'),

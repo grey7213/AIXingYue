@@ -434,14 +434,17 @@ def error_response(message: str, code: int = 400) -> dict:
     return {"result": "failure", "message": message, "code": str(code), "status": code, "data": message, "msg": message}
 
 
-def send_verification_email(to_email: str, code: str, lang: str = "zh-Hans") -> None:
+def send_verification_email(to_email: str, code: str, lang: str = "zh-Hans", purpose: str = "register") -> None:
     host = os.environ.get("SMTP_HOST")
     sender = os.environ.get("SMTP_FROM") or f"noreply@patcher.villainy.top"
-    subject = f"{APP_BRAND} 注册验证码"
-    body = f"你的 {APP_BRAND} 注册验证码是：{code}\n\n验证码 10 分钟内有效。如果不是你本人操作，请忽略这封邮件。\n"
+    reset_purpose = (purpose or "").strip().lower() in ("password_reset", "reset_password", "reset")
+    subject = f"{APP_BRAND} 密码重置验证码" if reset_purpose else f"{APP_BRAND} 注册验证码"
+    action = "密码重置" if reset_purpose else "注册"
+    body = f"你的 {APP_BRAND} {action}验证码是：{code}\n\n验证码 10 分钟内有效。如果不是你本人操作，请忽略这封邮件。\n"
     if not (lang or "").lower().startswith("zh"):
-        subject = f"{APP_BRAND} verification code"
-        body = f"Your {APP_BRAND} verification code is: {code}\n\nThis code expires in 10 minutes.\n"
+        subject = f"{APP_BRAND} password reset code" if reset_purpose else f"{APP_BRAND} verification code"
+        action = "password reset" if reset_purpose else "verification"
+        body = f"Your {APP_BRAND} {action} code is: {code}\n\nThis code expires in 10 minutes.\n"
     msg = email.message.EmailMessage()
     msg["From"] = sender
     msg["To"] = to_email
@@ -552,7 +555,7 @@ def site_settings_defaults() -> dict:
                 {"q": "如何注册账号？", "a": "打开 Web App 后选择「注册」，输入邮箱获取验证码，填写昵称和密码即可完成注册。注册成功后会自动登录并赠送 2500 积分，约 50 次角色回复。"},
                 {"q": "积分是做什么用的？", "a": "积分用于消耗调用 AI 模型生成内容。不同模型每次对话消耗不同积分。每日签到可获得额外积分，也可通过充值获取更多积分。"},
                 {"q": "安装时提示风险怎么办？", "a": "由于本应用为定制版本未上架应用商店，部分系统会提示来源未知。请在系统「安全设置」中允许浏览器或文件管理器安装应用，并按提示安装即可。"},
-                {"q": "忘记密码怎么办？", "a": "当前版本暂未开放密码找回功能。如有需要请联系管理员或重新使用其他邮箱注册。我们计划在下个版本加入完整的密码重置流程。"},
+                {"q": "忘记密码怎么办？", "a": "在登录页点击「忘记密码」，输入注册邮箱获取验证码后即可设置新密码。验证码 10 分钟内有效。"},
                 {"q": "账号信息存储在哪里？", "a": "账号数据存储在我们位于专用服务器的私有数据库中，仅用于身份验证和积分记录，不会用于任何第三方用途。"},
             ],
             "footer_service_text": "本服务由 patcher.villainy.top 提供",
@@ -646,8 +649,14 @@ def site_settings_defaults() -> dict:
             "brand_subtitle": "让想象 · 照进二次元",
             "login_tab_label": "登录",
             "register_tab_label": "注册",
+            "reset_tab_label": "重置密码",
             "login_button_text": "进入 AI星月",
             "login_hint": "用 APP 注册过的账号也可以直接登录",
+            "forgot_password_text": "忘记密码？",
+            "reset_title": "重置密码",
+            "reset_subtitle": "输入注册邮箱，使用邮件验证码设置新密码。",
+            "reset_email_hint": "验证码只会发送到已注册邮箱",
+            "reset_button_text": "重置并登录",
             "register_button_text": "完成注册",
             "send_code_button_text": "发送",
             "home_link_text": "返回首页",
@@ -669,15 +678,20 @@ def site_settings_defaults() -> dict:
             "nickname_label": "昵称",
             "nickname_placeholder": "给自己起个名字",
             "register_password_placeholder": "至少 6 位",
+            "reset_password_placeholder": "输入新密码，至少 6 位",
             "invalid_email_text": "请输入正确的邮箱地址",
             "code_sent_text": "验证码已发送，请查收邮件",
+            "reset_code_sent_text": "密码重置验证码已发送，请查收邮件",
             "send_failed_text": "发送失败",
             "login_success_text": "登录成功",
             "login_failed_text": "登录失败",
+            "reset_success_text": "密码已重置",
+            "reset_failed_text": "密码重置失败",
             "register_success_text": "注册成功，欢迎来到 AI星月",
             "register_failed_text": "注册失败",
             "login_invalid_response_text": "登录响应无效",
             "register_invalid_response_text": "注册响应无效",
+            "reset_invalid_response_text": "密码重置响应无效",
         },
         "dashboard": {
             "topbar_subtitle": "用户中心",
@@ -1358,8 +1372,14 @@ def sanitize_site_settings(data: dict | None) -> dict:
         "brand_subtitle": 80,
         "login_tab_label": 20,
         "register_tab_label": 20,
+        "reset_tab_label": 20,
         "login_button_text": 30,
         "login_hint": 120,
+        "forgot_password_text": 30,
+        "reset_title": 60,
+        "reset_subtitle": 140,
+        "reset_email_hint": 120,
+        "reset_button_text": 30,
         "register_button_text": 30,
         "send_code_button_text": 20,
         "home_link_text": 30,
@@ -1381,15 +1401,20 @@ def sanitize_site_settings(data: dict | None) -> dict:
         "nickname_label": 30,
         "nickname_placeholder": 80,
         "register_password_placeholder": 80,
+        "reset_password_placeholder": 80,
         "invalid_email_text": 80,
         "code_sent_text": 100,
+        "reset_code_sent_text": 100,
         "send_failed_text": 80,
         "login_success_text": 80,
         "login_failed_text": 80,
+        "reset_success_text": 80,
+        "reset_failed_text": 80,
         "register_success_text": 100,
         "register_failed_text": 80,
         "login_invalid_response_text": 80,
         "register_invalid_response_text": 80,
+        "reset_invalid_response_text": 80,
     }.items():
         out["auth"][key] = clean_text(auth.get(key), defaults["auth"][key], limit)
 
@@ -2519,6 +2544,25 @@ class Store:
             self.conn.commit()
             return self.get_user_by_id(user_id) or self.current_user()
 
+    def reset_user_password(self, email: str, password: str | None, remote_addr: str | None = None) -> sqlite3.Row:
+        clean_email = normalize_email(email)
+        if not is_valid_email(clean_email):
+            raise ValueError("invalid email")
+        if not password or len(str(password)) < 6:
+            raise ValueError("password must be at least 6 characters")
+        with self.lock:
+            user = self.get_user_by_email(clean_email)
+            if not user:
+                raise ValueError("user not found")
+            ts = now_ms()
+            self.conn.execute(
+                "update users set password_hash=?, updated_at=? where id=?",
+                (self.password_hash(str(password)), ts, user["id"]),
+            )
+            self.record_security_event(user["id"], clean_email, "password_reset_success", remote_addr, {})
+            self.conn.commit()
+            return self.get_user_by_id(user["id"]) or user
+
     def get_user_by_email(self, email: str | None) -> sqlite3.Row | None:
         if not email:
             return None
@@ -2551,20 +2595,27 @@ class Store:
             ),
         )
 
-    def recent_email_code_count(self, email: str | None, remote_addr: str | None, since_seconds: int) -> tuple[int, int]:
+    def recent_email_code_count(
+        self,
+        email: str | None,
+        remote_addr: str | None,
+        since_seconds: int,
+        purpose: str = "register",
+    ) -> tuple[int, int]:
         value = normalize_email(email or "")
+        purpose_value = (purpose or "register").strip() or "register"
         with self.lock:
             email_count = 0
             if value:
                 email_count = int(self.conn.execute(
-                    "select count(*) from email_codes where email=? and purpose='register' and created_at>=?",
-                    (value, since_seconds),
+                    "select count(*) from email_codes where email=? and purpose=? and created_at>=?",
+                    (value, purpose_value, since_seconds),
                 ).fetchone()[0] or 0)
             ip_count = 0
             if remote_addr:
                 ip_count = int(self.conn.execute(
-                    "select count(*) from email_codes where remote_addr=? and purpose='register' and created_at>=?",
-                    (remote_addr, since_seconds),
+                    "select count(*) from email_codes where remote_addr=? and purpose=? and created_at>=?",
+                    (remote_addr, purpose_value, since_seconds),
                 ).fetchone()[0] or 0)
             return email_count, ip_count
 
@@ -3136,21 +3187,28 @@ class Store:
         value = normalize_email(email)
         if not value:
             raise ValueError("email is required")
-        if purpose == "register":
+        purpose_value = (purpose or "register").strip().lower() or "register"
+        if purpose_value in ("reset", "reset_password"):
+            purpose_value = "password_reset"
+        if purpose_value not in ("register", "password_reset"):
+            raise ValueError("invalid email code purpose")
+        hour_ago = int(time.time()) - 3600
+        if purpose_value == "register":
             if self.get_user_by_email(value):
                 raise ValueError("email already registered")
-            hour_ago = int(time.time()) - 3600
-            email_count, ip_count = self.recent_email_code_count(value, remote_addr, hour_ago)
-            if email_count >= REGISTER_CODE_EMAIL_HOURLY_LIMIT:
-                raise ValueError("too many verification codes for this email, try later")
-            if remote_addr and ip_count >= REGISTER_CODE_IP_HOURLY_LIMIT:
-                raise ValueError("too many verification codes from this network, try later")
+        elif purpose_value == "password_reset" and not self.get_user_by_email(value):
+            raise ValueError("email is not registered")
+        email_count, ip_count = self.recent_email_code_count(value, remote_addr, hour_ago, purpose_value)
+        if email_count >= REGISTER_CODE_EMAIL_HOURLY_LIMIT:
+            raise ValueError("too many verification codes for this email, try later")
+        if remote_addr and ip_count >= REGISTER_CODE_IP_HOURLY_LIMIT:
+            raise ValueError("too many verification codes from this network, try later")
         code = f"{random.SystemRandom().randint(0, 999999):06d}"
         ts = int(time.time())
         with self.lock:
             self.conn.execute(
                 "insert into email_codes(email,code,purpose,created_at,expires_at,remote_addr) values(?,?,?,?,?,?)",
-                (value, code, purpose, ts, ts + CODE_TTL_SECONDS, remote_addr or ""),
+                (value, code, purpose_value, ts, ts + CODE_TTL_SECONDS, remote_addr or ""),
             )
             self.conn.commit()
         return code
@@ -9594,6 +9652,8 @@ def public_site_settings_json(settings: dict) -> dict:
                     item["a"] = "积分用于消耗调用 AI 模型生成内容。每日签到可获得额外积分，充值通道维护期间暂不开放购买和兑换。"
                 if "安装" in question or "风险" in question:
                     item["a"] = "APK 下载渠道暂时关闭，请先使用 Web App。"
+                if "忘记密码" in question or "密码" in question:
+                    item["a"] = "在登录页点击「忘记密码」，输入注册邮箱获取验证码后即可设置新密码。验证码 10 分钟内有效。"
         app["info_download_button_text"] = "打开 Web App"
         app["info_eyebrow"] = "AI星月 Web 同步状态"
         app["info_title"] = "网页端\n同账号 · 同积分 · 同角色库。"
@@ -10203,6 +10263,25 @@ class Handler(BaseHTTPRequestHandler):
                     return ok_response("sent")
                 return error_response(public_email_error(exc), 500)
 
+        if normalized in ("console/api/password-reset/email", "console/api/reset-password/email"):
+            email_value = normalize_email(body.get("email") if isinstance(body, dict) else "")
+            lang = body.get("lang", "zh-Hans") if isinstance(body, dict) else "zh-Hans"
+            if not is_valid_email(email_value):
+                return error_response("invalid email")
+            if not self.store.get_user_by_email(email_value):
+                return ok_response("sent")
+            try:
+                code = self.store.create_email_code(email_value, self.client_ip(), purpose="password_reset")
+                send_verification_email(email_value, code, str(lang), purpose="password_reset")
+                return ok_response("sent")
+            except ValueError as exc:
+                return error_response(str(exc), 429 if "too many" in str(exc) else 400)
+            except Exception as exc:
+                log(f"password reset email send failed for {email_value}: {exc}")
+                if allow_email_send_failure():
+                    return ok_response("sent")
+                return error_response(public_email_error(exc), 500)
+
         if normalized == "console/api/register":
             if isinstance(body, dict):
                 email = normalize_email(body.get("email"))
@@ -10245,6 +10324,27 @@ class Handler(BaseHTTPRequestHandler):
             if existing["password_hash"] != self.store.password_hash(str(password)):
                 return error_response("invalid email or password", 401)
             return ok_response(token_for(existing["id"]))
+
+        if normalized in ("console/api/password-reset", "console/api/reset-password"):
+            if isinstance(body, dict):
+                email = normalize_email(body.get("email"))
+                password = body.get("password")
+                code = body.get("code")
+            else:
+                email, password, code = "", None, ""
+            if not is_valid_email(email):
+                return error_response("invalid email")
+            if not password or len(str(password)) < 6:
+                return error_response("password must be at least 6 characters")
+            if not self.store.get_user_by_email(email):
+                return error_response("invalid verification code", 401)
+            if not self.store.verify_email_code(email, str(code), purpose="password_reset"):
+                return error_response("invalid verification code", 401)
+            try:
+                updated = self.store.reset_user_password(str(email), str(password), self.client_ip())
+            except ValueError as exc:
+                return error_response(str(exc), 400)
+            return ok_response(token_for(updated["id"]))
 
         if normalized == "console/api/register/name_check":
             return ok_response("")

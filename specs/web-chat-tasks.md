@@ -36,6 +36,7 @@
 | WC32 | 角色详情评论区和思考格式清洗 | Done | 角色详情页移除单独“开场白”卡片；评论区新增回复栏，默认按点赞数展示前三条并支持展开全部；后端新增角色评论/评论点赞 API。回复清洗改为贪婪移除 `<thinking>` 等内部块、处理未闭合思考标签并解包 `<content>` 正文。本地函数级验证通过。 |
 | WC33 | 内测人数上限和生成并发保护 | Done | 后端新增 `BETA_MAX_REGISTERED_USERS=250`、`GENERATION_GLOBAL_CONCURRENCY=20`、`GENERATION_USER_CONCURRENCY=2`、`GENERATION_IP_CONCURRENCY=5` 默认运行开关；注册发码、正式注册和锁内创建均检查内测名额，公开用户数排除管理员；单聊流式/阻塞、兼容 chat-messages、群聊回复、图片生成、重生成和新 swipe 纳入生成槽位限制；后台 stats 返回 `beta` 和 `generation_concurrency` 快照。本地 `py_compile`、函数级名额/限流验证、`git diff --check` 和敏感 key 扫描通过。 |
 | WC34 | 内测注册赠送 50 次对话额度 | Done | 将 `CHAT_MESSAGE_COST=50` 保持不变，`NEW_USER_INITIAL_POINTS` 默认改为 `2500`，即后续注册默认 50 次成功角色回复；同步首页、注册页、默认运营配置和 credits/design SPEC。已有账号余额不自动扣减。线上临时账号验证初始 `2500`、扣一次后 `2450`，公开站点配置已无旧注册送 `5000` 文案。 |
+| WC35 | 邮箱验证码密码重置与首页高级搜索布局 | Done | 2026-07-06 新增 `/console/api/password-reset/email` 和 `/console/api/password-reset`，登录页新增“重置密码”视图和“忘记密码？”入口，首页高级搜索改为宽屏 6 列、中屏 3 列、移动端 2 列响应式网格。验证：本地 `py_compile`、`node --check`、`verify_password_reset_local.py`、`verify_password_reset_filter_browser.py` 通过；部署后线上远程 API 验证旧密码登录、错码拒绝、正码重置、新密码登录、旧密码失效和审计事件写入均为 true，临时用户清理为 0；线上 Playwright 验证 2048/1180/390 宽度 `outsideCount=0`、console/page error 为 0；backend/nginx active，公网 `/health` OK，`CONTENT_MODE=local_only`。 |
 
 ## 本轮完成记录
 

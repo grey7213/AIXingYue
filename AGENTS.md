@@ -438,3 +438,8 @@
   Cause: 旧清洗只做非贪婪标签移除，遇到截图式嵌套/残缺思考标签或格式说明行时会留下内部文本；同时没有把 `<content>正文</content>` 解包为最终正文。
   Fix: `normalize_visible_chat_reply()` 和前端 `normalizeVisibleAssistantContent()` 先贪婪移除内部 XML 标签并处理未闭合标签，再解包 `<content>`，最后删除格式说明泄露行；如果清洗后没有可见正文则返回空字符串而不是回退原文。
   Verify: 2026-07-06 本地函数级断言覆盖 `<thinking>内部</thinking><content>你好 星月</content>`、未闭合 `<thinking>`、纯 `<content>` 和截图式格式泄露；`py_compile`、`node --check` 通过。
+
+- Symptom: `/app/` 首页高级搜索打开后，关键词筛选行在宽屏或截图比例下横向溢出，右侧“无图模式”或按钮贴到容器外。
+  Cause: `.advanced-search-grid` 使用固定 6 列 `repeat(5, minmax(120px, 1fr)) minmax(120px, .8fr)`，没有给关键词列、中屏换行和 toggle 文本收缩留出稳定约束。
+  Fix: `frontend/app/assets/css/app.css` 将高级搜索改为宽屏 `minmax(260px, 1.55fr) repeat(4, minmax(140px, 1fr)) minmax(170px, .85fr)`，中屏 `max-width:1320px` 降为 3 列并让关键词跨 2 列，移动端保持 2 列；toggle 文本设置 ellipsis。
+  Verify: 2026-07-06 线上 Playwright `verify_password_reset_filter_browser.py` 在 2048/1180/390 宽度均返回 `outsideCount=0`、document 无横向 overflow，console/page error 为 0。

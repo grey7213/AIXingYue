@@ -9,9 +9,13 @@ function loginPage() {
     toastTimer: null,
     loginForm: { email: '', password: '' },
     registerForm: { email: '', code: '', name: '', password: '' },
+    resetForm: { email: '', code: '', password: '' },
     sendingCode: false,
     codeCountdown: 0,
     countdownTimer: null,
+    sendingResetCode: false,
+    resetCodeCountdown: 0,
+    resetCountdownTimer: null,
     siteSettings: null,
 
     init() {
@@ -41,6 +45,11 @@ function loginPage() {
     goNext() {
       const next = new URLSearchParams(location.search).get('next') || '/app/';
       location.replace(next);
+    },
+
+    openReset() {
+      this.resetForm.email = this.loginForm.email.trim() || this.registerForm.email.trim() || this.resetForm.email;
+      this.view = 'reset';
     },
 
     async doLogin() {
@@ -77,6 +86,27 @@ function loginPage() {
       } finally { this.sendingCode = false; }
     },
 
+    async sendResetCode() {
+      const email = this.resetForm.email.trim();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+        this.showToast(this.authText('invalid_email_text', '请输入正确的邮箱地址'), 'error');
+        return;
+      }
+      this.sendingResetCode = true;
+      try {
+        await api.sendPasswordResetCode(email);
+        this.showToast(this.authText('reset_code_sent_text', '密码重置验证码已发送，请查收邮件'), 'success');
+        this.resetCodeCountdown = 60;
+        if (this.resetCountdownTimer) clearInterval(this.resetCountdownTimer);
+        this.resetCountdownTimer = setInterval(() => {
+          this.resetCodeCountdown--;
+          if (this.resetCodeCountdown <= 0) clearInterval(this.resetCountdownTimer);
+        }, 1000);
+      } catch (err) {
+        this.showToast(err.message || this.authText('send_failed_text', '发送失败'), 'error');
+      } finally { this.sendingResetCode = false; }
+    },
+
     async doRegister() {
       this.loading = true;
       try {
@@ -93,6 +123,24 @@ function loginPage() {
         setTimeout(() => this.goNext(), 700);
       } catch (err) {
         this.showToast(err.message || this.authText('register_failed_text', '注册失败'), 'error');
+      } finally { this.loading = false; }
+    },
+
+    async doResetPassword() {
+      this.loading = true;
+      try {
+        const r = await api.resetPassword(
+          this.resetForm.email.trim(),
+          this.resetForm.password,
+          this.resetForm.code.trim()
+        );
+        const token = r && (r.data || r);
+        if (typeof token !== 'string') throw new Error(this.authText('reset_invalid_response_text', '密码重置响应无效'));
+        setToken(token);
+        this.showToast(this.authText('reset_success_text', '密码已重置'), 'success');
+        setTimeout(() => this.goNext(), 700);
+      } catch (err) {
+        this.showToast(err.message || this.authText('reset_failed_text', '密码重置失败'), 'error');
       } finally { this.loading = false; }
     },
   };

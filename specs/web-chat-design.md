@@ -41,10 +41,18 @@
 - 扣费顺序为 `free_points` -> `reward_points` -> `paid_points`，并同步兼容字段 `points`。
 - Web 单聊流式/阻塞、旧 APK chat-messages 兼容入口、群聊角色回复都复用同一扣费方法。
 
+## 账号安全
+
+- 注册和密码重置复用 `email_codes` 表，通过 `purpose='register'` 和 `purpose='password_reset'` 区分用途。
+- `POST /console/api/password-reset/email` 发送重置验证码；未知邮箱返回同样的成功包，避免额外暴露账号存在性。
+- `POST /console/api/password-reset` 校验邮箱、6 位验证码和新密码长度，成功后更新 `users.password_hash`，写入 `user_security_events.password_reset_success`，并返回登录 token。
+- 邮件正文按用途区分注册验证码和密码重置验证码，验证码有效期仍为 10 分钟。
+
 ## Web 页面
 
-- `login.html` 保持现状。
+- `login.html` 保持原深色登录页风格，新增“重置密码”视图和“忘记密码？”入口。
 - `explore.html`：移动优先发现流，桌面保留侧栏，移动端使用底部导航。
+- `index.html` 首页高级搜索使用响应式 CSS grid：宽屏 6 列，中屏 3 列，移动端 2 列；关键词字段在中/小屏跨列，避免横向溢出。
 - `character.html`：新增角色详情页，作为探索页到聊天页之间的确认层。
 - `character.html`：对 JSON/Character Card 风格设定做可读化渲染，优先抽取姓名、年龄、性别、学校/身份、描述等常见字段，避免移动端直接显示一整段原始 JSON。
 - `chat.html`：桌面双栏，移动端聚焦单会话输入。
