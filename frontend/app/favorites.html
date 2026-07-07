@@ -7,8 +7,8 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
   <link rel="icon" href="/favicon.ico">
   <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260703-fengyue-home3">
-  <script type="module" src="/app/assets/js/hub-pages.js?v=20260703-channels-closed"></script>
+  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260707-clean-chat-ux2">
+  <script type="module" src="/app/assets/js/hub-pages.js?v=20260707-clean-chat-ux2"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
@@ -43,6 +43,13 @@
               <div class="char-card__author" x-text="card.author || appHomeText('official_author', '官方角色')"></div>
               <div class="char-card__name" x-text="card.name"></div>
               <div class="char-card__desc" x-text="card.description || card.summary || appHomeText('summary_fallback', '点击开始对话')"></div>
+            </div>
+            <div class="char-card__footer" x-show="(card.user_tags || []).length">
+              <div class="char-card__chip-tags">
+                <template x-for="t in (card.user_tags || []).slice(0, 4)" :key="t">
+                  <span class="char-card__chip-tag" x-text="t"></span>
+                </template>
+              </div>
             </div>
           </a>
         </template>

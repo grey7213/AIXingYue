@@ -142,6 +142,7 @@ function normalizeCard(raw) {
     cover: data.cover || data.cover_url || data.image || data.icon_url || '',
     icon: data.icon || data.icon_url || data.avatar || '',
     tags: Array.isArray(data.tags) ? data.tags : [],
+    user_tags: Array.isArray(data.user_tags) ? data.user_tags : [],
     source: data.source || 'upstream',
     favorited: !!data.favorited,
     liked: !!data.liked,
@@ -164,6 +165,8 @@ function characterPage() {
     commentDraft: '',
     commentSubmitting: false,
     commentLikingId: '',
+    userTagDraft: '',
+    userTagSaving: false,
 
     async init() {
       injectLayout('home');
@@ -194,7 +197,10 @@ function characterPage() {
         const r = await api.appDetails(id);
         const card = normalizeCard(r);
         this.card = card.id ? card : null;
-        if (this.card?.id) await this.loadComments(false);
+        if (this.card?.id) {
+          this.userTagDraft = (this.card.user_tags || []).join('，');
+          await this.loadComments(false);
+        }
       } catch {
         this.card = null;
         this.comments = [];
@@ -205,6 +211,14 @@ function characterPage() {
 
     characterText(key, fallback = '') {
       return this.siteSettings?.character?.[key] || fallback;
+    },
+
+    goBack() {
+      if (document.referrer && new URL(document.referrer, location.origin).origin === location.origin && history.length > 1) {
+        history.back();
+        return;
+      }
+      location.href = '/app/';
     },
 
     likeLabel() {
@@ -290,6 +304,23 @@ function characterPage() {
       if (!this.card?.id) return;
       const r = await api.toggleFavorite(this.card.id);
       this.card = { ...this.card, favorited: !!r?.data?.favorited };
+    },
+
+    async saveUserTags() {
+      if (!this.card?.id || this.userTagSaving) return;
+      const tags = this.userTagDraft
+        .split(/[，,\n]/)
+        .map(s => s.trim())
+        .filter(Boolean);
+      this.userTagSaving = true;
+      try {
+        const r = await api.saveUserTags(this.card.id, tags);
+        const next = r?.data?.user_tags || r?.data?.tags || tags;
+        this.card = { ...this.card, user_tags: Array.isArray(next) ? next : [] };
+        this.userTagDraft = this.card.user_tags.join('，');
+      } finally {
+        this.userTagSaving = false;
+      }
     },
 
     cardSummary() {

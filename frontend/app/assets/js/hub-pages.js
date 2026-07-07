@@ -92,6 +92,13 @@ export function historiesPage() {
     conversationPreview(c) {
       return c?.last_message || c?.app_summary || this.chatText('continue_preview', '点击继续对话');
     },
+    archiveLabel(c) {
+      const count = Number(c?.archive_count || 1);
+      return count > 1 ? `${count} 个存档` : '';
+    },
+    userTagList(c) {
+      return Array.isArray(c?.user_tags) ? c.user_tags.slice(0, 4) : [];
+    },
     likeLabel(c) {
       const count = Number(c?.like_count || 0);
       return `${c?.liked ? '已赞' : '点赞'}${count ? ` ${count}` : ''}`;
@@ -103,16 +110,48 @@ export function historiesPage() {
       const index = this.conversations.findIndex(item => item.id === id);
       if (index >= 0) this.conversations.splice(index, 1, { ...this.conversations[index], ...patch });
     },
+    normalizeConversation(item) {
+      return {
+        ...item,
+        favorited: !!item.favorited,
+        liked: !!item.liked,
+        like_count: Number(item.like_count || 0),
+        user_tags: Array.isArray(item.user_tags) ? item.user_tags : [],
+      };
+    },
+    groupConversations(list = []) {
+      const groups = new Map();
+      list.map(item => this.normalizeConversation(item)).forEach(item => {
+        const key = item.app_id || item.id;
+        const existing = groups.get(key);
+        if (!existing) {
+          groups.set(key, {
+            ...item,
+            archive_count: 1,
+            archived_conversations: [item],
+          });
+          return;
+        }
+        existing.archive_count += 1;
+        existing.archived_conversations.push(item);
+        const existingTime = Number(existing.updated_at || existing.created_at || 0);
+        const itemTime = Number(item.updated_at || item.created_at || 0);
+        if (itemTime > existingTime) {
+          groups.set(key, {
+            ...existing,
+            ...item,
+            archive_count: existing.archive_count,
+            archived_conversations: existing.archived_conversations,
+          });
+        }
+      });
+      return Array.from(groups.values());
+    },
     async loadList() {
       this.loading = true;
       try {
         const r = await api.conversations();
-        this.conversations = (r?.data?.list || []).map(item => ({
-          ...item,
-          favorited: !!item.favorited,
-          liked: !!item.liked,
-          like_count: Number(item.like_count || 0),
-        }));
+        this.conversations = this.groupConversations(r?.data?.list || []);
       } finally { this.loading = false; }
     },
     async toggleLike(c, event) {
@@ -166,7 +205,7 @@ export function historiesPage() {
       this.deletingId = c.id;
       try {
         await api.deleteConversation(c.id);
-        this.conversations = this.conversations.filter(item => item.id !== c.id);
+        await this.loadList();
       } catch (err) {
         alert(err.message || this.chatText('delete_failed_text', '删除失败'));
       } finally {
@@ -179,14 +218,21 @@ export function historiesPage() {
 export function workshopPage() {
   return {
     user: null, points: 0, stats: null, myApps: [], siteSettings: null,
+    creatorLeaderboard: [], creatorContest: null,
     async init() {
       injectLayout('workshop');
       await loadSiteSettings(this);
       if (!(await loadUser(this))) return;
-      const s = await api.homeStats().catch(() => null);
+      const [s, m, contests, leaderboard] = await Promise.all([
+        api.homeStats().catch(() => null),
+        api.myApps({ page: 1, page_size: 6 }).catch(() => null),
+        api.creatorContests().catch(() => null),
+        api.creatorLeaderboard({ limit: 10 }).catch(() => null),
+      ]);
       this.stats = s?.data || null;
-      const m = await api.myApps({ page: 1, page_size: 6 }).catch(() => null);
       this.myApps = m?.data?.list || [];
+      this.creatorContest = contests?.data?.contest || contests?.contest || null;
+      this.creatorLeaderboard = leaderboard?.data?.list || contests?.data?.leaderboard || [];
     },
     emptyText(key, fallback = '') { return emptyText(this, key, fallback); },
     appNavText(key, fallback = '') { return appNavText(this, key, fallback); },
@@ -195,6 +241,16 @@ export function workshopPage() {
       const prefix = this.emptyText('workshop_library_prefix', '已同步');
       const suffix = this.emptyText('workshop_library_suffix', '张卡');
       return `${prefix} ${this.stats?.apps?.total || 0} ${suffix}`;
+    },
+    creatorName(row) {
+      return row?.user_name || '星月创作者';
+    },
+    creatorScore(row) {
+      return Number(row?.score || 0).toLocaleString('zh-CN');
+    },
+    contestMetricText() {
+      const list = Array.isArray(this.creatorContest?.metrics) ? this.creatorContest.metrics : [];
+      return list.join(' / ');
     },
   };
 }

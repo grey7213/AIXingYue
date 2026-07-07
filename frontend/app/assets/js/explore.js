@@ -7,7 +7,10 @@ const DEFAULT_FIRST_PAGE_PARAMS = Object.freeze({
   page_size: DEFAULT_PAGE_SIZE,
   sort: 'random',
   rank: 'daily',
+  zone: 'clean',
 });
+const BROWSE_STATE_KEY = 'ai_xingyue_home_browse_state';
+const BROWSE_RESTORE_KEY = 'ai_xingyue_home_restore_once';
 
 let defaultFirstPagePrefetch = api.exploreSearch(DEFAULT_FIRST_PAGE_PARAMS)
   .then(data => ({ ok: true, data }))
@@ -30,6 +33,7 @@ function explorePage() {
     activeCategory: 'all',
     activeSort: 'random',
     activeRank: 'daily',
+    activeZone: 'clean',
     randomSeed: Math.floor(Math.random() * 2147483647),
     pictureless: false,
     siteSettings: null,
@@ -39,6 +43,7 @@ function explorePage() {
       category: 'all',
       sort: 'random',
       rank: 'daily',
+      zone: 'clean',
       pictureless: false,
       pageSize: DEFAULT_PAGE_SIZE,
     },
@@ -65,9 +70,16 @@ function explorePage() {
       { key: 'latest', label: '最新' },
       { key: 'updated', label: '更新' },
     ],
+    zoneOptions: [
+      { key: 'clean', label: '纯净区' },
+      { key: 'all', label: '全库' },
+    ],
+    _browsePageshowBound: false,
 
     async init() {
       injectLayout(this.activeNav);
+      this.bindBrowseRestoreEvents();
+      const restoredBrowseState = this.restoreBrowseState();
       const settingsPromise = loadPublicSiteSettings()
         .then(settings => {
           this.siteSettings = settings;
@@ -79,7 +91,6 @@ function explorePage() {
       const cached = getCachedUser();
       if (cached) this.user = cached;
 
-      const listPromise = this.loadList(true);
       const accountPromise = (async () => {
         try {
           const [profileResult, pointsResult, statsResult] = await Promise.allSettled([
@@ -105,12 +116,15 @@ function explorePage() {
           }
         }
       })();
+      const listPromise = restoredBrowseState ? Promise.resolve() : this.loadList(true);
       await Promise.allSettled([settingsPromise, listPromise, accountPromise]);
+      if (restoredBrowseState) this.restoreBrowseScroll(restoredBrowseState.scrollY, restoredBrowseState.clickedId);
     },
 
     setCategory(k) { this.activeCategory = k; this.syncAdvancedForm(); this.loadList(true); },
     setSort(k) { this.activeSort = k; this.syncAdvancedForm(); this.loadList(true); },
     setRank(k) { this.activeRank = k; this.syncAdvancedForm(); this.loadList(true); },
+    setZone(k) { this.activeZone = k === 'all' ? 'all' : 'clean'; this.syncAdvancedForm(); this.loadList(true); },
     togglePictureless() { this.pictureless = !this.pictureless; this.syncAdvancedForm(); this.loadList(true); },
 
     syncAdvancedForm() {
@@ -119,6 +133,7 @@ function explorePage() {
         category: this.activeCategory || 'all',
         sort: this.activeSort || 'random',
         rank: this.activeRank || 'daily',
+        zone: this.activeZone || 'clean',
         pictureless: !!this.pictureless,
         pageSize: Number(this.pageSize) || DEFAULT_PAGE_SIZE,
       };
@@ -134,6 +149,7 @@ function explorePage() {
       this.activeCategory = this.advancedForm.category || 'all';
       this.activeSort = this.advancedForm.sort || 'random';
       this.activeRank = this.advancedForm.rank || 'daily';
+      this.activeZone = this.advancedForm.zone === 'all' ? 'all' : 'clean';
       this.pictureless = !!this.advancedForm.pictureless;
       this.pageSize = Number(this.advancedForm.pageSize) || DEFAULT_PAGE_SIZE;
       this.loadList(true);
@@ -145,6 +161,7 @@ function explorePage() {
         category: 'all',
         sort: 'random',
         rank: 'daily',
+        zone: 'clean',
         pictureless: false,
         pageSize: DEFAULT_PAGE_SIZE,
       };
@@ -178,6 +195,12 @@ function explorePage() {
         ...item,
         label: this.appHomeMapText('sort_labels', item.key, item.label),
       }));
+      this.zoneOptions = this.zoneOptions.map(item => ({
+        ...item,
+        label: item.key === 'clean'
+          ? this.appHomeText('zone_clean_label', item.label)
+          : this.appHomeText('zone_all_label', item.label),
+      }));
     },
 
     async loadList(reset = false) {
@@ -200,12 +223,15 @@ function explorePage() {
         if (this.activeSort === 'random') params.seed = this.randomSeed;
         if (this.activeCategory !== 'all') params.tag = this.activeCategory;
         if (this.searchKeyword) params.q = this.searchKeyword;
+        if (this.activeZone === 'all') params.zone = 'all';
+        else if (!this.searchKeyword) params.zone = 'clean';
         if (this.pictureless) params.pictureless = 'true';
         const canUsePrefetch = !!defaultFirstPagePrefetch
           && params.page === 1
           && params.page_size === DEFAULT_PAGE_SIZE
           && params.sort === DEFAULT_FIRST_PAGE_PARAMS.sort
           && params.rank === DEFAULT_FIRST_PAGE_PARAMS.rank
+          && params.zone === DEFAULT_FIRST_PAGE_PARAMS.zone
           && !params.tag
           && !params.q
           && !params.pictureless
@@ -260,6 +286,102 @@ function explorePage() {
         const r = await api.toggleFavorite(card.id);
         card.favorited = !!r?.data?.favorited;
       } catch {}
+    },
+
+    rememberBrowsePosition(card = null) {
+      try {
+        sessionStorage.setItem(BROWSE_RESTORE_KEY, '1');
+        sessionStorage.setItem(BROWSE_STATE_KEY, JSON.stringify({
+          savedAt: Date.now(),
+          scrollY: window.scrollY || document.documentElement.scrollTop || 0,
+          page: this.page,
+          pageSize: this.pageSize,
+          total: this.total,
+          hasMore: this.hasMore,
+          searchKeyword: this.searchKeyword,
+          activeCategory: this.activeCategory,
+          activeSort: this.activeSort,
+          activeRank: this.activeRank,
+          activeZone: this.activeZone,
+          randomSeed: this.randomSeed,
+          pictureless: this.pictureless,
+          cards: this.cards.slice(0, 80),
+          clickedId: card?.id || '',
+        }));
+      } catch {}
+    },
+
+    bindBrowseRestoreEvents() {
+      if (this._browsePageshowBound) return;
+      this._browsePageshowBound = true;
+      document.addEventListener('click', (event) => {
+        const link = event.target?.closest?.('a[href*="/app/character.html?id="]');
+        if (!link) return;
+        try {
+          const id = new URL(link.href, location.origin).searchParams.get('id') || '';
+          this.rememberBrowsePosition({ id });
+        } catch {
+          this.rememberBrowsePosition();
+        }
+      }, true);
+      const restore = () => {
+        const state = this.restoreBrowseState();
+        if (state) this.restoreBrowseScroll(state.scrollY, state.clickedId);
+      };
+      window.addEventListener('pageshow', () => setTimeout(restore, 0));
+      window.addEventListener('popstate', () => setTimeout(restore, 0));
+      window.addEventListener('focus', () => setTimeout(restore, 40));
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') setTimeout(restore, 40);
+      });
+    },
+
+    restoreBrowseState() {
+      try {
+        if (sessionStorage.getItem(BROWSE_RESTORE_KEY) !== '1') return null;
+        const raw = sessionStorage.getItem(BROWSE_STATE_KEY);
+        const state = raw ? JSON.parse(raw) : null;
+        if (!state || Date.now() - Number(state.savedAt || 0) > 20 * 60 * 1000) return null;
+        this.page = Number(state.page) || 1;
+        this.pageSize = Number(state.pageSize) || DEFAULT_PAGE_SIZE;
+        this.total = Number(state.total) || 0;
+        this.hasMore = state.hasMore !== false;
+        this.searchKeyword = String(state.searchKeyword || '');
+        this.activeCategory = state.activeCategory || 'all';
+        this.activeSort = state.activeSort || 'random';
+        this.activeRank = state.activeRank || 'daily';
+        this.activeZone = state.activeZone === 'all' ? 'all' : 'clean';
+        this.randomSeed = Number(state.randomSeed) || this.randomSeed;
+        this.pictureless = !!state.pictureless;
+        this.cards = Array.isArray(state.cards) ? state.cards : [];
+        this.syncAdvancedForm();
+        return state;
+      } catch {
+        return null;
+      }
+    },
+
+    restoreBrowseScroll(scrollY = 0, clickedId = '') {
+      const target = Math.max(0, Number(scrollY) || 0);
+      this.$nextTick(() => {
+        const apply = () => {
+          const id = String(clickedId || '').replace(/"/g, '\\"');
+          const clicked = id ? document.querySelector(`a[href*="${id}"]`) : null;
+          if (clicked) {
+            clicked.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'auto' });
+            return;
+          }
+          window.scrollTo({ top: target, left: 0, behavior: 'auto' });
+        };
+        requestAnimationFrame(() => {
+          apply();
+          setTimeout(apply, 120);
+          setTimeout(apply, 360);
+          setTimeout(() => {
+            try { sessionStorage.removeItem(BROWSE_RESTORE_KEY); } catch {}
+          }, 520);
+        });
+      });
     },
   };
 }

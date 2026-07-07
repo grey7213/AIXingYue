@@ -96,7 +96,14 @@ export const api = {
   },
   createAppComment: (appId, content) => rawRequest(`/console/api/web/apps/${encodeURIComponent(appId)}/comments`, { method: 'POST', body: { content } }),
   toggleCommentLike: (commentId) => rawRequest(`/console/api/web/comments/${encodeURIComponent(commentId)}/like`, { method: 'POST', body: {} }),
+  userTags: (appId) => rawRequest(`/console/api/web/apps/${encodeURIComponent(appId)}/user-tags`),
+  saveUserTags: (appId, tags) => rawRequest(`/console/api/web/apps/${encodeURIComponent(appId)}/user-tags`, { method: 'POST', body: { tags } }),
   homeStats: () => rawRequest('/console/api/web/home-stats'),
+  creatorLeaderboard: (params = {}) => {
+    const qs = new URLSearchParams(params);
+    return rawRequest(`/console/api/web/creator-leaderboard?${qs}`);
+  },
+  creatorContests: () => rawRequest('/console/api/web/creator-contests'),
   favorites: (params = {}) => {
     const qs = new URLSearchParams(params);
     return rawRequest(`/console/api/web/favorites?${qs}`);

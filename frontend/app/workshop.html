@@ -7,8 +7,8 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
   <link rel="icon" href="/favicon.ico">
   <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260703-fengyue-home3">
-  <script type="module" src="/app/assets/js/hub-pages.js?v=20260703-channels-closed"></script>
+  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260707-clean-chat-ux2">
+  <script type="module" src="/app/assets/js/hub-pages.js?v=20260707-clean-chat-ux2"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
@@ -35,6 +35,37 @@
           <a class="quick-tile" href="/app/my-apps.html"><strong x-text="emptyText('workshop_my_roles_title', '我的角色')">我的角色</strong><span x-text="emptyText('workshop_my_roles_copy', '编辑公开状态与设定')">编辑公开状态与设定</span></a>
           <a class="quick-tile" href="/admin.html"><strong x-text="emptyText('workshop_official_title', '官方角色')">官方角色</strong><span x-text="emptyText('workshop_official_copy', '管理员发布与维护')">管理员发布与维护</span></a>
           <a class="quick-tile" href="/app/info.html"><strong x-text="emptyText('workshop_library_title', '角色库')">角色库</strong><span x-text="syncedLibraryText()"></span></a>
+        </div>
+        <div class="creator-ops-grid">
+          <section class="creator-contest-panel">
+            <div class="creator-panel__eyebrow" x-text="creatorContest?.period || ''"></div>
+            <h2 x-text="creatorContest?.title || emptyText('creator_contest_title', '本期创作者比赛')">本期创作者比赛</h2>
+            <p x-text="creatorContest?.description || emptyText('creator_contest_copy', '每两周统计公开角色的聊天量、收藏和点赞，优质创作者会进入展示榜。')"></p>
+            <div class="creator-contest-panel__meta">
+              <span x-text="creatorContest?.status || emptyText('creator_contest_status', '长期开放')"></span>
+              <span x-show="contestMetricText()" x-text="contestMetricText()"></span>
+            </div>
+            <div class="creator-contest-panel__reward" x-text="creatorContest?.reward || emptyText('creator_contest_reward', '奖励：榜单展示、站内推荐位和后续积分激励。')"></div>
+          </section>
+          <section class="creator-leaderboard-panel">
+            <div class="creator-panel__head">
+              <h2 x-text="emptyText('creator_leaderboard_title', '创作者排行榜')">创作者排行榜</h2>
+              <a href="/app/create.html" class="xy-link text-sm" x-text="myText('new_role_text', '＋ 新建角色')">＋ 新建角色</a>
+            </div>
+            <template x-if="creatorLeaderboard.length === 0">
+              <div class="creator-leaderboard-empty" x-text="emptyText('creator_leaderboard_empty', '还没有公开用户角色，先发布一张角色卡吧。')">还没有公开用户角色，先发布一张角色卡吧。</div>
+            </template>
+            <template x-for="row in creatorLeaderboard" :key="row.user_id || row.rank">
+              <div class="creator-leaderboard-row">
+                <div class="creator-rank" x-text="row.rank"></div>
+                <div class="creator-main">
+                  <div class="creator-name" x-text="creatorName(row)"></div>
+                  <div class="creator-meta" x-text="`${row.role_count || 0} 张角色 · ${row.like_count || 0} 赞 · ${row.favorite_count || 0} 收藏 · ${row.conversation_count || 0} 会话`"></div>
+                </div>
+                <div class="creator-score" x-text="creatorScore(row)"></div>
+              </div>
+            </template>
+          </section>
         </div>
         <div class="list-panel">
           <template x-if="myApps.length === 0"><div class="p-8 text-center text-violet-200/70" x-text="emptyText('workshop_empty_title', '你还没有创建过角色，点击右上角去新建吧')">你还没有创建过角色，点击右上角去新建吧</div></template>

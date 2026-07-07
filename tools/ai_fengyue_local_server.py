@@ -58,6 +58,15 @@ USER_LLM_TEMPERATURE = float(os.environ.get("USER_LLM_TEMPERATURE", "0.8") or "0
 USER_BYOK_ENABLED = str(os.environ.get("USER_BYOK_ENABLED", "0")).strip().lower() in ("1", "true", "yes", "on")
 PAYMENT_CHANNEL_ENABLED = env_bool("PAYMENT_CHANNEL_ENABLED", False)
 APK_DOWNLOAD_ENABLED = env_bool("APK_DOWNLOAD_ENABLED", False)
+DEFAULT_CLEAN_ZONE_EXCLUDE_TERMS = [
+    "猎奇", "重口", "福瑞", "furry", "guro", "gore", "血腥", "猎奇向",
+    "兽人", "兽化", "兽设",
+]
+CLEAN_ZONE_EXCLUDE_TERMS = [
+    term.strip()
+    for term in os.environ.get("CLEAN_ZONE_EXCLUDE_TERMS", ",".join(DEFAULT_CLEAN_ZONE_EXCLUDE_TERMS)).split(",")
+    if term.strip()
+]
 LLM_UPSTREAM_USER_AGENT = os.environ.get(
     "LLM_UPSTREAM_USER_AGENT",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -615,10 +624,14 @@ def site_settings_defaults() -> dict:
             "advanced_category_label": "分类",
             "advanced_rank_label": "榜单",
             "advanced_sort_label": "排序",
+            "advanced_zone_label": "内容区",
             "advanced_page_size_label": "每页数量",
             "advanced_pictureless_label": "无图模式",
             "advanced_apply_text": "应用搜索",
             "advanced_reset_text": "重置",
+            "zone_clean_label": "纯净区",
+            "zone_all_label": "全库",
+            "zone_clean_hint": "默认隐藏猎奇、重口、福瑞等题材；搜索或切到全库可主动查找。",
             "redirect_text": "正在跳转到",
             "redirect_link_text": "首页",
             "category_labels": {
@@ -1170,6 +1183,12 @@ def site_settings_defaults() -> dict:
             "workshop_library_title": "角色库",
             "workshop_library_prefix": "已同步",
             "workshop_library_suffix": "张卡",
+            "creator_contest_title": "本期创作者比赛",
+            "creator_contest_status": "长期开放",
+            "creator_contest_copy": "每两周统计公开角色的聊天量、收藏和点赞，优质创作者会进入展示榜。",
+            "creator_contest_reward": "奖励：榜单展示、站内推荐位和后续积分激励。",
+            "creator_leaderboard_title": "创作者排行榜",
+            "creator_leaderboard_empty": "还没有公开用户角色，先发布一张角色卡吧。",
         },
     }
 
@@ -1356,10 +1375,14 @@ def sanitize_site_settings(data: dict | None) -> dict:
         "advanced_category_label": 30,
         "advanced_rank_label": 30,
         "advanced_sort_label": 30,
+        "advanced_zone_label": 30,
         "advanced_page_size_label": 30,
         "advanced_pictureless_label": 40,
         "advanced_apply_text": 40,
         "advanced_reset_text": 40,
+        "zone_clean_label": 30,
+        "zone_all_label": 30,
+        "zone_clean_hint": 160,
         "redirect_text": 60,
         "redirect_link_text": 40,
     }.items():
@@ -1956,6 +1979,12 @@ def sanitize_site_settings(data: dict | None) -> dict:
         "workshop_library_title": 40,
         "workshop_library_prefix": 40,
         "workshop_library_suffix": 40,
+        "creator_contest_title": 60,
+        "creator_contest_status": 40,
+        "creator_contest_copy": 200,
+        "creator_contest_reward": 160,
+        "creator_leaderboard_title": 60,
+        "creator_leaderboard_empty": 120,
     }.items():
         out["empty_states"][key] = clean_text(empty_states.get(key), defaults["empty_states"][key], limit)
     return out
@@ -2219,6 +2248,17 @@ class Store:
                     primary key(user_id, app_id)
                 );
                 create index if not exists idx_user_likes_user on user_likes(user_id, created_at desc);
+                create table if not exists user_app_tags (
+                    user_id text not null,
+                    app_id text not null,
+                    tag text not null,
+                    created_at integer not null,
+                    primary key(user_id, app_id, tag)
+                );
+                create index if not exists idx_user_app_tags_user
+                    on user_app_tags(user_id, tag, created_at desc);
+                create index if not exists idx_user_app_tags_app
+                    on user_app_tags(app_id, tag);
                 create table if not exists app_comments (
                     id text primary key,
                     app_id text not null,
@@ -3301,6 +3341,7 @@ class Store:
             item["like_count"] = int(item.get("app_like_count") or 0)
             item["favorited"] = bool(item.get("favorited"))
             item["liked"] = bool(item.get("liked"))
+            item["user_tags"] = self.list_user_app_tags(user_id, str(item.get("app_id") or ""))
             item.pop("current_app_name", None)
             item.pop("current_app_icon", None)
             item.pop("current_app_summary", None)
@@ -4427,6 +4468,7 @@ class Store:
 
     def list_local_apps(self, *, source: str | None = None, owner_user_id: str | None = None,
                         search: str = "", tag: str = "", sort: str = "default",
+                        content_zone: str = "all",
                         random_seed: int | None = None,
                         page: int = 1, page_size: int = 30,
                         only_public: bool = True, only_published: bool = True,
@@ -4449,6 +4491,14 @@ class Store:
         if tag:
             where.append("tags like ?")
             params.append(f"%{tag}%")
+        if str(content_zone or "").strip().lower() in ("clean", "safe", "pure"):
+            clean_expr = (
+                "lower(coalesce(name,'') || ' ' || coalesce(summary,'') || ' ' || "
+                "coalesce(description,'') || ' ' || coalesce(tags,''))"
+            )
+            for term in CLEAN_ZONE_EXCLUDE_TERMS:
+                where.append(f"{clean_expr} not like ?")
+                params.append(f"%{term.lower()}%")
         where_sql = " where " + " and ".join(where) if where else ""
         offset = (max(1, page) - 1) * page_size
         sort_key = (sort or "default").strip().lower()
@@ -4488,6 +4538,69 @@ class Store:
             admin = self.conn.execute("select count(*) from local_apps where source='admin'").fetchone()[0]
             usr = self.conn.execute("select count(*) from local_apps where source='user'").fetchone()[0]
         return {"upstream": int(up), "admin": int(admin), "user": int(usr), "total": int(up) + int(admin) + int(usr)}
+
+    def creator_leaderboard(self, limit: int = 10) -> list[dict]:
+        safe_limit = max(1, min(int(limit or 10), 50))
+        with self.lock:
+            rows = self.conn.execute(
+                """
+                select
+                  u.id as user_id,
+                  coalesce(u.name, '星月创作者') as user_name,
+                  count(distinct a.id) as role_count,
+                  coalesce(sum(coalesce(a.like_count, 0)), 0) as like_count,
+                  count(distinct f.user_id || ':' || f.app_id) as favorite_count,
+                  count(distinct c.id) as conversation_count,
+                  max(a.updated_at) as last_updated_at
+                from local_apps a
+                join users u on u.id=a.owner_user_id
+                left join user_favorites f on f.app_id=a.id
+                left join conversations c on c.app_id=a.id
+                where a.source='user' and a.status='published' and a.is_public=1
+                group by u.id, u.name
+                order by
+                  (coalesce(sum(coalesce(a.like_count, 0)), 0) * 3
+                   + count(distinct f.user_id || ':' || f.app_id) * 2
+                   + count(distinct c.id)
+                   + count(distinct a.id) * 5) desc,
+                  max(a.updated_at) desc
+                limit ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+        out: list[dict] = []
+        for idx, row in enumerate(rows, start=1):
+            role_count = int(row["role_count"] or 0)
+            like_count = int(row["like_count"] or 0)
+            favorite_count = int(row["favorite_count"] or 0)
+            conversation_count = int(row["conversation_count"] or 0)
+            score = like_count * 3 + favorite_count * 2 + conversation_count + role_count * 5
+            out.append({
+                "rank": idx,
+                "user_id": str(row["user_id"] or ""),
+                "user_name": str(row["user_name"] or "星月创作者"),
+                "role_count": role_count,
+                "like_count": like_count,
+                "favorite_count": favorite_count,
+                "conversation_count": conversation_count,
+                "score": int(score),
+                "last_updated_at": int(row["last_updated_at"] or 0),
+            })
+        return out
+
+    def creator_contests(self) -> dict:
+        settings = self.site_settings()
+        empty = settings.get("empty_states", {}) if isinstance(settings, dict) else {}
+        month_label = time.strftime("%Y-%m", time.localtime())
+        return {
+            "active": True,
+            "period": month_label,
+            "title": empty.get("creator_contest_title") or "本期创作者比赛",
+            "status": empty.get("creator_contest_status") or "长期开放",
+            "description": empty.get("creator_contest_copy") or "每两周统计公开角色的聊天量、收藏和点赞，优质创作者会进入展示榜。",
+            "reward": empty.get("creator_contest_reward") or "奖励：榜单展示、站内推荐位和后续积分激励。",
+            "metrics": ["公开角色数", "点赞", "收藏", "会话数"],
+        }
 
     def toggle_favorite(self, user_id: str, app_id: str) -> dict:
         ts = now_ms()
@@ -4692,12 +4805,69 @@ class Store:
                 (user_id, app_id),
             ).fetchone())
 
+    def list_user_app_tags(self, user_id: str | None, app_id: str) -> list[str]:
+        clean_user = str(user_id or "").strip()
+        clean_app = str(app_id or "").strip()
+        if not clean_user or not clean_app:
+            return []
+        with self.lock:
+            rows = self.conn.execute(
+                "select tag from user_app_tags where user_id=? and app_id=? order by created_at asc",
+                (clean_user, clean_app),
+            ).fetchall()
+        return [str(r["tag"]) for r in rows if str(r["tag"] or "").strip()]
+
+    def set_user_app_tags(self, user_id: str, app_id: str, tags: list | str) -> dict:
+        clean_user = str(user_id or "").strip()
+        clean_app = str(app_id or "").strip()
+        if not clean_user:
+            raise ValueError("unauthorized")
+        if not clean_app:
+            raise ValueError("app_id is required")
+        if isinstance(tags, str):
+            raw_tags = re.split(r"[，,\n]+", tags)
+        elif isinstance(tags, list):
+            raw_tags = tags
+        else:
+            raw_tags = []
+        clean_tags: list[str] = []
+        seen: set[str] = set()
+        for raw in raw_tags:
+            tag = re.sub(r"\s+", " ", str(raw or "")).strip().strip("#")
+            if not tag:
+                continue
+            tag = tag[:24]
+            key = tag.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            clean_tags.append(tag)
+            if len(clean_tags) >= 12:
+                break
+        ts = now_ms()
+        with self.lock:
+            exists = self.conn.execute("select 1 from local_apps where id=?", (clean_app,)).fetchone()
+            if not exists:
+                raise ValueError("not found")
+            self.conn.execute("delete from user_app_tags where user_id=? and app_id=?", (clean_user, clean_app))
+            for tag in clean_tags:
+                self.conn.execute(
+                    "insert or ignore into user_app_tags(user_id,app_id,tag,created_at) values(?,?,?,?)",
+                    (clean_user, clean_app, tag, ts),
+                )
+            self.conn.commit()
+        self.log_event(clean_user, "user_tags", "更新玩家标签", {"app_id": clean_app, "tags": clean_tags})
+        return {"app_id": clean_app, "tags": clean_tags, "user_tags": clean_tags}
+
     def list_favorites(self, user_id: str, *, page: int = 1, page_size: int = 30, search: str = "") -> tuple[list, int]:
         where = ["f.user_id=?"]
         params: list = [user_id]
         if search:
-            where.append("(a.name like ? or a.summary like ? or a.description like ? or a.tags like ?)")
-            params.extend([f"%{search}%", f"%{search}%", f"%{search}%", f"%{search}%"])
+            where.append(
+                "(a.name like ? or a.summary like ? or a.description like ? or a.tags like ? "
+                "or exists(select 1 from user_app_tags ut where ut.user_id=f.user_id and ut.app_id=f.app_id and ut.tag like ?))"
+            )
+            params.extend([f"%{search}%", f"%{search}%", f"%{search}%", f"%{search}%", f"%{search}%"])
         where_sql = " where " + " and ".join(where)
         offset = (max(1, page) - 1) * page_size
         with self.lock:
@@ -10661,6 +10831,7 @@ class Handler(BaseHTTPRequestHandler):
                     local_app_to_card(r),
                     favorited=True,
                     liked=self.store.is_liked(user["id"], r.get("id") or ""),
+                    user_tags=self.store.list_user_app_tags(user["id"], r.get("id") or ""),
                     favorited_at=r.get("favorited_at"),
                 )
                 for r in rows
@@ -10680,6 +10851,20 @@ class Handler(BaseHTTPRequestHandler):
             if not local:
                 return error_response("not found", 404)
             return ok_response(self.store.toggle_like(user["id"], app_id))
+
+        if normalized.startswith("console/api/web/apps/") and normalized.endswith("/user-tags"):
+            app_id = normalized.split("/")[4] if len(normalized.split("/")) >= 5 else ""
+            if not self.store.get_local_app(app_id):
+                return error_response("not found", 404)
+            if self.command.upper() == "POST":
+                if not isinstance(body, dict):
+                    return error_response("invalid body")
+                try:
+                    return ok_response(self.store.set_user_app_tags(user["id"], app_id, body.get("tags") or body.get("user_tags") or []))
+                except ValueError as exc:
+                    status = 404 if str(exc) == "not found" else 400
+                    return error_response(str(exc), status)
+            return ok_response({"app_id": app_id, "tags": self.store.list_user_app_tags(user["id"], app_id)})
 
         if normalized.startswith("console/api/web/apps/") and normalized.endswith("/comments"):
             parts = normalized.split("/")
@@ -10713,6 +10898,14 @@ class Handler(BaseHTTPRequestHandler):
             page_size = parse_query_int(query, "page_size", 30, 1, 100)
             events, total = self.store.list_events(user["id"], page=page, page_size=page_size)
             return ok_response({"list": events, "total": total, "page": page, "page_size": page_size})
+
+        if normalized == "console/api/web/creator-leaderboard":
+            limit = parse_query_int(query, "limit", 10, 1, 50)
+            return ok_response({"list": self.store.creator_leaderboard(limit), "limit": limit})
+
+        if normalized == "console/api/web/creator-contests":
+            contest = self.store.creator_contests()
+            return ok_response({"contest": contest, "leaderboard": self.store.creator_leaderboard(10)})
 
         if normalized == "console/api/web/rewards":
             today = business_date()
@@ -11024,6 +11217,7 @@ class Handler(BaseHTTPRequestHandler):
                     card = local_app_to_card(dict(local))
                     card["favorited"] = self.store.is_favorite(user["id"] if user else None, card["id"])
                     card["liked"] = self.store.is_liked(user["id"] if user else None, card["id"])
+                    card["user_tags"] = self.store.list_user_app_tags(user["id"] if user else None, card["id"])
                     return go_response(card) if normalized.startswith("go/") else ok_response(card)
             data = app_config_json(app_id)
             fallback = go_response(data) if normalized.startswith("go/") else data
@@ -11143,9 +11337,16 @@ class Handler(BaseHTTPRequestHandler):
             kw = (params.get("keyword") or params.get("q") or [""])[0].strip()
             tag = (params.get("tag") or params.get("category") or [""])[0].strip()
             sort = (params.get("sort") or params.get("rank") or ["default"])[0].strip()
+            requested_zone = (params.get("zone") or params.get("content_zone") or [""])[0].strip().lower()
+            if requested_zone in ("all", "full", "search"):
+                content_zone = "all"
+            elif requested_zone in ("clean", "safe", "pure"):
+                content_zone = "clean"
+            else:
+                content_zone = "all" if kw else "clean"
             random_seed = parse_query_int(query, "seed", 0, 0, 2147483647) or None
             pictureless = (params.get("pictureless") or [""])[0].strip().lower() in ("1", "true", "yes")
-            rows, total = self.store.list_local_apps(search=kw, tag=tag, sort=sort, random_seed=random_seed, page=page, page_size=page_size, lightweight=True)
+            rows, total = self.store.list_local_apps(search=kw, tag=tag, sort=sort, content_zone=content_zone, random_seed=random_seed, page=page, page_size=page_size, lightweight=True)
             if rows:
                 cards = []
                 for r in rows:
@@ -11157,7 +11358,7 @@ class Handler(BaseHTTPRequestHandler):
                         card["cover"] = ""
                         card["icon"] = ""
                     cards.append(card)
-                return go_response({"apps": cards, "total": total, "is_cache": True, "page": page, "page_size": page_size, "sort": sort, "tag": tag, "pictureless": pictureless})
+                return go_response({"apps": cards, "total": total, "is_cache": True, "page": page, "page_size": page_size, "sort": sort, "tag": tag, "pictureless": pictureless, "zone": content_zone})
             # 本地空 → 回源上游
             fallback = go_response({"apps": [], "total": 0, "is_cache": False})
             explore_payload = self.store.first_nonempty_explore_payload()

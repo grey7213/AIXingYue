@@ -7,8 +7,8 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
   <link rel="icon" href="/favicon.ico">
   <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260705-history-like-fav">
-  <script type="module" src="/app/assets/js/hub-pages.js?v=20260705-history-like-fav"></script>
+  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260707-clean-chat-ux2">
+  <script type="module" src="/app/assets/js/hub-pages.js?v=20260707-clean-chat-ux2"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
@@ -33,6 +33,12 @@
                 <div class="min-w-0">
                   <div class="title truncate" x-text="conversationTitle(c)"></div>
                   <div class="meta truncate" x-text="conversationPreview(c)"></div>
+                  <div class="history-row__tags" x-show="archiveLabel(c) || userTagList(c).length">
+                    <span class="history-row__tag" x-show="archiveLabel(c)" x-text="archiveLabel(c)"></span>
+                    <template x-for="tag in userTagList(c)" :key="tag">
+                      <span class="history-row__tag" x-text="tag"></span>
+                    </template>
+                  </div>
                 </div>
               </a>
               <div class="row-actions flex-wrap justify-end">

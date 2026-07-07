@@ -6,13 +6,13 @@
   <title>首页 · AI星月</title>
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
   <link rel="icon" href="/favicon.ico">
-  <link rel="preload" as="fetch" crossorigin="anonymous" href="/go/api/explore/search?page=1&amp;page_size=12&amp;sort=random&amp;rank=daily">
+  <link rel="preload" as="fetch" crossorigin="anonymous" href="/go/api/explore/search?page=1&amp;page_size=12&amp;sort=random&amp;rank=daily&amp;zone=clean">
   <link rel="preload" as="script" href="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1">
   <link rel="modulepreload" href="/assets/js/api.js">
   <link rel="modulepreload" href="/app/assets/js/app-core.js">
   <link rel="modulepreload" href="/app/assets/js/layout.js?v=20260704-home-search">
-  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260706-password-reset-filter">
-  <script type="module" src="/app/assets/js/explore.js?v=20260704-home-search"></script>
+  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260707-clean-chat-ux4">
+  <script type="module" src="/app/assets/js/explore.js?v=20260707-clean-chat-ux4"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
@@ -76,6 +76,14 @@
             </select>
           </label>
           <label class="advanced-search-field">
+            <span x-text="appHomeText('advanced_zone_label', '内容区')">内容区</span>
+            <select class="xy-input" x-model="advancedForm.zone">
+              <template x-for="zone in zoneOptions" :key="zone.key">
+                <option :value="zone.key" x-text="zone.label"></option>
+              </template>
+            </select>
+          </label>
+          <label class="advanced-search-field">
             <span x-text="appHomeText('advanced_page_size_label', '每页数量')">每页数量</span>
             <select class="xy-input" x-model.number="advancedForm.pageSize">
               <option :value="12">12</option>
@@ -96,6 +104,11 @@
 
       <div class="toolbar-line">
         <div class="segmented">
+          <template x-for="zone in zoneOptions" :key="zone.key">
+            <button :class="{ 'is-active': activeZone === zone.key }" @click="setZone(zone.key)" x-text="zone.label"></button>
+          </template>
+        </div>
+        <div class="segmented">
           <template x-for="rank in rankOptions" :key="rank.key">
             <button :class="{ 'is-active': activeRank === rank.key }" @click="setRank(rank.key)" x-text="rank.label"></button>
           </template>
@@ -108,6 +121,7 @@
       </div>
 
       <div class="chip-row">
+        <span class="chip chip-static" x-show="activeZone === 'clean'" x-text="appHomeText('zone_clean_hint', '默认隐藏猎奇、重口、福瑞等题材；搜索或切到全库可主动查找。')"></span>
         <template x-for="cat in categories" :key="cat.key">
           <button class="chip" :class="{ 'is-active': activeCategory === cat.key }" @click="setCategory(cat.key)" x-text="cat.label"></button>
         </template>
@@ -123,7 +137,7 @@
         <div class="home-section-title" x-text="appHomeText('featured_title', '🌟 官方每周推荐')">🌟 官方每周推荐</div>
         <div class="featured-grid">
           <template x-for="card in featuredCards()" :key="`featured-${card.id}`">
-            <a class="feature-card" :class="{ 'is-pictureless': pictureless || card.pictureless }" :href="`/app/character.html?id=${encodeURIComponent(card.id)}`">
+            <a class="feature-card" :class="{ 'is-pictureless': pictureless || card.pictureless }" :href="`/app/character.html?id=${encodeURIComponent(card.id)}`" @click="rememberBrowsePosition(card)">
               <div class="feature-card__cover">
                 <img class="feature-card__img" :src="card.cover || card.icon || '/assets/img/apk/avatar.webp'" :alt="card.name" loading="lazy" referrerpolicy="no-referrer" onerror="this.src='/assets/img/apk/avatar.webp'">
                 <span class="feature-card__badge" x-text="appHomeText('featured_badge', '▶ 官方推荐')">▶ 官方推荐</span>
@@ -150,7 +164,7 @@
         <div class="home-section-title" x-text="appHomeText('recommended_title', '💖 为你推荐')">💖 为你推荐</div>
         <div class="char-grid home-recommend-grid">
         <template x-for="card in recommendedCards()" :key="card.id">
-          <a class="char-card" :class="{ 'is-pictureless': pictureless || card.pictureless }" :href="`/app/character.html?id=${encodeURIComponent(card.id)}`">
+          <a class="char-card" :class="{ 'is-pictureless': pictureless || card.pictureless }" :href="`/app/character.html?id=${encodeURIComponent(card.id)}`" @click="rememberBrowsePosition(card)">
             <div class="char-card__cover">
               <img class="char-card__img" :src="card.cover || card.icon || '/assets/img/apk/avatar.webp'" :alt="card.name" loading="lazy" referrerpolicy="no-referrer" onerror="this.src='/assets/img/apk/avatar.webp'">
               <div class="char-card__overlay"></div>

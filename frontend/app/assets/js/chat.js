@@ -50,6 +50,7 @@ const LONG_TEXT_PREVIEW_CHARS = 3600;
 const ADVANCED_SOURCE_PREVIEW_CHARS = 2600;
 const ADVANCED_RENDER_MAX_CHARS = 450000;
 const MESSAGE_LOAD_LIMIT = 80;
+const CHAT_SCROLL_KEY_PREFIX = 'ai_xingyue_chat_scroll:';
 const ADVANCED_RENDER_SETTINGS_KEY = 'ai_xingyue_tavo_render_settings';
 const ADVANCED_JS_MODES = new Set(['disabled', 'auto', 'script', 'code-block']);
 const DEFAULT_ADVANCED_RENDER_SETTINGS = Object.freeze({
@@ -990,6 +991,8 @@ function chatPage() {
     appDesc: '',
     appIcon: '',
     appHero: '',
+    appFavorited: false,
+    favoriteBusy: false,
     quickReplies: [],
     editingId: '',
     editingText: '',
@@ -1010,11 +1013,18 @@ function chatPage() {
     messageTotal: 0,
     hasOlderMessages: false,
     loadingOlderMessages: false,
+    generationStartedAt: 0,
+    generationElapsedSeconds: 0,
+    generationMode: '',
     _typeTimer: null,
+    _generationTimer: null,
+    _scrollSaveTimer: null,
+    _lifecycleBound: false,
     siteSettings: null,
 
     async init() {
       injectLayout('chat');
+      this.bindLifecycleHandlers();
       this.loadAdvancedRenderSettings();
       this.bindAdvancedRenderConfirmHandler();
       this.siteSettings = await loadPublicSiteSettings().catch(() => null);
@@ -1112,6 +1122,136 @@ function chatPage() {
       };
     },
 
+    bindLifecycleHandlers() {
+      if (this._lifecycleBound) return;
+      this._lifecycleBound = true;
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') {
+          this.persistMessageScroll();
+          return;
+        }
+        if (this.conversation?.id) {
+          const atBottom = this.isMessageAreaNearBottom();
+          this.refreshCurrentMessages({ stickToBottom: atBottom || this.replying });
+        }
+      });
+      window.addEventListener('pagehide', () => this.persistMessageScroll());
+      window.addEventListener('beforeunload', () => this.persistMessageScroll());
+    },
+
+    beginGeneration(mode = 'send') {
+      if (this._generationTimer) clearInterval(this._generationTimer);
+      this.replying = true;
+      this.generationMode = mode;
+      this.generationStartedAt = Date.now();
+      this.generationElapsedSeconds = 0;
+      this._generationTimer = setInterval(() => {
+        this.generationElapsedSeconds = Math.max(0, Math.floor((Date.now() - this.generationStartedAt) / 1000));
+      }, 1000);
+    },
+
+    endGeneration() {
+      if (this._generationTimer) clearInterval(this._generationTimer);
+      this._generationTimer = null;
+      this.replying = false;
+      this.generationStartedAt = 0;
+      this.generationElapsedSeconds = 0;
+      this.generationMode = '';
+    },
+
+    generationStatusLabel() {
+      if (!this.replying && !this.generationMode) return '';
+      const modeMap = {
+        send: this.chatText('generating_text', '生成中'),
+        regenerate: this.chatText('regenerating_text', '重新生成中'),
+        swipe: this.chatText('swipe_generating_text', '生成新回复中'),
+      };
+      const action = modeMap[this.generationMode] || this.chatText('generating_text', '生成中');
+      return `${action} · ${this.chatText('thinking_elapsed_prefix', '已思考')} ${this.generationElapsedSeconds || 0} ${this.chatText('thinking_elapsed_suffix', '秒')}`;
+    },
+
+    loadingLabel(m = null) {
+      const seconds = Number(m?._thinkingSeconds ?? this.generationElapsedSeconds ?? 0);
+      return `${this.chatText('thinking_elapsed_prefix', '已思考')} ${Math.max(0, seconds)} ${this.chatText('thinking_elapsed_suffix', '秒')}`;
+    },
+
+    messageScrollKey(convId = this.conversation?.id) {
+      return `${CHAT_SCROLL_KEY_PREFIX}${convId || ''}`;
+    },
+
+    isMessageAreaNearBottom(threshold = 140) {
+      const el = this.$refs.messageArea;
+      if (!el) return true;
+      return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
+    },
+
+    persistMessageScroll() {
+      const el = this.$refs.messageArea;
+      if (!el || !this.conversation?.id) return;
+      try {
+        localStorage.setItem(this.messageScrollKey(), JSON.stringify({
+          top: Math.max(0, Math.floor(el.scrollTop || 0)),
+          height: Math.max(0, Math.floor(el.scrollHeight || 0)),
+          atBottom: this.isMessageAreaNearBottom(),
+          updatedAt: Date.now(),
+        }));
+      } catch { /* ignore storage errors */ }
+    },
+
+    handleMessageScroll() {
+      if (this._scrollSaveTimer) clearTimeout(this._scrollSaveTimer);
+      this._scrollSaveTimer = setTimeout(() => this.persistMessageScroll(), 120);
+    },
+
+    restoreMessageScroll({ defaultToBottom = true } = {}) {
+      const key = this.messageScrollKey();
+      this.$nextTick(() => {
+        const el = this.$refs.messageArea;
+        if (!el) return;
+        let saved = null;
+        try {
+          saved = JSON.parse(localStorage.getItem(key) || 'null');
+        } catch {
+          saved = null;
+        }
+        if (saved && !saved.atBottom && Number.isFinite(Number(saved.top))) {
+          el.scrollTop = Math.max(0, Math.min(Number(saved.top), el.scrollHeight));
+          return;
+        }
+        if (defaultToBottom) el.scrollTop = el.scrollHeight;
+      });
+    },
+
+    async refreshCurrentMessages({ stickToBottom = false, preserveScroll = true } = {}) {
+      if (!this.conversation?.id) return;
+      const el = this.$refs.messageArea;
+      const previousHeight = el ? el.scrollHeight : 0;
+      const previousTop = el ? el.scrollTop : 0;
+      try {
+        const r = await api.messages(this.conversation.id, { limit: this.messageLimit });
+        const data = r?.data || r || {};
+        const list = data.list || [];
+        if (!Array.isArray(list)) return;
+        this.messages = list.map(this.normMsg);
+        const total = parseInt(data.total ?? list.length, 10);
+        this.messageTotal = Number.isNaN(total) ? list.length : total;
+        this.hasOlderMessages = !!data.has_more || this.messages.length < this.messageTotal;
+        await this.loadConversations();
+        this.$nextTick(() => {
+          const area = this.$refs.messageArea;
+          if (!area) return;
+          if (stickToBottom) {
+            area.scrollTop = area.scrollHeight;
+          } else if (preserveScroll && previousHeight) {
+            area.scrollTop = Math.max(0, area.scrollHeight - previousHeight + previousTop);
+          } else {
+            this.restoreMessageScroll({ defaultToBottom: true });
+          }
+          this.persistMessageScroll();
+        });
+      } catch { /* keep current local messages */ }
+    },
+
     advancedRenderOptions() {
       this.confirmedTavoRenderVersion;
       return {
@@ -1201,11 +1341,13 @@ function chatPage() {
         this.appDesc = data?.description || data?.summary || '';
         this.appIcon = data?.icon || data?.icon_url || data?.cover || '';
         this.appHero = data?.bg_url || data?.cover || data?.cover_url || data?.banner || data?.background || '';
+        this.appFavorited = !!data?.favorited;
         this.quickReplies = Array.isArray(data?.quick_replies) ? data.quick_replies.filter(q => q.enabled !== false && q.message) : [];
         this.restoreModelSelection();
       } catch {
         this.appName = this.chatText('new_role_name', '新角色');
         this.quickReplies = [];
+        this.appFavorited = false;
         this.restoreModelSelection();
       }
       // 已有该角色的会话 → 直接进入最近一个
@@ -1257,7 +1399,14 @@ function chatPage() {
       };
     },
 
+    touchMessage(msg) {
+      if (!msg) return;
+      const idx = this.messages.findIndex(x => x === msg || x.id === msg.id);
+      if (idx >= 0) this.messages.splice(idx, 1, msg);
+    },
+
     async selectConversation(c) {
+      this.persistMessageScroll();
       this.conversation = c;
       this.appId = c.app_id;
       this.appName = c.app_name || c.title || this.chatText('conversation_fallback_title', '对话');
@@ -1274,8 +1423,9 @@ function chatPage() {
         this.appHero = data?.bg_url || data?.cover || data?.cover_url || '';
         this.appDesc = data?.description || data?.summary || '';
         if (!this.appIcon) this.appIcon = data?.icon || data?.cover || '';
+        this.appFavorited = !!data?.favorited;
         this.quickReplies = Array.isArray(data?.quick_replies) ? data.quick_replies.filter(q => q.enabled !== false && q.message) : [];
-      } catch { this.appHero = ''; this.quickReplies = []; }
+      } catch { this.appHero = ''; this.quickReplies = []; this.appFavorited = false; }
       try {
         const r = await api.messages(c.id, { limit: this.messageLimit });
         const data = r?.data || r || {};
@@ -1285,7 +1435,7 @@ function chatPage() {
         this.messageTotal = Number.isNaN(total) ? list.length : total;
         this.hasOlderMessages = !!data.has_more || this.messages.length < this.messageTotal;
         await this.loadMemoryContext();
-        this.scrollToBottom();
+        this.restoreMessageScroll({ defaultToBottom: true });
       } catch (err) {
         this.messages = [];
         this.messageTotal = 0;
@@ -1315,11 +1465,29 @@ function chatPage() {
         this.$nextTick(() => {
           const el = this.$refs.messageArea;
           if (el) el.scrollTop = Math.max(0, el.scrollHeight - previousHeight + previousTop);
+          this.persistMessageScroll();
         });
       } catch {
         this.hasOlderMessages = false;
       } finally {
         this.loadingOlderMessages = false;
+      }
+    },
+
+    async toggleFavoriteCurrentApp() {
+      const targetId = this.appId || this.conversation?.app_id;
+      if (!targetId || this.favoriteBusy) return;
+      this.favoriteBusy = true;
+      try {
+        const r = await api.toggleFavorite(targetId);
+        this.appFavorited = !!r?.data?.favorited;
+        this.conversations = this.conversations.map(item => (
+          item.app_id === targetId ? { ...item, favorited: this.appFavorited } : item
+        ));
+      } catch (err) {
+        alert(err.message || this.chatText('favorite_failed_text', '收藏失败'));
+      } finally {
+        this.favoriteBusy = false;
       }
     },
 
@@ -1501,7 +1669,8 @@ function chatPage() {
       replyMsg._typing = true;
       this.messages.push(replyMsg);
       this.messageTotal = Math.max(this.messageTotal + 2, this.messages.length);
-      this.replying = true;
+      this.beginGeneration('send');
+      replyMsg._thinkingStartedAt = this.generationStartedAt;
       this.scrollToBottom();
       try {
         const payload = {
@@ -1527,6 +1696,7 @@ function chatPage() {
           },
           onDelta: (chunk) => {
             replyMsg.content += chunk;
+            this.touchMessage(replyMsg);
             this.scrollToBottom();
           },
           onEnd: (event) => {
@@ -1535,17 +1705,20 @@ function chatPage() {
             if (event?.reply && !replyMsg.content) replyMsg.content = event.reply;
             this.updatePointsFromPayload(event);
             replyMsg._typing = false;
+            this.touchMessage(replyMsg);
           },
         });
         replyMsg._typing = false;
         if (data?.reply && !replyMsg.content) replyMsg.content = data.reply;
+        this.touchMessage(replyMsg);
         this.updatePointsFromPayload(data);
         this.loadConversations();
       } catch (err) {
         replyMsg._typing = false;
         replyMsg.content = '⚠️ ' + this.chatText('error_prefix', '出错了：') + (err.message || this.chatText('retry_text', '请稍后重试'));
+        this.touchMessage(replyMsg);
       } finally {
-        this.replying = false;
+        this.endGeneration();
         this.scrollToBottom();
       }
     },
@@ -1584,7 +1757,7 @@ function chatPage() {
 
     async regenerate(m) {
       if (this.replying || !this.conversation) return;
-      this.replying = true;
+      this.beginGeneration('regenerate');
       this.scrollToBottom();
       try {
         const r = await api.regenerate(this.conversation.id, this.currentModelId || '');
@@ -1594,7 +1767,7 @@ function chatPage() {
       } catch (err) {
         alert(err.message || this.chatText('regenerate_failed_text', '重新生成失败'));
       } finally {
-        this.replying = false;
+        this.endGeneration();
       }
     },
 
@@ -1610,7 +1783,7 @@ function chatPage() {
       const len = (m.swipes && m.swipes.length) || 1;
       const atEnd = (m.swipe_index || 0) >= len - 1;
       if (atEnd && !this.isLastAssistant(m)) return; // 不从对话中段生成
-      if (atEnd) { this.replying = true; this.scrollToBottom(); }
+      if (atEnd) { this.beginGeneration('swipe'); this.scrollToBottom(); }
       try {
         const r = await api.swipeMessage(m.id, 'next', this.currentModelId || '');
         this.applyUpdatedMessage(r, { animate: atEnd });
@@ -1618,7 +1791,7 @@ function chatPage() {
       } catch (err) {
         if (atEnd) alert(err.message || this.chatText('generate_failed_text', '生成失败'));
       } finally {
-        this.replying = false;
+        if (atEnd) this.endGeneration();
       }
     },
 
@@ -1688,11 +1861,13 @@ function chatPage() {
         if (i >= full.length) {
           msg.content = full;
           msg._typing = false;
+          this.touchMessage(msg);
           this.scrollToBottom();
           return;
         }
         i += chunk;
         msg.content = full.slice(0, i);
+        this.touchMessage(msg);
         this.scrollToBottom();
         this._typeTimer = setTimeout(step, 16);
       };

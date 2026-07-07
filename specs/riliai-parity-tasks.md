@@ -12,6 +12,7 @@
 | RP8 | 线上 API 和浏览器截图验收 | Done | API 摘要：本地库 `apps.total=451`、探索 3 条、Pictureless 3 条；浏览器截图见 `output\riliai-parity-final-explore-desktop.png`、`output\riliai-parity-final-home-mobile.png`、`output\riliai-parity-final-chat-desktop.png` |
 | RP9 | 优化 `/app/` 首页首屏加载 | Done | 2026-06-29 列表接口改为轻量卡片、首页并发加载、去掉 Tailwind CDN、Alpine 本地化、预加载默认第一页和模块依赖；线上浏览器首张卡约 `1795ms`，列表约 `10.9KB`，无 console/page error |
 | RP10 | 图片聊天接入真实图片模型 | Done | `/console/api/web/image-chat` 从占位日志改为可调用后台图片模型配置；后台可维护 Base URL、模型名、API Key、尺寸、返回格式和超时，返回 URL/base64 图片并展示在 `/app/image-chat.html`。线上真实图片生成返回 `mode=image_model`、`model=gpt-image-2`、有图片 URL 且文件存在。 |
+| RP11 | 纯净发现区、收藏入口和创作者运营面板 | Done | 2026-07-07 默认发现页和榜单进入纯净区，搜索/全库可主动扩展；聊天页补收藏入口；创作工坊展示定期比赛和创作者排行榜；玩家可给角色加私有标签并在历史/收藏中展示。线上 Playwright 移动端验证通过，公开 API 验证 `zone=clean` 与 `zone=all` 总数不同且比赛接口返回“本期创作者比赛”。 |
 
 ## 2026-07-05 图片聊天真实图片模型
 

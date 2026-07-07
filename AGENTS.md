@@ -448,3 +448,8 @@
   Cause: 登录页已更新到密码重置视图，但浏览器仍可能缓存旧的 `/assets/js/api.js` 或旧的共享 API 模块，导致新增方法不存在。
   Fix: `frontend/app/assets/js/login.js` 对 `api.sendPasswordResetCode` 和 `api.resetPassword` 增加同源 `fetch` 兜底，并更新 `frontend/app/login.html` 的 `login.js` cache-buster。
   Verify: 2026-07-07 本地和线上 Playwright 将 `/assets/js/api.js` 模拟成缺少重置方法的旧模块，点击“发送”仍命中 `/console/api/password-reset/email`，无 TypeError、console/page error 为 0；线上 service/nginx active，公网 `/health` OK，`CONTENT_MODE=local_only`。
+
+- Symptom: 移动端从角色详情返回首页后回到顶部，用户需要重新滚到之前点击的位置。
+  Cause: 只在首页初始化时恢复滚动不可靠；移动浏览器 back/bfcache、`pageshow`、`focus`、`visibilitychange` 的触发顺序会让异步角色列表重新渲染后覆盖滚动位置。
+  Fix: 首页点击角色卡时把筛选条件、卡片列表、点击角色 id 和 `scrollY` 写入 `sessionStorage`；返回时在 `pageshow`、`popstate`、`focus`、`visibilitychange` 和列表加载后重复尝试恢复，优先对点击卡片 `scrollIntoView`，成功后再清除恢复标记。
+  Verify: 2026-07-07 线上移动端 Playwright 从 `/app/` 滚到 `650` 后点角色详情再返回，回到 `scrollY=645` 且点击卡片可见，console/page error 为 0。
