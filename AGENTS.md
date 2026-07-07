@@ -453,3 +453,8 @@
   Cause: 只在首页初始化时恢复滚动不可靠；移动浏览器 back/bfcache、`pageshow`、`focus`、`visibilitychange` 的触发顺序会让异步角色列表重新渲染后覆盖滚动位置。
   Fix: 首页点击角色卡时把筛选条件、卡片列表、点击角色 id 和 `scrollY` 写入 `sessionStorage`；返回时在 `pageshow`、`popstate`、`focus`、`visibilitychange` 和列表加载后重复尝试恢复，优先对点击卡片 `scrollIntoView`，成功后再清除恢复标记。
   Verify: 2026-07-07 线上移动端 Playwright 从 `/app/` 滚到 `650` 后点角色详情再返回，回到 `scrollY=645` 且点击卡片可见，console/page error 为 0。
+
+- Symptom: 移动端浏览器小窗拖大、横竖屏切换或地址栏收起后，聊天页 Tavo/高级渲染内容停在左侧窄列，右侧大片空白，底部输入/生成状态位置也可能不跟随真实可视高度。
+  Cause: Tavo `srcdoc` 缺少 viewport 和父子 frame resize 握手，卡片内联固定宽度会保留初始小窗宽度；移动端底部组件还使用固定 `100vh` 和固定 bottom 像素，无法跟随 `visualViewport`/safe-area 变化。
+  Fix: `frontend/app/assets/js/chat.js` 的 `buildSandboxSrcdoc()` 注入 viewport、响应式根容器和直接面板 `width:100%!important`，父页面在 `resize/orientationchange/visualViewport` 事件向 `.tavo-frame` postMessage；`frontend/app/chat.html` 用 `--xy-visual-height`、`--xy-chat-input-bottom`、`--xy-chat-generation-bottom`、`--xy-chat-quick-bottom` 计算移动端高度和底部控件位置。
+  Verify: 2026-07-07 本地和线上 `D:\Anconda3\python.exe .\output\verify_chat_resize_mobile.py` 通过，覆盖 390->740->980 resize、无横向溢出、Tavo iframe 内容随父容器扩展、输入/生成状态/快捷回复不重叠，console/page error 为 0。

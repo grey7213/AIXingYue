@@ -9,6 +9,12 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="/app/assets/css/app.css?v=20260707-clean-chat-ux2">
   <style>
+    :root {
+      --xy-visual-height: 100vh;
+      --xy-chat-input-bottom: calc(66px + env(safe-area-inset-bottom));
+      --xy-chat-generation-bottom: calc(178px + env(safe-area-inset-bottom));
+      --xy-chat-quick-bottom: calc(220px + env(safe-area-inset-bottom));
+    }
     .chat-list {
       width: 268px; flex-shrink: 0;
       border-right: 1px solid rgba(196, 181, 253, .14);
@@ -144,7 +150,10 @@
     .tavo-source summary::-webkit-details-marker { display: none; }
     .tavo-frame-card {
       width: 100%;
+      max-width: 100%;
+      min-width: 0;
       overflow: hidden;
+      contain: inline-size;
       border-radius: 14px;
       border: 1px solid rgba(196,181,253,.22);
       background: rgba(8,4,24,.72);
@@ -169,6 +178,8 @@
     }
     .tavo-frame {
       width: 100%;
+      max-width: 100%;
+      min-width: 0;
       height: 420px;
       display: block;
       border: 0;
@@ -594,7 +605,7 @@
     @media (max-width: 768px) {
       .chat-list { display: none; }
       .chat-list.is-open { position: fixed; inset: 0; right: auto; width: 280px; display: flex; z-index: 50; }
-      .chat-window { min-height: calc(100vh - 76px); }
+      .chat-window { min-height: calc(var(--xy-visual-height, 100vh) - 76px); }
       .chat-window__hero { height: 160px; }
       .chat-window__hero__info { left: 16px; right: 16px; bottom: 14px; }
       .chat-window__hero__info .avatar { width: 48px; height: 48px; font-size: 19px; }
@@ -605,13 +616,13 @@
       .msg-row.has-advanced-render { width: 100%; max-width: 100%; }
       .tavo-frame { height: 360px; }
       .chat-messages { padding-bottom: 138px; }
-      .chat-input { position: fixed; left: 0; right: 0; bottom: 66px; z-index: 55; padding: 10px 12px; flex-wrap: wrap; }
+      .chat-input { position: fixed; left: 0; right: 0; bottom: var(--xy-chat-input-bottom); z-index: 55; padding: 10px 12px; flex-wrap: wrap; }
       .chat-model { width: 100%; min-width: 0; order: -1; }
-      .quick-replies { position: fixed; left: 12px; right: 12px; bottom: 220px; z-index: 54; }
-      .generation-status { position: fixed; left: 12px; right: 12px; bottom: 178px; z-index: 56; }
+      .quick-replies { position: fixed; left: 12px; right: 12px; bottom: var(--xy-chat-quick-bottom); z-index: 54; }
+      .generation-status { position: fixed; left: 12px; right: 12px; bottom: var(--xy-chat-generation-bottom); z-index: 56; }
       .quick-replies button { max-width: 45vw; }
       .chat-tools { right: 14px; top: 12px; }
-      .memory-panel, .advanced-render-panel { position: fixed; left: 12px; right: 12px; top: 72px; width: auto; max-height: calc(100vh - 160px); }
+      .memory-panel, .advanced-render-panel { position: fixed; left: 12px; right: 12px; top: 72px; width: auto; max-height: calc(var(--xy-visual-height, 100vh) - 160px); }
     }
 
     /* Fengyue clone chat skin. Keep all chat behavior and sandbox logic intact. */
@@ -888,19 +899,19 @@
     }
 
     @media (max-width: 768px) {
-      .chat-window { min-height: calc(100vh - 72px); }
+      .chat-window { min-height: calc(var(--xy-visual-height, 100vh) - 72px); }
       .chat-window__hero { height: 148px; }
-      .chat-messages { padding: 16px 14px 210px; }
+      .chat-messages { padding: 16px 14px calc(210px + env(safe-area-inset-bottom)); }
       .msg-row,
       .msg-row.has-advanced-render,
       .msg-row.has-status-panel,
       .bubble { width: 100%; max-width: 100%; }
-      .chat-input { bottom: 66px; padding: 10px 12px; }
-      .quick-replies { bottom: 220px; }
-      .generation-status { bottom: 178px; }
+      .chat-input { bottom: var(--xy-chat-input-bottom); padding: 10px 12px; }
+      .quick-replies { bottom: var(--xy-chat-quick-bottom); }
+      .generation-status { bottom: var(--xy-chat-generation-bottom); }
     }
   </style>
-  <script type="module" src="/app/assets/js/chat.js?v=20260707-clean-chat-ux2"></script>
+  <script type="module" src="/app/assets/js/chat.js?v=20260707-resize-fix"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">

@@ -562,8 +562,6 @@ function buildTavoBridgeScript() {
       window.__xyLocalStorage = storage;
       window.__xySessionStorage = storage;
       window.__xySTTop = topProxy;
-      try { Object.defineProperty(window, 'localStorage', { value: storage, configurable: true }); } catch (e) {}
-      try { Object.defineProperty(window, 'sessionStorage', { value: storage, configurable: true }); } catch (e) {}
       window.context = context;
       window.SillyTavern = topProxy.SillyTavern;
       window.getCharWorldbookNames = () => ({ primary: '', additional: [] });
@@ -655,20 +653,27 @@ function buildSandboxSrcdoc(raw, options = {}) {
   ].join('; ');
   const baseStyle = `
     :root{${tavoThemeVars};color-scheme:dark;}
-    html,body{margin:0;min-height:100%;background:var(--SmartThemeChatTintColor,#222222);color:var(--SmartThemeBodyColor,#ffffff);font-family:"Inter","PingFang SC","Microsoft YaHei",system-ui,sans-serif;}
-    *{box-sizing:border-box;max-width:100%;}
-    body{overflow:auto;accent-color:var(--SmartThemeQuoteColor,#a1cdee);}
-    #chat,.chat,.chat-messages,.mes,.message,.mes_text,.mes-text,.message-content,.tavo-content{width:100%;min-height:100%;}
-    .mes,.message,.mes_text,.mes-text,.message-content,.tavo-content{color:var(--SmartThemeBodyColor,#ffffff);}
+    html,body{margin:0;width:100%;min-width:0;min-height:100%;overflow-x:hidden;background:var(--SmartThemeChatTintColor,#222222);color:var(--SmartThemeBodyColor,#ffffff);font-family:"Inter","PingFang SC","Microsoft YaHei",system-ui,sans-serif;}
+    *{box-sizing:border-box;min-width:0;max-width:100%;}
+    body{overflow:auto;accent-color:var(--SmartThemeQuoteColor,#a1cdee);-webkit-text-size-adjust:100%;text-size-adjust:100%;}
+    #chat,.chat,.chat-messages,.mes,.message,.mes_text,.mes-text,.message-content,.tavo-content{width:100%;min-width:0;min-height:100%;overflow-x:hidden;}
+    .mes,.message,.mes_text,.mes-text,.message-content,.tavo-content{display:block;color:var(--SmartThemeBodyColor,#ffffff);overflow-wrap:anywhere;word-break:break-word;}
+    .mes_text>:where(div,section,article,main,aside),.mes-text>:where(div,section,article,main,aside),.message-content>:where(div,section,article,main,aside),.tavo-content>:where(div,section,article,main,aside){width:100%!important;min-width:0!important;max-width:100%!important;}
     .mes_text:empty,.message-content:empty,.tavo-content:empty{min-height:260px;}
     button,input,textarea,select{font:inherit;color:inherit;background-color:rgba(255,255,255,.08);border:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,.24));}
     button{cursor:pointer;}
     input::placeholder,textarea::placeholder{color:var(--xy-tavo-muted,rgba(255,255,255,.80));}
-    img,video,canvas,svg{max-width:100%;}
+    img,video,canvas,svg{max-width:100%;height:auto;}
+    table{display:block;width:100%;overflow-x:auto;border-collapse:collapse;}
+    pre,code{white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;}
     a{color:inherit;}
+    @media (max-width:640px){
+      [style*="min-width"],[style*="width"]{max-width:100%!important;}
+      .mes,.message,.mes_text,.mes-text,.message-content,.tavo-content{width:100%!important;}
+    }
   `;
   const resizeScript = `
-    (()=>{let last=0;const send=()=>{const root=document.documentElement;const body=document.body;const h=Math.ceil(Math.max(root.scrollHeight,body?body.scrollHeight:0,260));if(Math.abs(h-last)>4){last=h;parent.postMessage({type:'xy-tavo-resize',height:h},'*');}};addEventListener('load',send);try{new ResizeObserver(send).observe(document.documentElement);if(document.body)new ResizeObserver(send).observe(document.body);}catch(e){}setTimeout(send,80);setTimeout(send,600);})();
+    (()=>{let last=0;const send=()=>{const root=document.documentElement;const body=document.body;root.style.setProperty('--xy-frame-width',Math.round(innerWidth||root.clientWidth||0)+'px');const h=Math.ceil(Math.max(root.scrollHeight,body?body.scrollHeight:0,260));if(Math.abs(h-last)>4){last=h;parent.postMessage({type:'xy-tavo-resize',height:h},'*');}};addEventListener('load',send);addEventListener('resize',send);addEventListener('orientationchange',()=>setTimeout(send,120));addEventListener('message',event=>{if(event&&event.data&&event.data.type==='xy-tavo-parent-resize'){try{dispatchEvent(new Event('resize'));}catch(e){}setTimeout(send,20);}});try{new ResizeObserver(send).observe(document.documentElement);if(document.body)new ResizeObserver(send).observe(document.body);}catch(e){}setTimeout(send,80);setTimeout(send,600);})();
   `;
   const bridge = allowScripts ? `<script>${buildTavoBridgeScript()}<\/script>` : '';
   const resize = allowScripts ? `<script>${resizeScript}<\/script>` : '';
@@ -676,7 +681,7 @@ function buildSandboxSrcdoc(raw, options = {}) {
     ? ''
     : `<textarea id="raw-data-store" hidden aria-hidden="true">${escapeHtml(sanitized.body)}</textarea>`;
   const compatBody = `<div id="chat" class="chat chat-messages"><div class="mes message assistant" data-role="assistant"><div id="message-content" class="mes_text mes-text message-content markdown-body tavo-content">${sanitized.body}</div></div></div>`;
-  return `<!doctype html><html style="${escapeAttr(tavoThemeVars)}"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${escapeAttr(csp)}"><style>${baseStyle}</style>${bridge}${sanitized.head}</head><body${sanitized.bodyAttrs}>${rawStore}${compatBody}${resize}</body></html>`;
+  return `<!doctype html><html style="${escapeAttr(tavoThemeVars)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta http-equiv="Content-Security-Policy" content="${escapeAttr(csp)}"><style>${baseStyle}</style>${bridge}${sanitized.head}</head><body${sanitized.bodyAttrs}>${rawStore}${compatBody}${resize}</body></html>`;
 }
 
 function renderAdvancedSourcePreview(code) {
@@ -945,6 +950,15 @@ function renderMessageContent(content, role = '', options = {}) {
 function bindTavoFrameResizeListener() {
   if (typeof window === 'undefined' || window.__xyTavoResizeBound) return;
   window.__xyTavoResizeBound = true;
+  const notifyFrames = () => {
+    requestAnimationFrame(() => {
+      document.querySelectorAll('iframe.tavo-frame').forEach(frame => {
+        try {
+          frame.contentWindow?.postMessage({ type: 'xy-tavo-parent-resize', width: Math.round(frame.clientWidth || 0) }, '*');
+        } catch { /* sandbox frames may reject during navigation */ }
+      });
+    });
+  };
   window.addEventListener('message', (event) => {
     const data = event?.data || {};
     if (data.type !== 'xy-tavo-resize') return;
@@ -954,6 +968,12 @@ function bindTavoFrameResizeListener() {
       if (frame.contentWindow === event.source) frame.style.height = `${height}px`;
     });
   });
+  window.addEventListener('resize', notifyFrames, { passive: true });
+  window.addEventListener('orientationchange', () => setTimeout(notifyFrames, 120), { passive: true });
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', notifyFrames, { passive: true });
+    window.visualViewport.addEventListener('scroll', notifyFrames, { passive: true });
+  }
   document.addEventListener('click', (event) => {
     const button = event.target?.closest?.('.tavo-run-btn');
     if (!button) return;
@@ -1125,6 +1145,26 @@ function chatPage() {
     bindLifecycleHandlers() {
       if (this._lifecycleBound) return;
       this._lifecycleBound = true;
+      const refreshViewport = () => {
+        const vv = window.visualViewport;
+        const height = Math.max(320, Math.round(vv?.height || window.innerHeight || document.documentElement.clientHeight || 0));
+        document.documentElement.style.setProperty('--xy-visual-height', `${height}px`);
+        requestAnimationFrame(() => {
+          document.querySelectorAll('iframe.tavo-frame').forEach(frame => {
+            try {
+              frame.contentWindow?.postMessage({ type: 'xy-tavo-parent-resize', width: Math.round(frame.clientWidth || 0) }, '*');
+            } catch { /* ignore sandbox frame timing */ }
+          });
+          if (this.replying || this.isMessageAreaNearBottom(220)) this.scrollToBottom();
+        });
+      };
+      refreshViewport();
+      window.addEventListener('resize', refreshViewport, { passive: true });
+      window.addEventListener('orientationchange', () => setTimeout(refreshViewport, 120), { passive: true });
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', refreshViewport, { passive: true });
+        window.visualViewport.addEventListener('scroll', refreshViewport, { passive: true });
+      }
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'hidden') {
           this.persistMessageScroll();
