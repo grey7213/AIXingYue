@@ -440,9 +440,9 @@
   Verify: 2026-07-06 本地函数级断言覆盖 `<thinking>内部</thinking><content>你好 星月</content>`、未闭合 `<thinking>`、纯 `<content>` 和截图式格式泄露；`py_compile`、`node --check` 通过。
 
 - Symptom: `/app/` 首页高级搜索打开后，关键词筛选行在宽屏或截图比例下横向溢出，右侧“无图模式”或按钮贴到容器外。
-  Cause: `.advanced-search-grid` 使用固定 6 列 `repeat(5, minmax(120px, 1fr)) minmax(120px, .8fr)`，没有给关键词列、中屏换行和 toggle 文本收缩留出稳定约束。
-  Fix: `frontend/app/assets/css/app.css` 将高级搜索改为宽屏 `minmax(260px, 1.55fr) repeat(4, minmax(140px, 1fr)) minmax(170px, .85fr)`，中屏 `max-width:1320px` 降为 3 列并让关键词跨 2 列，移动端保持 2 列；toggle 文本设置 ellipsis。
-  Verify: 2026-07-06 线上 Playwright `verify_password_reset_filter_browser.py` 在 2048/1180/390 宽度均返回 `outsideCount=0`、document 无横向 overflow，console/page error 为 0。
+  Cause: `.advanced-search-grid` 早期使用固定 6 列，缺少关键词列/中屏换行约束；后续移动端又暴露 `.xy-input { width:100%; padding:... }` 没有稳定 `box-sizing:border-box`，会形成 `100% + padding` 溢出。
+  Fix: `frontend/app/assets/css/app.css` 将高级搜索改为宽屏 `minmax(260px, 1.55fr) repeat(4, minmax(140px, 1fr)) minmax(170px, .85fr)`，中屏 `max-width:1320px` 降为 3 列并让关键词跨 2 列，移动端保持 2 列；toggle 文本设置 ellipsis；`.xy-input` 和高级搜索字段显式 `box-sizing:border-box`、`min-width:0`、`max-width:100%`。
+  Verify: 2026-07-07 线上 Playwright `verify_password_reset_filter_browser.py` 在 2048/1180/390 宽度均返回 `outsideCount=0`、document 无横向 overflow，console/page error 为 0；390 宽度精确 DOM 断言所有 `.xy-input/input/select/toggle` 均未越过高级搜索面板。
 
 - Symptom: 登录页重置密码时报 `api.sendPasswordResetCode is not a function`。
   Cause: 登录页已更新到密码重置视图，但浏览器仍可能缓存旧的 `/assets/js/api.js` 或旧的共享 API 模块，导致新增方法不存在。
