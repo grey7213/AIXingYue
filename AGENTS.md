@@ -458,3 +458,8 @@
   Cause: Tavo `srcdoc` 缺少 viewport 和父子 frame resize 握手，卡片内联固定宽度会保留初始小窗宽度；移动端底部组件还使用固定 `100vh` 和固定 bottom 像素，无法跟随 `visualViewport`/safe-area 变化。
   Fix: `frontend/app/assets/js/chat.js` 的 `buildSandboxSrcdoc()` 注入 viewport、响应式根容器和直接面板 `width:100%!important`，父页面在 `resize/orientationchange/visualViewport` 事件向 `.tavo-frame` postMessage；`frontend/app/chat.html` 用 `--xy-visual-height`、`--xy-chat-input-bottom`、`--xy-chat-generation-bottom`、`--xy-chat-quick-bottom` 计算移动端高度和底部控件位置。
   Verify: 2026-07-07 本地和线上 `D:\Anconda3\python.exe .\output\verify_chat_resize_mobile.py` 通过，覆盖 390->740->980 resize、无横向溢出、Tavo iframe 内容随父容器扩展、输入/生成状态/快捷回复不重叠，console/page error 为 0。
+
+- Symptom: 后台角色卡详情能看到世界书、Regex、extensions 等字段，但管理员在编辑弹窗粘贴这些字段后保存不生效。
+  Cause: `/admin/api/apps/{id}` 使用 `local_app_to_card()` 返回完整 `extra_settings`，但旧 `update_admin_app()` 只保存基础列，没有把 rich 字段合并回 `local_apps.extra_settings`；`create_admin_app()` 也会丢掉 Character Card V2 的 `character_book` / `extensions.regex_scripts`。
+  Fix: 后台 create/update 都调用 `normalize_admin_rich_app_payload()` 和 `normalize_user_app_extras()`，把 `alternate_greetings`、`world_info`、`regex_scripts`、`extensions`、`prompt_blocks`、`quick_replies`、`sampling` 等字段写入 `extra_settings`；后台列表搜索也包含 `id`。
+  Verify: 2026-07-08 本地临时 SQLite create/update/readback 验证 world/regex/extensions 保存成功；线上临时官方卡 API create/update/readback 通过并清理；Playwright 验证后台 raw 编辑器可见且无 console/page error。

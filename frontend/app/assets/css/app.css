@@ -676,6 +676,27 @@ html, body { font-size: 16px; line-height: 1.5; color: var(--xy-app-text); }
   line-height: 1.4;
   font-weight: 400;
 }
+.card-id-chip {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  margin-top: 2px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  border: 1px solid rgba(196, 181, 253, 0.18);
+  background: rgba(12, 8, 24, 0.42);
+  color: rgba(232, 226, 255, 0.66);
+  font-size: 11px;
+  line-height: 1.45;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.card-id-chip--compact {
+  margin-top: 5px;
+}
 .char-card__name {
   font-weight: 600;
   font-size: 16px;
@@ -2423,6 +2444,26 @@ select.xy-input option,
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+.detail-id-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.detail-id-row code {
+  max-width: 100%;
+  padding: 4px 9px;
+  border-radius: 6px;
+  border: 1px solid rgba(196, 181, 253, 0.18);
+  background: rgba(12, 8, 24, 0.42);
+  color: rgba(232, 226, 255, 0.72);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .feature-card__meta {

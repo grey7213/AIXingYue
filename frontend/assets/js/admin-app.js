@@ -720,6 +720,46 @@ function adminPanel() {
       catch { return String(value); }
     },
 
+    prettyJsonDefault(value, fallback) {
+      const source = value === undefined || value === null ? fallback : value;
+      try { return JSON.stringify(source, null, 2); }
+      catch { return JSON.stringify(fallback, null, 2); }
+    },
+
+    parseJsonEditor(label, raw, fallback) {
+      const text = String(raw || '').trim();
+      if (!text) return fallback;
+      try { return JSON.parse(text); }
+      catch (err) { throw new Error(`${label} JSON 解析失败：${err.message || err}`); }
+    },
+
+    parseJsonArrayEditor(label, raw) {
+      const value = this.parseJsonEditor(label, raw, []);
+      if (!Array.isArray(value)) throw new Error(`${label} 必须是 JSON 数组`);
+      return value;
+    },
+
+    parseWorldInfoEditor(raw) {
+      const value = this.parseJsonEditor('世界书', raw, []);
+      if (Array.isArray(value)) return value;
+      if (value && typeof value === 'object') {
+        const data = value.data && typeof value.data === 'object' ? value.data : {};
+        const book = value.character_book && typeof value.character_book === 'object' ? value.character_book : {};
+        const dataBook = data.character_book && typeof data.character_book === 'object' ? data.character_book : {};
+        for (const list of [value.world_info, value.entries, value.items, book.entries, dataBook.entries]) {
+          if (Array.isArray(list)) return list;
+        }
+        if ('content' in value || 'entry' in value) return [value];
+      }
+      throw new Error('世界书必须是 JSON 数组、{entries:[...]} 或 Character Book 对象');
+    },
+
+    parseJsonObjectEditor(label, raw) {
+      const value = this.parseJsonEditor(label, raw, {});
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} 必须是 JSON 对象`);
+      return value;
+    },
+
     methodBadge(method) {
       const map = { GET: 'xy-badge-blue', POST: 'xy-badge-green', PUT: 'xy-badge-yellow', DELETE: 'xy-badge-red', PATCH: 'xy-badge-purple' };
       return map[method] || 'xy-badge-gray';
@@ -1482,6 +1522,22 @@ function adminPanel() {
         sort_weight: 100,
         is_public: true,
         status: 'published',
+        creator_notes: '',
+        creator: '',
+        character_version: '',
+        personality: '',
+        scenario: '',
+        mes_example: '',
+        post_history_instructions: '',
+        alternate_greetings_raw: '[]',
+        world_info_raw: '[]',
+        regex_scripts_raw: '[]',
+        prompt_blocks_raw: '[]',
+        quick_replies_raw: '[]',
+        extensions_raw: '{}',
+        sampling_raw: '{}',
+        full_json_raw: '{}',
+        merge_full_json: false,
       };
     },
 
@@ -1653,12 +1709,28 @@ function adminPanel() {
         sort_weight: detail.sort_weight ?? app?.sort_weight ?? 100,
         is_public: detail.is_public !== false,
         status: detail.status || app?.status || 'published',
+        creator_notes: detail.creator_notes || '',
+        creator: detail.creator || '',
+        character_version: detail.character_version || '',
+        personality: detail.personality || '',
+        scenario: detail.scenario || '',
+        mes_example: detail.mes_example || '',
+        post_history_instructions: detail.post_history_instructions || '',
+        alternate_greetings_raw: this.prettyJsonDefault(detail.alternate_greetings || [], []),
+        world_info_raw: this.prettyJsonDefault(detail.world_info || [], []),
+        regex_scripts_raw: this.prettyJsonDefault(detail.regex_scripts || [], []),
+        prompt_blocks_raw: this.prettyJsonDefault(detail.prompt_blocks || [], []),
+        quick_replies_raw: this.prettyJsonDefault(detail.quick_replies || [], []),
+        extensions_raw: this.prettyJsonDefault(detail.extensions || {}, {}),
+        sampling_raw: this.prettyJsonDefault(detail.sampling || {}, {}),
+        full_json_raw: this.prettyJsonDefault(detail || {}, {}),
+        merge_full_json: false,
       };
     },
 
     appPayload() {
       const app = this.appDialog || {};
-      return {
+      const payload = {
         name: String(app.name || '').trim(),
         summary: String(app.summary || '').trim(),
         description: String(app.description || '').trim(),
@@ -1671,11 +1743,48 @@ function adminPanel() {
         is_public: !!app.is_public,
         status: app.status || 'published',
       };
+      payload.creator_notes = String(app.creator_notes || '').trim();
+      payload.creator = String(app.creator || '').trim();
+      payload.character_version = String(app.character_version || '').trim();
+      payload.personality = String(app.personality || '').trim();
+      payload.scenario = String(app.scenario || '').trim();
+      payload.mes_example = String(app.mes_example || '').trim();
+      payload.post_history_instructions = String(app.post_history_instructions || '').trim();
+      payload.alternate_greetings = this.parseJsonArrayEditor('备用开场', app.alternate_greetings_raw);
+      payload.world_info = this.parseWorldInfoEditor(app.world_info_raw);
+      payload.regex_scripts = this.parseJsonArrayEditor('Regex/TavernHelper 脚本', app.regex_scripts_raw);
+      payload.prompt_blocks = this.parseJsonArrayEditor('Prompt Blocks', app.prompt_blocks_raw);
+      payload.quick_replies = this.parseJsonArrayEditor('Quick Replies', app.quick_replies_raw);
+      payload.extensions = this.parseJsonObjectEditor('Extensions', app.extensions_raw);
+      payload.sampling = this.parseJsonObjectEditor('Sampling', app.sampling_raw);
+      if (app.merge_full_json) {
+        const full = this.parseJsonObjectEditor('完整 JSON', app.full_json_raw);
+        Object.assign(payload, full, {
+          name: payload.name,
+          summary: payload.summary,
+          description: payload.description,
+          opening_statement: payload.opening_statement,
+          pre_prompt: payload.pre_prompt,
+          tags: payload.tags,
+          cover_url: payload.cover_url,
+          llm_model: payload.llm_model,
+          sort_weight: payload.sort_weight,
+          is_public: payload.is_public,
+          status: payload.status,
+        });
+      }
+      return payload;
     },
 
     async saveAppDialog() {
       if (!this.appDialog) return;
-      const payload = this.appPayload();
+      let payload;
+      try {
+        payload = this.appPayload();
+      } catch (err) {
+        this.showToast(err.message || '角色卡 JSON 解析失败', 'error');
+        return;
+      }
       if (!payload.name) {
         this.showToast('请填写角色名称', 'error');
         return;

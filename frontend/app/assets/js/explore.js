@@ -144,7 +144,7 @@ function explorePage() {
       this.advancedOpen = !this.advancedOpen;
     },
 
-    applyAdvancedSearch() {
+    async applyAdvancedSearch() {
       this.searchKeyword = String(this.advancedForm.keyword || '').trim();
       this.activeCategory = this.advancedForm.category || 'all';
       this.activeSort = this.advancedForm.sort || 'random';
@@ -152,7 +152,22 @@ function explorePage() {
       this.activeZone = this.advancedForm.zone === 'all' ? 'all' : 'clean';
       this.pictureless = !!this.advancedForm.pictureless;
       this.pageSize = Number(this.advancedForm.pageSize) || DEFAULT_PAGE_SIZE;
-      this.loadList(true);
+      await this.searchOrJump(true);
+    },
+
+    async searchOrJump(reset = true) {
+      const keyword = String(this.searchKeyword || '').trim();
+      if (keyword && looksLikeCardId(keyword)) {
+        try {
+          const r = await api.appDetails(keyword);
+          const id = r?.data?.id || r?.id || '';
+          if (id) {
+            location.href = `/app/character.html?id=${encodeURIComponent(keyword)}`;
+            return;
+          }
+        } catch {}
+      }
+      await this.loadList(reset);
     },
 
     resetAdvancedSearch() {
@@ -175,7 +190,7 @@ function explorePage() {
     homeSearchPlaceholder() {
       const configured = this.appHomeText('search_placeholder', '');
       if (configured && configured !== '搜索角色') return configured;
-      return '搜索关键词/作者/标签';
+      return '搜索关键词/作者/标签/ID';
     },
 
     appHomeMapText(mapKey, key, fallback = '') {
@@ -404,6 +419,14 @@ function normalizeCard(raw, copy = {}, index = 0) {
     favorited: !!raw.favorited,
     pictureless: !!raw.pictureless,
   };
+}
+
+function looksLikeCardId(value) {
+  const text = String(value || '').trim();
+  if (!text || text.length < 8 || /\s/.test(text)) return false;
+  if (/^(admin|user|upstream|local|app|role|card)-[A-Za-z0-9_.:-]{6,}$/i.test(text)) return true;
+  if (/^[A-Za-z0-9]+-[A-Za-z0-9_.:-]{8,}$/.test(text)) return true;
+  return /^[0-9a-f]{16,}$/i.test(text);
 }
 
 window.explorePage = explorePage;

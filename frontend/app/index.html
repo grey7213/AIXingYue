@@ -11,8 +11,8 @@
   <link rel="modulepreload" href="/assets/js/api.js">
   <link rel="modulepreload" href="/app/assets/js/app-core.js">
   <link rel="modulepreload" href="/app/assets/js/layout.js?v=20260704-home-search">
-  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260707-search-overflow">
-  <script type="module" src="/app/assets/js/explore.js?v=20260707-clean-chat-ux4"></script>
+  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260708-card-id">
+  <script type="module" src="/app/assets/js/explore.js?v=20260708-card-id"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
@@ -29,9 +29,9 @@
       <div class="home-search-row">
         <label class="home-search-box" :aria-label="homeSearchPlaceholder()">
           <svg class="home-search-box__icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M11 17a6 6 0 100-12 6 6 0 000 12z"/></svg>
-          <input type="text" x-model="searchKeyword" @keydown.enter="loadList(true)" :placeholder="homeSearchPlaceholder()">
+          <input type="text" x-model="searchKeyword" @keydown.enter="searchOrJump(true)" :placeholder="homeSearchPlaceholder()">
         </label>
-        <button class="home-icon-btn home-search-action" type="button" @click="loadList(true)" :title="appHomeText('search_button_title', '搜索')">
+        <button class="home-icon-btn home-search-action" type="button" @click="searchOrJump(true)" :title="appHomeText('search_button_title', '搜索')">
           <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M11 17a6 6 0 100-12 6 6 0 000 12z"/></svg>
         </button>
         <button class="home-icon-btn" type="button" @click="togglePictureless" :class="{ 'is-active': pictureless }" :title="pictureless ? appHomeText('pictureless_on', '无图模式已开') : appHomeText('pictureless_off', '无图模式')">
@@ -147,6 +147,7 @@
               <div class="feature-card__body">
                 <h2 class="feature-card__title" x-text="card.name"></h2>
                 <p class="feature-card__desc" x-text="card.description || card.summary || appHomeText('card_summary_fallback', '点击开始对话')"></p>
+                <code class="card-id-chip" x-text="`ID: ${card.id}`"></code>
                 <div class="feature-card__meta">
                   <span x-text="card.author || appHomeText('official_author', '官方角色')"></span>
                   <span class="feature-card__rating">★ <span x-text="card.rating"></span></span>
@@ -175,6 +176,7 @@
             <button class="char-card__fav" :class="{ 'is-active': card.favorited }" @click="toggleFavorite(card, $event)" :aria-label="appHomeText('favorite_label', '收藏')">♥</button>
             <div class="char-card__body">
               <div class="char-card__author" x-text="card.author || '官方角色'"></div>
+              <code class="card-id-chip card-id-chip--compact" x-text="`ID: ${card.id}`"></code>
               <div class="char-card__name" x-text="card.name"></div>
               <div class="char-card__desc" x-text="card.description || card.summary || '点击开始对话'"></div>
             </div>

@@ -230,6 +230,23 @@ function characterPage() {
       return this.card?.favorited ? '已收藏' : '收藏';
     },
 
+    async copyCardId() {
+      if (!this.card?.id) return;
+      try {
+        await navigator.clipboard?.writeText(this.card.id);
+      } catch {
+        const input = document.createElement('textarea');
+        input.value = this.card.id;
+        input.setAttribute('readonly', 'readonly');
+        input.style.position = 'fixed';
+        input.style.opacity = '0';
+        document.body.appendChild(input);
+        input.select();
+        try { document.execCommand('copy'); } catch {}
+        input.remove();
+      }
+    },
+
     formatTime(ts) {
       return ts ? formatDateTime(ts) : '';
     },

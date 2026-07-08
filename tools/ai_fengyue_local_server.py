@@ -4227,12 +4227,14 @@ class Store:
         with self.lock:
             ts = now_ms()
             app_id = "admin-" + uuid.uuid4().hex[:16]
-            normalized = normalize_admin_app_data(data)
+            rich = normalize_admin_rich_app_payload(data)
+            normalized = normalize_admin_app_data({**data, **rich})
+            extra_json = json.dumps(normalize_user_app_extras({**data, **rich}), ensure_ascii=False, separators=(",", ":"))
             self.conn.execute(
                 """insert into local_apps(id,source,owner_user_id,name,summary,description,cover_url,
                    tags,opening_statement,suggested_questions,pre_prompt,llm_model,api_base_url,age_rating,gender,
-                   language,status,is_public,sort_weight,created_at,updated_at)
-                   values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   language,status,is_public,sort_weight,extra_settings,created_at,updated_at)
+                   values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (app_id, "admin", None, normalized.get("name") or "未命名官方角色",
                   normalized.get("summary") or "", normalized.get("description") or "",
                   normalized.get("cover_url") or "", json.dumps(normalized.get("tags") or [], ensure_ascii=False),
@@ -4241,7 +4243,8 @@ class Store:
                   normalized.get("api_base_url") or "",
                   int(normalized.get("age_rating") or 0), int(normalized.get("gender") or 0),
                   normalized.get("language") or "zh-Hans", normalized.get("status") or "published",
-                  1 if normalized.get("is_public", True) else 0, int(normalized.get("sort_weight") or 100), ts, ts),
+                  1 if normalized.get("is_public", True) else 0, int(normalized.get("sort_weight") or 100),
+                  extra_json if extra_json != "{}" else None, ts, ts),
             )
             self.conn.commit()
             return self.conn.execute("select * from local_apps where id=?", (app_id,)).fetchone()
@@ -4254,7 +4257,8 @@ class Store:
             ).fetchone()
             if not row:
                 return None
-            data = normalize_admin_app_data(data, partial=True)
+            rich = normalize_admin_rich_app_payload(data)
+            data = normalize_admin_app_data({**data, **rich}, partial=True)
             allowed = ("name", "summary", "description", "cover_url", "opening_statement",
                        "pre_prompt", "llm_model", "api_base_url", "age_rating", "gender",
                        "language", "status", "is_public", "sort_weight")
@@ -4270,6 +4274,20 @@ class Store:
                 updates["is_public"] = 1 if updates["is_public"] else 0
             if "sort_weight" in updates:
                 updates["sort_weight"] = int(updates["sort_weight"] or 0)
+            extras_in = normalize_user_app_extras({**data, **rich})
+            extra_trigger_keys = (
+                "bg_url", "nsfw", "protected", "protected_prompt", "anonymous", "sampling",
+                "personality", "scenario", "mes_example", "post_history_instructions",
+                "alternate_greetings", "world_info", "creator_notes", "character_version",
+                "creator", "extensions", "prompt_blocks", "quick_replies", "regex_scripts", "TavernHelper_scripts",
+            )
+            if extras_in or any(k in rich for k in extra_trigger_keys):
+                existing = parse_json_object(dict(row).get("extra_settings"))
+                if not isinstance(existing, dict):
+                    existing = {}
+                for k, v in extras_in.items():
+                    existing[k] = v
+                updates["extra_settings"] = json.dumps(existing, ensure_ascii=False, separators=(",", ":")) if existing else None
             if not updates:
                 return row
             updates["updated_at"] = now_ms()
@@ -4297,13 +4315,13 @@ class Store:
                 errors.append({"index": index, "message": "角色卡必须是对象"})
                 continue
             try:
-                normalized = normalize_admin_app_data(raw)
+                normalized = normalize_admin_app_data({**raw, **normalize_admin_rich_app_payload(raw)})
                 if not normalized.get("name"):
                     raise ValueError("缺少 name")
                 if created_by:
                     note = str(normalized.get("summary") or "")
-                    normalized["summary"] = note[:180]
-                row = self.create_admin_app(normalized)
+                    raw = {**raw, "summary": note[:180]}
+                row = self.create_admin_app(raw)
                 created.append(local_app_to_card(dict(row)))
             except Exception as exc:
                 errors.append({"index": index, "name": raw.get("name") or raw.get("title") or "", "message": str(exc)})
@@ -4486,8 +4504,8 @@ class Store:
             where = ["owner_user_id=?"]  # 我的角色：不限 public/status
             params = [owner_user_id]
         if search:
-            where.append("(name like ? or summary like ? or description like ? or tags like ?)")
-            params.extend([f"%{search}%", f"%{search}%", f"%{search}%", f"%{search}%"])
+            where.append("(id like ? or name like ? or summary like ? or description like ? or tags like ?)")
+            params.extend([f"%{search}%", f"%{search}%", f"%{search}%", f"%{search}%", f"%{search}%"])
         if tag:
             where.append("tags like ?")
             params.append(f"%{tag}%")
@@ -5446,6 +5464,54 @@ def normalize_admin_app_data(data: dict, partial: bool = False) -> dict:
         out["is_public"] = parse_bool(data.get("is_public", data.get("public")), True)
     if not out.get("language") and not partial:
         out["language"] = "zh-Hans"
+    return out
+
+
+def normalize_admin_rich_app_payload(data: dict) -> dict:
+    """Extract rich ST/Character Card fields from admin create/update payloads."""
+    if not isinstance(data, dict):
+        return {}
+    out: dict = {}
+    source = data.get("data") if isinstance(data.get("data"), dict) else data
+    if isinstance(data.get("spec"), str) or isinstance(source.get("character_book"), dict) or "first_mes" in source:
+        try:
+            out.update(silly_card_to_app(data))
+            if "is_public" not in data and "public" not in data:
+                out.pop("is_public", None)
+        except Exception:
+            pass
+    for key in (
+        "personality", "scenario", "mes_example", "post_history_instructions",
+        "alternate_greetings", "world_info", "creator_notes", "character_version",
+        "creator", "extensions", "prompt_blocks", "quick_replies", "regex_scripts",
+        "TavernHelper_scripts", "sampling", "bg_url", "nsfw", "protected",
+        "protected_prompt", "anonymous",
+    ):
+        if key in data:
+            out[key] = data.get(key)
+        elif isinstance(source, dict) and key in source:
+            out[key] = source.get(key)
+
+    if "world_info" not in out:
+        for candidate in (data, source):
+            if not isinstance(candidate, dict):
+                continue
+            try:
+                world = normalize_admin_bulk_world_info(candidate)
+            except Exception:
+                world = []
+            if world:
+                out["world_info"] = world
+                break
+    elif not isinstance(out.get("world_info"), list):
+        try:
+            out["world_info"] = normalize_admin_bulk_world_info(out.get("world_info"))
+        except Exception:
+            out["world_info"] = []
+    if isinstance(out.get("extensions"), dict) and "regex_scripts" not in out:
+        promoted = regex_scripts_from_extensions(out["extensions"])
+        if promoted:
+            out["regex_scripts"] = promoted
     return out
 
 
