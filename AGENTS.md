@@ -469,3 +469,8 @@
   Cause: 在服务启动路径里对 8785 张 `local_apps` 做全量补号迁移，HTTP server 要等初始化结束才监听；长迁移会让 systemd 先显示 active，但健康检查和公网请求失败。
   Fix: 不在 `Store.__init__()` 启动路径执行全量数据迁移；启动只补列和索引。存量数据用独立脚本/离线 SQL 先备份 DB 再迁移，业务代码只在新建卡时追加下一个 `display_id`。
   Verify: 2026-07-10 重新部署后日志立即出现 `listening on http://127.0.0.1:8008/`；`/health` 本地和公网均 OK；远程 DB `total=8785/with_display_id=8785/distinct_display_id=8785`。
+
+- Symptom: 远程验证脚本用 `sqlite3 /opt/ai-fengyue-backend/data/ai_fengyue.sqlite3 ...` 读取管理员 id 时失败，SSH 输出 `sqlite3: command not found`。
+  Cause: 线上 Ubuntu 环境未安装 `sqlite3` 命令行工具，但 Python 3 自带 `sqlite3` 模块可用。
+  Fix: 远程 DB 只读探测改用 `python3 -c "import sqlite3; ..."`，或上传临时 Python 验证脚本执行。
+  Verify: 2026-07-10 `output\verify_tavo_plugin_remote.py` 使用远程 Python 读取管理员 id 后，线上 `.tpg` 插件导入、启用、runtime fragment 验证和删除清理全部通过。

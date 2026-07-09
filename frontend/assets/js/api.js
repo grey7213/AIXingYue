@@ -162,6 +162,13 @@ export const api = {
     llmSettings: () => request('/admin/api/llm-settings'),
     saveLlmSettings: (payload) =>
       request('/admin/api/llm-settings', { method: 'POST', body: payload }),
+    tavoPlugins: () => request('/admin/api/tavo-plugins'),
+    importTavoPlugin: (payload) =>
+      request('/admin/api/tavo-plugins/import', { method: 'POST', body: payload }),
+    toggleTavoPlugin: (pluginId, enabled) =>
+      request(`/admin/api/tavo-plugins/${encodeURIComponent(pluginId)}/toggle`, { method: 'POST', body: { enabled: !!enabled } }),
+    deleteTavoPlugin: (pluginId) =>
+      request(`/admin/api/tavo-plugins/${encodeURIComponent(pluginId)}/delete`, { method: 'POST', body: {} }),
     apps: (params = {}) => {
       const qs = new URLSearchParams(params);
       return request(`/admin/api/apps?${qs}`);

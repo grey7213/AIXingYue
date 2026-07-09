@@ -131,6 +131,7 @@ export const api = {
   myAppsCount: () => rawRequest('/console/api/web/my-apps-count'),
   modelPresets: () => rawRequest('/console/api/web/model-presets'),
   providerTemplates: () => rawRequest('/console/api/web/provider-templates'),
+  tavoPluginRuntimeContributions: () => rawRequest('/console/api/web/tavo-plugins/runtime-contributions'),
   userModelPresets: () => rawRequest('/console/api/web/user-model-presets'),
   saveUserModelPresets: (presets) => rawRequest('/console/api/web/user-model-presets', { method: 'POST', body: { presets } }),
   updateProfile: (payload) => rawRequest('/console/api/web/profile', { method: 'POST', body: payload }),

@@ -20,6 +20,7 @@ function adminPanel() {
       { id: 'redeem', label: '兑换码', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7h3a2 2 0 012 2v1m-5-3V5a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2h2m8-8L7 15m10 0h2a2 2 0 002-2v-1m-4 3v4a2 2 0 01-2 2H9a2 2 0 01-2-2v-4"/></svg>' },
       { id: 'site', label: '运营配置', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h10M4 18h7m8-7l-2 2-1-1m3 4l-2 2-1-1"/></svg>' },
       { id: 'llm', label: '模型配置', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>' },
+      { id: 'plugins', label: 'Tavo 插件', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3M5 11h14M7 21h10a2 2 0 002-2v-8H5v8a2 2 0 002 2zm5-6v3m-2-2h4"/></svg>' },
       { id: 'apps', label: '角色卡', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14-7H5a2 2 0 00-2 2v12a2 2 0 002 2h14a2 2 0 002-2V6a2 2 0 00-2-2zm-3 11l-2-2-4 4"/></svg>' },
     ],
     navLabelItems: [
@@ -656,6 +657,11 @@ function adminPanel() {
     },
     globalPromptImportRaw: '',
 
+    tavoPlugins: [],
+    tavoPluginUploading: false,
+    tavoPluginFileName: '',
+    tavoPluginDetail: null,
+
     apps: [],
     appTotal: 0,
     appPage: 1,
@@ -824,6 +830,7 @@ function adminPanel() {
       if (id === 'redeem' && this.redeemCodes.length === 0) await this.loadRedeemCodes(1);
       if (id === 'site' && !this.siteSettings) await this.loadSiteSettings();
       if (id === 'llm' && !this.llmSettings) await this.loadLlmSettings();
+      if (id === 'plugins' && this.tavoPlugins.length === 0) await this.loadTavoPlugins();
       if (id === 'apps' && this.apps.length === 0) await this.loadApps(1);
     },
 
@@ -1507,6 +1514,94 @@ function adminPanel() {
         .filter((s, idx, arr) => s && arr.indexOf(s) === idx);
     },
 
+    readFileAsDataUrl(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(reader.error || new Error('读取文件失败'));
+        reader.readAsDataURL(file);
+      });
+    },
+
+    async loadTavoPlugins() {
+      this.loading = true;
+      try {
+        const r = await api.admin.tavoPlugins();
+        const data = r.data || r;
+        this.tavoPlugins = data.list || [];
+      } catch (err) {
+        this.showToast(err.message || '加载 Tavo 插件失败', 'error');
+      } finally { this.loading = false; }
+    },
+
+    async onTavoPluginFileChange(event) {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      this.tavoPluginUploading = true;
+      this.tavoPluginFileName = file.name;
+      try {
+        const dataUrl = await this.readFileAsDataUrl(file);
+        const r = await api.admin.importTavoPlugin({ filename: file.name, package_file: dataUrl });
+        const plugin = (r.data || r).plugin || {};
+        this.tavoPluginDetail = plugin;
+        this.showToast(`插件已导入：${plugin.name || file.name}`, 'success');
+        await this.loadTavoPlugins();
+      } catch (err) {
+        this.showToast(err.message || '插件导入失败', 'error');
+      } finally {
+        this.tavoPluginUploading = false;
+        event.target.value = '';
+      }
+    },
+
+    async toggleTavoPlugin(plugin) {
+      if (!plugin?.id) return;
+      this.loading = true;
+      try {
+        const nextEnabled = !plugin.enabled;
+        const r = await api.admin.toggleTavoPlugin(plugin.id, nextEnabled);
+        const updated = (r.data || r).plugin;
+        const idx = this.tavoPlugins.findIndex(item => item.id === plugin.id);
+        if (idx >= 0 && updated) this.tavoPlugins.splice(idx, 1, updated);
+        if (this.tavoPluginDetail?.id === plugin.id && updated) this.tavoPluginDetail = updated;
+        this.showToast(nextEnabled ? '插件已启用' : '插件已停用', 'success');
+      } catch (err) {
+        this.showToast(err.message || '插件状态更新失败', 'error');
+      } finally { this.loading = false; }
+    },
+
+    async deleteTavoPlugin(plugin) {
+      if (!plugin?.id) return;
+      if (!confirm(`删除 Tavo 插件「${plugin.name || plugin.id}」？`)) return;
+      this.loading = true;
+      try {
+        await api.admin.deleteTavoPlugin(plugin.id);
+        this.tavoPlugins = this.tavoPlugins.filter(item => item.id !== plugin.id);
+        if (this.tavoPluginDetail?.id === plugin.id) this.tavoPluginDetail = null;
+        this.showToast('插件已删除', 'success');
+      } catch (err) {
+        this.showToast(err.message || '插件删除失败', 'error');
+      } finally { this.loading = false; }
+    },
+
+    showTavoPluginDetail(plugin) {
+      this.tavoPluginDetail = plugin || null;
+    },
+
+    tavoPluginFeatureBadges(plugin) {
+      const features = plugin?.features || {};
+      const labels = {
+        inputActions: '输入动作',
+        sidebar: '侧栏',
+        messageActions: '消息动作',
+        htmlFragments: 'HTML 片段',
+        settings: '设置项',
+      };
+      return Object.entries(labels)
+        .map(([key, label]) => ({ key, label, count: Number(features[key] || 0) }))
+        .filter(item => item.count > 0);
+    },
+
     emptyAppForm() {
       return {
         id: '',
@@ -1900,12 +1995,7 @@ function adminPanel() {
       if (!file || !this.appDialog) return;
       this.appCoverUploading = true;
       try {
-        const dataUrl = await new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(String(reader.result || ''));
-          reader.onerror = () => reject(reader.error || new Error('read file failed'));
-          reader.readAsDataURL(file);
-        });
+        const dataUrl = await this.readFileAsDataUrl(file);
         const r = await api.uploadCover(dataUrl, file.name);
         const data = r.data || r;
         this.appDialog.cover_url = data.url || data.path || '';

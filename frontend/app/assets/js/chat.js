@@ -92,6 +92,7 @@ function normalizeRenderOptions(options = {}) {
   return {
     settings: normalizeAdvancedRenderSettings(options.advancedRenderSettings || options.settings || {}),
     confirmedTavoFrames: options.confirmedTavoFrames || {},
+    pluginFragments: Array.isArray(options.pluginFragments) ? options.pluginFragments : [],
     fromFence: !!options.fromFence,
     fenceLang: normalizeFenceLang(options.fenceLang || ''),
   };
@@ -617,6 +618,11 @@ function buildTavoBridgeScript() {
 function buildSandboxSrcdoc(raw, options = {}) {
   const allowScripts = options.allowScripts !== false;
   const sanitized = sanitizeAdvancedHtml(raw, { allowScripts });
+  const pluginFragments = Array.isArray(options.pluginFragments) ? options.pluginFragments : [];
+  const pluginHtml = pluginFragments
+    .map(fragment => sanitizeAdvancedHtml(fragment?.html || '', { allowScripts: false }).body)
+    .filter(Boolean)
+    .join('');
   const tavoThemeVars = [
     '--SmartThemeBodyColor:#ffffff',
     '--SmartThemeEmColor:rgba(255,255,255,.92)',
@@ -680,7 +686,8 @@ function buildSandboxSrcdoc(raw, options = {}) {
   const rawStore = /id=["']raw-data-store["']/i.test(sanitized.body)
     ? ''
     : `<textarea id="raw-data-store" hidden aria-hidden="true">${escapeHtml(sanitized.body)}</textarea>`;
-  const compatBody = `<div id="chat" class="chat chat-messages"><div class="mes message assistant" data-role="assistant"><div id="message-content" class="mes_text mes-text message-content markdown-body tavo-content">${sanitized.body}</div></div></div>`;
+  const pluginBody = pluginHtml ? `<div class="tavo-plugin-fragments" data-plugin-fragments="true">${pluginHtml}</div>` : '';
+  const compatBody = `<div id="chat" class="chat chat-messages"><div class="mes message assistant" data-role="assistant"><div id="message-content" class="mes_text mes-text message-content markdown-body tavo-content">${pluginBody}${sanitized.body}</div></div></div>`;
   return `<!doctype html><html style="${escapeAttr(tavoThemeVars)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta http-equiv="Content-Security-Policy" content="${escapeAttr(csp)}"><style>${baseStyle}</style>${bridge}${sanitized.head}</head><body${sanitized.bodyAttrs}>${rawStore}${compatBody}${resize}</body></html>`;
 }
 
@@ -708,7 +715,7 @@ function renderAdvancedFrame(code, options = {}) {
     const action = `<div class="tavo-confirm"><button type="button" class="tavo-run-btn" data-tavo-key="${escapeAttr(key)}">启用 TavoJS</button><span>隔离执行</span></div>`;
     return renderAdvancedPausedCard(source, 'TavoJS', '等待确认', action);
   }
-  const srcdoc = buildSandboxSrcdoc(source, { allowScripts });
+  const srcdoc = buildSandboxSrcdoc(source, { allowScripts, pluginFragments: renderOptions.pluginFragments });
   const sandbox = allowScripts ? 'allow-scripts' : '';
   const status = allowScripts ? '隔离 TavoJS' : '静态渲染';
   return `<section class="tavo-frame-card"><div class="tavo-frame-card__bar"><span>可视化</span><span>${status}</span></div><iframe class="tavo-frame" sandbox="${sandbox}" referrerpolicy="no-referrer" loading="lazy" srcdoc="${escapeAttr(srcdoc)}"></iframe>${renderAdvancedSourcePreview(source)}</section>`;
@@ -1036,6 +1043,7 @@ function chatPage() {
     generationStartedAt: 0,
     generationElapsedSeconds: 0,
     generationMode: '',
+    tavoPluginFragments: [],
     _typeTimer: null,
     _generationTimer: null,
     _scrollSaveTimer: null,
@@ -1058,6 +1066,7 @@ function chatPage() {
         const p = await api.points();
         this.points = parseInt(p.points || p.data?.points || 0, 10);
         await this.loadModelPresets();
+        await this.loadTavoPluginRuntimeContributions();
       } catch (err) {
         if (err instanceof ApiError && err.code === 401) {
           location.replace('/app/login.html?next=' + encodeURIComponent(location.pathname + location.search));
@@ -1140,6 +1149,21 @@ function chatPage() {
         this.confirmedTavoRenderVersion += 1;
         this.scrollToBottom();
       };
+    },
+
+    async loadTavoPluginRuntimeContributions() {
+      try {
+        const r = await api.tavoPluginRuntimeContributions();
+        const data = r?.data || r || {};
+        const list = Array.isArray(data.list) ? data.list : [];
+        this.tavoPluginFragments = list
+          .flatMap(plugin => Array.isArray(plugin?.runtime?.htmlFragments)
+            ? plugin.runtime.htmlFragments.map(fragment => ({ ...fragment, plugin_id: plugin.id, plugin_name: plugin.name }))
+            : [])
+          .filter(fragment => fragment.enabled && fragment.html);
+      } catch {
+        this.tavoPluginFragments = [];
+      }
     },
 
     bindLifecycleHandlers() {
@@ -1297,6 +1321,7 @@ function chatPage() {
       return {
         advancedRenderSettings: this.advancedRenderSettings,
         confirmedTavoFrames: this.confirmedTavoFrames,
+        pluginFragments: this.tavoPluginFragments,
       };
     },
 

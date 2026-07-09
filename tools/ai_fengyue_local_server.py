@@ -4,6 +4,7 @@ import ast
 import base64
 import email.message
 import hashlib
+import io
 import json
 import math
 import os
@@ -16,6 +17,7 @@ import subprocess
 import threading
 import time
 import uuid
+import zipfile
 import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -79,6 +81,10 @@ IMAGE_MODEL_SETTINGS_KEY = "image_model_settings"
 MEMORY_SETTINGS_KEY = "memory_settings"
 ACTIVE_STORE = None
 MEDIA_DIR = None  # 在 main() 里根据 --db 推导，默认 <db_dir>/media
+TPG_MAX_PACKAGE_BYTES = int(os.environ.get("TPG_MAX_PACKAGE_BYTES", str(32 * 1024 * 1024)) or str(32 * 1024 * 1024))
+TPG_MAX_UNCOMPRESSED_BYTES = int(os.environ.get("TPG_MAX_UNCOMPRESSED_BYTES", str(64 * 1024 * 1024)) or str(64 * 1024 * 1024))
+TPG_MAX_FILES = int(os.environ.get("TPG_MAX_FILES", "300") or "300")
+TPG_MAX_FRAGMENT_BYTES = int(os.environ.get("TPG_MAX_FRAGMENT_BYTES", str(128 * 1024)) or str(128 * 1024))
 
 
 def now_ms() -> int:
@@ -2218,6 +2224,28 @@ class Store:
                     value text,
                     updated_at integer not null
                 );
+                create table if not exists tavo_plugins (
+                    id text primary key,
+                    package_id text not null,
+                    name text not null,
+                    version text not null,
+                    description text,
+                    author text,
+                    cover_path text,
+                    file_name text,
+                    file_sha256 text not null,
+                    package_path text not null,
+                    manifest_json text not null,
+                    contributes_json text,
+                    files_json text,
+                    enabled integer not null default 0,
+                    created_at integer not null,
+                    updated_at integer not null
+                );
+                create unique index if not exists idx_tavo_plugins_package_id
+                    on tavo_plugins(package_id);
+                create index if not exists idx_tavo_plugins_enabled
+                    on tavo_plugins(enabled, updated_at desc);
                 create table if not exists user_model_presets (
                     user_id text not null,
                     preset_id text not null,
@@ -5054,6 +5082,167 @@ class Store:
             )
             self.conn.commit()
         return clean
+
+    # ===== Tavo .tpg 插件包 =====
+    def _tpg_package_dir(self) -> Path:
+        base_dir = MEDIA_DIR or (DEFAULT_STATE_DIR / "media")
+        path = base_dir / "tavo-plugins" / "packages"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def import_tavo_plugin(self, raw: str, filename: str = "") -> dict:
+        parsed = parse_tpg_package(raw, filename)
+        package_id = parsed["package_id"]
+        plugin_id = clean_tpg_plugin_id(package_id, f"plugin-{parsed['file_sha256'][:12]}")
+        dest_name = safe_filename(f"{plugin_id}-{parsed['file_sha256'][:12]}.tpg", "plugin.tpg")
+        dest = self._tpg_package_dir() / dest_name
+        dest.write_bytes(parsed["package_bytes"])
+        ts = now_ms()
+        manifest_json = json.dumps(parsed["manifest"], ensure_ascii=False, separators=(",", ":"))
+        contributes_json = json.dumps(parsed["contributes"], ensure_ascii=False, separators=(",", ":"))
+        files_payload = {
+            "manifest_files": parsed.get("files") or [],
+            "package_paths": parsed.get("package_paths") or [],
+            "file_count": parsed.get("file_count") or 0,
+            "package_size": parsed.get("package_size") or 0,
+            "uncompressed_size": parsed.get("uncompressed_size") or 0,
+        }
+        files_json = json.dumps(files_payload, ensure_ascii=False, separators=(",", ":"))
+        with self.lock:
+            existing = self.conn.execute("select * from tavo_plugins where package_id=?", (package_id,)).fetchone()
+            enabled = int(existing["enabled"]) if existing else 0
+            self.conn.execute(
+                """
+                insert into tavo_plugins(
+                    id,package_id,name,version,description,author,cover_path,file_name,file_sha256,
+                    package_path,manifest_json,contributes_json,files_json,enabled,created_at,updated_at
+                ) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                on conflict(package_id) do update set
+                    id=excluded.id,
+                    name=excluded.name,
+                    version=excluded.version,
+                    description=excluded.description,
+                    author=excluded.author,
+                    cover_path=excluded.cover_path,
+                    file_name=excluded.file_name,
+                    file_sha256=excluded.file_sha256,
+                    package_path=excluded.package_path,
+                    manifest_json=excluded.manifest_json,
+                    contributes_json=excluded.contributes_json,
+                    files_json=excluded.files_json,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    plugin_id,
+                    package_id,
+                    parsed["name"],
+                    parsed["version"],
+                    parsed.get("description") or "",
+                    parsed.get("author") or "",
+                    parsed.get("cover_path") or "",
+                    parsed["file_name"],
+                    parsed["file_sha256"],
+                    str(dest),
+                    manifest_json,
+                    contributes_json,
+                    files_json,
+                    enabled,
+                    ts if not existing else int(existing["created_at"] or ts),
+                    ts,
+                ),
+            )
+            self.conn.commit()
+            row = self.conn.execute("select * from tavo_plugins where package_id=?", (package_id,)).fetchone()
+        return tpg_plugin_row_json(row, include_manifest=True)
+
+    def list_tavo_plugins(self, include_manifest: bool = False) -> list[dict]:
+        with self.lock:
+            rows = self.conn.execute("select * from tavo_plugins order by updated_at desc, name asc").fetchall()
+        return [tpg_plugin_row_json(row, include_manifest=include_manifest) for row in rows]
+
+    def get_tavo_plugin(self, plugin_id: str) -> sqlite3.Row | None:
+        clean = str(plugin_id or "").strip()
+        if not clean:
+            return None
+        with self.lock:
+            return self.conn.execute(
+                "select * from tavo_plugins where id=? or package_id=?",
+                (clean, clean),
+            ).fetchone()
+
+    def set_tavo_plugin_enabled(self, plugin_id: str, enabled: bool) -> dict | None:
+        with self.lock:
+            row = self.get_tavo_plugin(plugin_id)
+            if not row:
+                return None
+            self.conn.execute(
+                "update tavo_plugins set enabled=?, updated_at=? where id=?",
+                (1 if enabled else 0, now_ms(), row["id"]),
+            )
+            self.conn.commit()
+            updated = self.conn.execute("select * from tavo_plugins where id=?", (row["id"],)).fetchone()
+        return tpg_plugin_row_json(updated, include_manifest=True)
+
+    def delete_tavo_plugin(self, plugin_id: str) -> bool:
+        with self.lock:
+            row = self.get_tavo_plugin(plugin_id)
+            if not row:
+                return False
+            self.conn.execute("delete from tavo_plugins where id=?", (row["id"],))
+            self.conn.commit()
+        path = Path(str(row["package_path"] or ""))
+        try:
+            if path.exists() and path.is_file():
+                path.unlink()
+        except Exception:
+            pass
+        return True
+
+    def _tavo_plugin_fragment_text(self, row: sqlite3.Row | dict, src: str) -> str:
+        path = safe_tpg_path(src)
+        package_path = Path(str(row["package_path"] if isinstance(row, sqlite3.Row) else row.get("package_path") or ""))
+        if not package_path.exists():
+            return ""
+        try:
+            with zipfile.ZipFile(package_path) as zf:
+                info = zf.getinfo(path)
+                if int(info.file_size or 0) > TPG_MAX_FRAGMENT_BYTES:
+                    return ""
+                return zf.read(path).decode("utf-8", errors="replace")
+        except Exception:
+            return ""
+
+    def enabled_tavo_plugin_runtime_contributions(self) -> dict:
+        with self.lock:
+            rows = self.conn.execute(
+                "select * from tavo_plugins where enabled=1 order by updated_at desc, name asc"
+            ).fetchall()
+        plugins: list[dict] = []
+        for row in rows:
+            item = tpg_plugin_row_json(row, include_manifest=False)
+            contributes = item.get("contributes") if isinstance(item.get("contributes"), dict) else {}
+            fragments = []
+            for fragment in contributes.get("htmlFragments") or []:
+                if not isinstance(fragment, dict):
+                    continue
+                src = str(fragment.get("src") or "").strip()
+                content = self._tavo_plugin_fragment_text(row, src) if src else ""
+                fragments.append({
+                    "id": str(fragment.get("id") or src or "").strip()[:120],
+                    "label": str(fragment.get("label") or fragment.get("name") or src or "").strip()[:120],
+                    "src": src,
+                    "html": content,
+                    "enabled": bool(content),
+                })
+            item["runtime"] = {
+                "htmlFragments": fragments,
+                "inputActions": contributes.get("inputActions") if isinstance(contributes.get("inputActions"), list) else [],
+                "sidebar": contributes.get("sidebar") if isinstance(contributes.get("sidebar"), list) else [],
+                "messageActions": contributes.get("messageActions") if isinstance(contributes.get("messageActions"), list) else [],
+                "settings": contributes.get("settings") if isinstance(contributes.get("settings"), (list, dict)) else [],
+            }
+            plugins.append(item)
+        return {"list": plugins, "total": len(plugins)}
 
     def _legacy_llm_preset(self, saved: dict | None = None, include_secrets: bool = True) -> dict:
         saved = saved or self.get_api_settings_raw()
@@ -8180,6 +8369,188 @@ def parse_uploaded_card_file(raw: str, filename: str = "") -> dict:
     return card
 
 
+def safe_tpg_path(path: object) -> str:
+    text = str(path or "").strip().replace("\\", "/")
+    if not text:
+        raise ValueError("插件包路径不能为空")
+    if text.startswith("/") or re.match(r"^[A-Za-z]:", text):
+        raise ValueError(f"插件包路径不能是绝对路径：{text}")
+    parts = text.split("/")
+    if any(part in ("", ".", "..") for part in parts):
+        raise ValueError(f"插件包路径不能包含空段或上级目录：{text}")
+    return text
+
+
+def clean_tpg_plugin_id(value: object, fallback: str) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"[^A-Za-z0-9_.:-]+", "-", text).strip("-._:")
+    return (text or fallback)[:160]
+
+
+def tpg_feature_summary(contributes: object) -> dict:
+    data = contributes if isinstance(contributes, dict) else {}
+    out: dict[str, int] = {}
+    for key in ("inputActions", "sidebar", "messageActions", "htmlFragments", "settings"):
+        value = data.get(key)
+        if isinstance(value, list):
+            out[key] = len(value)
+        elif isinstance(value, dict):
+            out[key] = len(value)
+        else:
+            out[key] = 0
+    return out
+
+
+def validate_tpg_manifest(manifest: object, package_paths: set[str]) -> dict:
+    if not isinstance(manifest, dict):
+        raise ValueError("manifest.json 必须是 JSON 对象")
+    package_id = clean_tpg_plugin_id(manifest.get("id"), "")
+    if not package_id:
+        raise ValueError('manifest 缺少必填字段 "id"')
+    name = str(manifest.get("name") or "").strip()
+    if not name:
+        raise ValueError('manifest 缺少必填字段 "name"')
+    version = str(manifest.get("version") or "").strip()
+    if not version:
+        raise ValueError('manifest 缺少必填字段 "version"')
+    spec_version = manifest.get("specVersion", manifest.get("spec_version"))
+    if spec_version is not None:
+        try:
+            if int(spec_version) <= 0:
+                raise ValueError
+        except Exception as exc:
+            raise ValueError("manifest specVersion 必须是正整数") from exc
+    contributes = manifest.get("contributes") if isinstance(manifest.get("contributes"), dict) else {}
+    scripts = manifest.get("scripts") if isinstance(manifest.get("scripts"), dict) else {}
+    needs_actions = bool(contributes.get("inputActions") or contributes.get("sidebar"))
+    action_script = scripts.get("actions")
+    if needs_actions:
+        action_path = safe_tpg_path(action_script)
+        if action_path not in package_paths:
+            raise ValueError(f"scripts.actions 指向的文件不存在：{action_path}")
+    elif action_script:
+        safe_tpg_path(action_script)
+    cover = manifest.get("cover")
+    if cover:
+        cover_path = safe_tpg_path(cover)
+        if cover_path not in package_paths:
+            raise ValueError(f"cover 指向的文件不存在：{cover_path}")
+    for item in contributes.get("htmlFragments") or []:
+        if not isinstance(item, dict):
+            raise ValueError("contributes.htmlFragments 项必须是对象")
+        src = item.get("src")
+        if not src:
+            raise ValueError("htmlFragments 项缺少 src")
+        fragment_path = safe_tpg_path(src)
+        if fragment_path not in package_paths:
+            raise ValueError(f"htmlFragments src 指向的文件不存在：{fragment_path}")
+    declared_files = manifest.get("files") or []
+    if declared_files and not isinstance(declared_files, list):
+        raise ValueError('manifest "files" 必须是数组')
+    for item in declared_files:
+        if isinstance(item, str):
+            safe_tpg_path(item)
+        elif isinstance(item, dict):
+            safe_tpg_path(item.get("path"))
+        else:
+            raise ValueError('manifest "files" 项必须是字符串或对象')
+    return {
+        "package_id": package_id,
+        "name": name[:180],
+        "version": version[:80],
+        "description": str(manifest.get("description") or "").strip()[:2000],
+        "author": str(manifest.get("author") or "").strip()[:180],
+        "cover_path": str(cover or "").strip()[:240],
+        "contributes": contributes,
+        "files": declared_files,
+        "features": tpg_feature_summary(contributes),
+    }
+
+
+def parse_tpg_package(raw: str, filename: str = "") -> dict:
+    blob, _mime = decode_data_url(raw)
+    if not blob:
+        raise ValueError("插件包为空")
+    if len(blob) > TPG_MAX_PACKAGE_BYTES:
+        raise ValueError(f"插件包过大，最大 {TPG_MAX_PACKAGE_BYTES // 1024 // 1024}MB")
+    lower_name = str(filename or "").lower()
+    if lower_name and not (lower_name.endswith(".tpg") or lower_name.endswith(".zip")):
+        raise ValueError("只支持 .tpg 或 .zip 插件包")
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(blob))
+    except Exception as exc:
+        raise ValueError(".tpg 必须是 zip 格式插件包") from exc
+    with zf:
+        infos = [info for info in zf.infolist() if not info.is_dir()]
+        if len(infos) > TPG_MAX_FILES:
+            raise ValueError(f"插件包文件过多，最多 {TPG_MAX_FILES} 个文件")
+        total_uncompressed = 0
+        paths: set[str] = set()
+        for info in infos:
+            path = safe_tpg_path(info.filename)
+            total_uncompressed += int(info.file_size or 0)
+            if total_uncompressed > TPG_MAX_UNCOMPRESSED_BYTES:
+                raise ValueError(f"插件包展开体积过大，最大 {TPG_MAX_UNCOMPRESSED_BYTES // 1024 // 1024}MB")
+            paths.add(path)
+        if "manifest.json" not in paths:
+            raise ValueError("插件包根目录缺少 manifest.json")
+        try:
+            manifest = json.loads(zf.read("manifest.json").decode("utf-8-sig", errors="replace"))
+        except Exception as exc:
+            raise ValueError("manifest.json 不是有效 JSON") from exc
+        meta = validate_tpg_manifest(manifest, paths)
+    file_hash = hashlib.sha256(blob).hexdigest()
+    return {
+        **meta,
+        "manifest": manifest,
+        "package_bytes": blob,
+        "file_name": safe_filename(filename or f"{meta['package_id']}.tpg", "plugin.tpg"),
+        "file_sha256": file_hash,
+        "file_count": len(paths),
+        "package_size": len(blob),
+        "uncompressed_size": total_uncompressed,
+        "package_paths": sorted(paths),
+    }
+
+
+def tpg_plugin_row_json(row: sqlite3.Row | dict, include_manifest: bool = False) -> dict:
+    data = dict(row)
+    manifest = {}
+    contributes = {}
+    files = []
+    for key, target in (("manifest_json", "manifest"), ("contributes_json", "contributes"), ("files_json", "files")):
+        try:
+            parsed = json.loads(data.get(key) or "{}")
+        except Exception:
+            parsed = [] if target == "files" else {}
+        if target == "manifest":
+            manifest = parsed if isinstance(parsed, dict) else {}
+        elif target == "contributes":
+            contributes = parsed if isinstance(parsed, dict) else {}
+        else:
+            files = parsed if isinstance(parsed, list) else []
+    out = {
+        "id": data.get("id") or "",
+        "package_id": data.get("package_id") or "",
+        "name": data.get("name") or "",
+        "version": data.get("version") or "",
+        "description": data.get("description") or "",
+        "author": data.get("author") or "",
+        "cover_path": data.get("cover_path") or "",
+        "file_name": data.get("file_name") or "",
+        "file_sha256": data.get("file_sha256") or "",
+        "enabled": bool(int(data.get("enabled") or 0)),
+        "created_at": int(data.get("created_at") or 0),
+        "updated_at": int(data.get("updated_at") or 0),
+        "features": tpg_feature_summary(contributes),
+        "contributes": contributes,
+        "files": files,
+    }
+    if include_manifest:
+        out["manifest"] = manifest
+    return out
+
+
 def png_chunk(chunk_type: bytes, data: bytes) -> bytes:
     return len(data).to_bytes(4, "big") + chunk_type + data + zlib.crc32(chunk_type + data).to_bytes(4, "big")
 
@@ -11142,6 +11513,12 @@ class Handler(BaseHTTPRequestHandler):
         if normalized == "console/api/web/model-presets":
             return ok_response(self.store.public_model_presets())
 
+        if normalized == "console/api/web/tavo-plugins/runtime-contributions":
+            token_user = self.authenticated_token_user()
+            if not token_user:
+                return error_response("unauthorized", 401)
+            return ok_response(self.store.enabled_tavo_plugin_runtime_contributions())
+
         if normalized == "console/api/web/provider-templates":
             return ok_response({"list": self.store.provider_templates(), "enabled": USER_BYOK_ENABLED})
 
@@ -12003,6 +12380,42 @@ class Handler(BaseHTTPRequestHandler):
                     except (TypeError, ValueError) as exc:
                         return error_response(f"invalid llm settings: {exc}", 400)
                 return error_response("method not allowed", 405)
+
+            if normalized == "admin/api/tavo-plugins":
+                return ok_response({"list": self.store.list_tavo_plugins(include_manifest=True)})
+
+            if normalized == "admin/api/tavo-plugins/import":
+                if self.command.upper() != "POST" or not isinstance(body, dict):
+                    return error_response("invalid body")
+                try:
+                    item = self.store.import_tavo_plugin(
+                        str(body.get("package_file") or body.get("file") or body.get("data_url") or ""),
+                        str(body.get("filename") or body.get("file_name") or ""),
+                    )
+                except ValueError as exc:
+                    return error_response(str(exc), 400)
+                return ok_response({"plugin": item})
+
+            if normalized.startswith("admin/api/tavo-plugins/") and normalized.endswith("/toggle"):
+                if self.command.upper() != "POST":
+                    return error_response("method not allowed", 405)
+                parts = normalized.split("/")
+                plugin_id = parts[3] if len(parts) >= 4 else ""
+                enabled = True
+                if isinstance(body, dict) and "enabled" in body:
+                    enabled = bool(body.get("enabled"))
+                updated = self.store.set_tavo_plugin_enabled(plugin_id, enabled)
+                if not updated:
+                    return error_response("plugin not found", 404)
+                return ok_response({"plugin": updated})
+
+            if normalized.startswith("admin/api/tavo-plugins/") and normalized.endswith("/delete"):
+                if self.command.upper() != "POST":
+                    return error_response("method not allowed", 405)
+                parts = normalized.split("/")
+                plugin_id = parts[3] if len(parts) >= 4 else ""
+                deleted = self.store.delete_tavo_plugin(plugin_id)
+                return ok_response({"deleted": deleted})
 
             if normalized == "admin/api/apps":
                 page = parse_query_int(query, "page", 1, 1, 100000)
