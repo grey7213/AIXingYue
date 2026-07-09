@@ -7,8 +7,8 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
   <link rel="icon" href="/favicon.ico">
   <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260708-card-id">
-  <script type="module" src="/app/assets/js/character.js?v=20260708-card-id"></script>
+  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260710-card-display-id">
+  <script type="module" src="/app/assets/js/character.js?v=20260710-card-display-id"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
@@ -41,7 +41,7 @@
                 <h2 class="text-3xl font-bold text-white mb-2" x-text="card?.name || characterText('unnamed_role', '未命名角色')"></h2>
                 <p class="text-violet-100/85 leading-relaxed" x-text="cardSummary()"></p>
                 <div class="detail-id-row">
-                  <code x-text="`ID: ${card?.id || ''}`"></code>
+                  <code x-text="`ID: ${card?.displayId || card?.id || ''}`"></code>
                   <button type="button" class="xy-btn xy-btn-ghost text-xs px-2 py-1" @click="copyCardId" x-text="characterText('copy_id_text', '复制 ID')">复制 ID</button>
                 </div>
                 <div class="flex flex-wrap gap-2 mt-4">

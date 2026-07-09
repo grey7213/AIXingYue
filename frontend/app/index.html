@@ -11,8 +11,8 @@
   <link rel="modulepreload" href="/assets/js/api.js">
   <link rel="modulepreload" href="/app/assets/js/app-core.js">
   <link rel="modulepreload" href="/app/assets/js/layout.js?v=20260704-home-search">
-  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260708-card-id">
-  <script type="module" src="/app/assets/js/explore.js?v=20260708-card-id"></script>
+  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260710-card-display-id">
+  <script type="module" src="/app/assets/js/explore.js?v=20260710-card-display-id"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
@@ -147,7 +147,7 @@
               <div class="feature-card__body">
                 <h2 class="feature-card__title" x-text="card.name"></h2>
                 <p class="feature-card__desc" x-text="card.description || card.summary || appHomeText('card_summary_fallback', '点击开始对话')"></p>
-                <code class="card-id-chip" x-text="`ID: ${card.id}`"></code>
+                <code class="card-id-chip" x-text="`ID: ${card.displayId || card.id}`"></code>
                 <div class="feature-card__meta">
                   <span x-text="card.author || appHomeText('official_author', '官方角色')"></span>
                   <span class="feature-card__rating">★ <span x-text="card.rating"></span></span>
@@ -176,7 +176,7 @@
             <button class="char-card__fav" :class="{ 'is-active': card.favorited }" @click="toggleFavorite(card, $event)" :aria-label="appHomeText('favorite_label', '收藏')">♥</button>
             <div class="char-card__body">
               <div class="char-card__author" x-text="card.author || '官方角色'"></div>
-              <code class="card-id-chip card-id-chip--compact" x-text="`ID: ${card.id}`"></code>
+              <code class="card-id-chip card-id-chip--compact" x-text="`ID: ${card.displayId || card.id}`"></code>
               <div class="char-card__name" x-text="card.name"></div>
               <div class="char-card__desc" x-text="card.description || card.summary || '点击开始对话'"></div>
             </div>

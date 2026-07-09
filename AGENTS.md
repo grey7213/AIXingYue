@@ -42,6 +42,7 @@
 - `frontend/assets/js/site-settings.js`: public homepage hydrator for admin-managed site copy and links.
 - `frontend/app/assets/js/layout.js`: shared Web App shell navigation and admin-managed announcement injection.
 - `frontend/admin.html` + `frontend/assets/js/admin-app.js`: admin console, including user/admin authorization, data charts, model presets, role cards, redeem codes, and site operations settings.
+- Role cards use `local_apps.id` as the internal primary key referenced by conversations, favorites, likes, comments, group chats, memories, and logs. Public short card numbers such as `0001` live in `local_apps.display_id`; do not rewrite primary IDs to short numbers.
 
 ## Artifact Hygiene
 
@@ -463,3 +464,8 @@
   Cause: `/admin/api/apps/{id}` 使用 `local_app_to_card()` 返回完整 `extra_settings`，但旧 `update_admin_app()` 只保存基础列，没有把 rich 字段合并回 `local_apps.extra_settings`；`create_admin_app()` 也会丢掉 Character Card V2 的 `character_book` / `extensions.regex_scripts`。
   Fix: 后台 create/update 都调用 `normalize_admin_rich_app_payload()` 和 `normalize_user_app_extras()`，把 `alternate_greetings`、`world_info`、`regex_scripts`、`extensions`、`prompt_blocks`、`quick_replies`、`sampling` 等字段写入 `extra_settings`；后台列表搜索也包含 `id`。
   Verify: 2026-07-08 本地临时 SQLite create/update/readback 验证 world/regex/extensions 保存成功；线上临时官方卡 API create/update/readback 通过并清理；Playwright 验证后台 raw 编辑器可见且无 console/page error。
+
+- Symptom: 部署角色卡短编号后，`ai-fengyue-backend.service` 显示 `active` 但 8008 端口未监听，Nginx 返回 `502 Bad Gateway`。
+  Cause: 在服务启动路径里对 8785 张 `local_apps` 做全量补号迁移，HTTP server 要等初始化结束才监听；长迁移会让 systemd 先显示 active，但健康检查和公网请求失败。
+  Fix: 不在 `Store.__init__()` 启动路径执行全量数据迁移；启动只补列和索引。存量数据用独立脚本/离线 SQL 先备份 DB 再迁移，业务代码只在新建卡时追加下一个 `display_id`。
+  Verify: 2026-07-10 重新部署后日志立即出现 `listening on http://127.0.0.1:8008/`；`/health` 本地和公网均 OK；远程 DB `total=8785/with_display_id=8785/distinct_display_id=8785`。

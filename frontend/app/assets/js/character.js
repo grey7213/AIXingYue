@@ -132,6 +132,7 @@ function normalizeCard(raw) {
   const openingDetail = structuredDetail(opening);
   return {
     id: String(data.id || data.app_id || ''),
+    displayId: String(data.display_id || data.card_no || data.short_id || data.public_id || data.id || data.app_id || ''),
     name: data.name || data.app_name || data.title || '',
     summary,
     summary_detail: summaryDetail,
@@ -232,11 +233,12 @@ function characterPage() {
 
     async copyCardId() {
       if (!this.card?.id) return;
+      const text = this.card.displayId || this.card.id;
       try {
-        await navigator.clipboard?.writeText(this.card.id);
+        await navigator.clipboard?.writeText(text);
       } catch {
         const input = document.createElement('textarea');
-        input.value = this.card.id;
+        input.value = text;
         input.setAttribute('readonly', 'readonly');
         input.style.position = 'fixed';
         input.style.opacity = '0';

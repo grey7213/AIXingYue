@@ -162,7 +162,7 @@ function explorePage() {
           const r = await api.appDetails(keyword);
           const id = r?.data?.id || r?.id || '';
           if (id) {
-            location.href = `/app/character.html?id=${encodeURIComponent(keyword)}`;
+            location.href = `/app/character.html?id=${encodeURIComponent(id)}`;
             return;
           }
         } catch {}
@@ -409,6 +409,7 @@ function normalizeCard(raw, copy = {}, index = 0) {
   const ratingSeed = ((String(id).charCodeAt(0) || index) + index) % 4;
   return {
     id: String(id),
+    displayId: String(raw.display_id || raw.card_no || raw.short_id || raw.public_id || id),
     name: raw.name || raw.app_name || raw.title || copy.unnamed_role || '未命名角色',
     description: raw.description || raw.summary || raw.intro || raw.subtitle || copy.summary_fallback || '',
     author: raw.author || raw.creator || raw.publisher || raw.user_name || raw.created_by || copy.official_author || '',
@@ -422,8 +423,12 @@ function normalizeCard(raw, copy = {}, index = 0) {
 }
 
 function looksLikeCardId(value) {
-  const text = String(value || '').trim();
-  if (!text || text.length < 8 || /\s/.test(text)) return false;
+  let text = String(value || '').trim();
+  if (text.startsWith('#')) text = text.slice(1).trim();
+  if (text.toLowerCase().startsWith('id:')) text = text.slice(3).trim();
+  if (!text || /\s/.test(text)) return false;
+  if (/^\d{4,}$/.test(text)) return true;
+  if (text.length < 8) return false;
   if (/^(admin|user|upstream|local|app|role|card)-[A-Za-z0-9_.:-]{6,}$/i.test(text)) return true;
   if (/^[A-Za-z0-9]+-[A-Za-z0-9_.:-]{8,}$/.test(text)) return true;
   return /^[0-9a-f]{16,}$/i.test(text);

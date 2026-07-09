@@ -1377,6 +1377,7 @@ function chatPage() {
       try {
         const r = await api.appDetails(appId);
         const data = r?.data || r;
+        if (data?.id) this.appId = String(data.id);
         this.appName = data?.name || this.chatText('new_role_name', '新角色');
         this.appDesc = data?.description || data?.summary || '';
         this.appIcon = data?.icon || data?.icon_url || data?.cover || '';
@@ -1391,7 +1392,7 @@ function chatPage() {
         this.restoreModelSelection();
       }
       // 已有该角色的会话 → 直接进入最近一个
-      const existing = this.conversations.find(c => c.app_id === appId);
+      const existing = this.conversations.find(c => c.app_id === this.appId || c.app_id === appId);
       if (existing) {
         await this.selectConversation(existing);
         return;

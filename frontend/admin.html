@@ -9,7 +9,7 @@
   <link rel="apple-touch-icon" sizes="180x180" href="/assets/img/apple-touch-icon.png">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="/assets/css/custom.css?v=20260703-fengyue-ui2">
-  <script type="module" src="/assets/js/admin-app.js?v=20260708-card-file-editor"></script>
+  <script type="module" src="/assets/js/admin-app.js?v=20260710-card-display-id"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
@@ -1705,7 +1705,8 @@
                             <img :src="app.cover || app.icon || '/assets/img/apk/avatar.webp'" class="w-12 h-12 rounded-lg object-cover bg-black/30" alt="" onerror="this.src='/assets/img/apk/avatar.webp'">
                             <div class="min-w-0">
                               <div class="font-semibold truncate" x-text="app.name || '未命名角色'"></div>
-                              <code class="block text-[11px] text-violet-300/75 truncate" x-text="app.id"></code>
+                              <code class="block text-[11px] text-violet-300/75 truncate" x-text="app.display_id ? ('ID: ' + app.display_id) : app.id"></code>
+                              <code class="block text-[10px] text-slate-600 truncate" x-show="app.display_id" x-text="app.id"></code>
                               <div class="text-xs text-slate-500 truncate" x-text="app.summary || app.description || app.id"></div>
                             </div>
                           </div>
@@ -1822,7 +1823,8 @@
             <div class="space-y-4">
               <template x-if="appDialog.id">
                 <div class="rounded-lg border border-white/10 bg-white/5 p-3 text-xs text-slate-400">
-                  当前 ID：<code class="text-violet-200 break-all" x-text="appDialog.id"></code><br>
+                  当前 ID：<code class="text-violet-200 break-all" x-text="appDialog.display_id || appDialog.id"></code><br>
+                  内部 ID：<code class="text-slate-400 break-all" x-text="appDialog.id"></code><br>
                   当前来源：<span class="text-violet-200" x-text="appDialog.source"></span> · 管理员可直接修正同步角色、用户角色和官方角色。
                 </div>
               </template>

@@ -2171,6 +2171,7 @@ class Store:
                 create index if not exists idx_group_messages_group on group_messages(group_id, created_at);
                 create table if not exists local_apps (
                     id text primary key,
+                    display_id text,
                     source text not null default 'upstream',
                     owner_user_id text,
                     name text,
@@ -2363,12 +2364,75 @@ class Store:
                 for row in self.conn.execute("pragma table_info(local_apps)").fetchall()
             }
             wanted = {
+                "display_id": "text",
                 "api_base_url": "text",
                 "extra_settings": "text",
             }
             for name, column_type in wanted.items():
                 if name not in columns:
                     self.conn.execute(f"alter table local_apps add column {name} {column_type}")
+            self.conn.execute(
+                "create unique index if not exists idx_local_apps_display_id "
+                "on local_apps(display_id) where display_id is not null and display_id<>''"
+            )
+            self.conn.commit()
+
+    def _next_local_app_display_id_locked(self) -> str:
+        rows = self.conn.execute(
+            "select display_id from local_apps where display_id is not null and display_id<>''"
+        ).fetchall()
+        used: set[str] = set()
+        max_num = 0
+        for row in rows:
+            value = str(row["display_id"] or "").strip()
+            if not value:
+                continue
+            used.add(value)
+            if value.isdigit():
+                max_num = max(max_num, int(value))
+        candidate = max_num + 1
+        while True:
+            display_id = f"{candidate:04d}"
+            if display_id not in used:
+                return display_id
+            candidate += 1
+
+    def ensure_local_app_display_ids(self) -> None:
+        """Assign stable public card numbers without changing the internal app ids."""
+        with self.lock:
+            missing_rows = self.conn.execute(
+                """
+                select id from local_apps
+                where display_id is null or trim(display_id)=''
+                order by created_at asc, id asc
+                """
+            ).fetchall()
+            if not missing_rows:
+                return
+            used: set[str] = set()
+            max_num = 0
+            existing_rows = self.conn.execute(
+                "select display_id from local_apps where display_id is not null and display_id<>''"
+            ).fetchall()
+            for existing in existing_rows:
+                value = str(existing["display_id"] or "").strip()
+                if not value:
+                    continue
+                used.add(value)
+                if value.isdigit():
+                    max_num = max(max_num, int(value))
+            candidate = max_num + 1
+            for row in missing_rows:
+                while True:
+                    display_id = f"{candidate:04d}"
+                    candidate += 1
+                    if display_id not in used:
+                        used.add(display_id)
+                        break
+                self.conn.execute(
+                    "update local_apps set display_id=? where id=?",
+                    (display_id, row["id"]),
+                )
             self.conn.commit()
 
     def ensure_messages_columns(self) -> None:
@@ -4056,6 +4120,7 @@ class Store:
         clean_members = []
         for idx, member in enumerate(members[:12]):
             app_id = str(member.get("app_id") or "").strip()
+            app_id = self.resolve_local_app_id(app_id)
             if not app_id:
                 continue
             clean_members.append({
@@ -4191,6 +4256,7 @@ class Store:
                 self.conn.execute(f"update local_apps set {cols} where id=?", (*fields.values(), app["id"]))
             else:
                 fields["id"] = app["id"]
+                fields["display_id"] = self._next_local_app_display_id_locked()
                 fields["created_at"] = ts
                 fields["status"] = "published"
                 fields["is_public"] = 1
@@ -4203,14 +4269,15 @@ class Store:
         with self.lock:
             ts = now_ms()
             app_id = "user-" + uuid.uuid4().hex[:16]
+            display_id = self._next_local_app_display_id_locked()
             extras = normalize_user_app_extras(data)
             extra_json = json.dumps(extras, ensure_ascii=False, separators=(",", ":")) if extras else None
             self.conn.execute(
-                """insert into local_apps(id,source,owner_user_id,name,summary,description,cover_url,
+                """insert into local_apps(id,display_id,source,owner_user_id,name,summary,description,cover_url,
                    tags,opening_statement,suggested_questions,pre_prompt,llm_model,api_base_url,age_rating,gender,
                    language,status,is_public,extra_settings,created_at,updated_at)
-                   values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (app_id, "user", owner_user_id, data.get("name") or "未命名角色",
+                   values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (app_id, display_id, "user", owner_user_id, data.get("name") or "未命名角色",
                   data.get("summary") or "", data.get("description") or "",
                   data.get("cover_url") or "", json.dumps(data.get("tags") or [], ensure_ascii=False),
                   data.get("opening_statement") or "", json.dumps(data.get("suggested_questions") or [], ensure_ascii=False),
@@ -4227,15 +4294,16 @@ class Store:
         with self.lock:
             ts = now_ms()
             app_id = "admin-" + uuid.uuid4().hex[:16]
+            display_id = self._next_local_app_display_id_locked()
             rich = normalize_admin_rich_app_payload(data)
             normalized = normalize_admin_app_data({**data, **rich})
             extra_json = json.dumps(normalize_user_app_extras({**data, **rich}), ensure_ascii=False, separators=(",", ":"))
             self.conn.execute(
-                """insert into local_apps(id,source,owner_user_id,name,summary,description,cover_url,
+                """insert into local_apps(id,display_id,source,owner_user_id,name,summary,description,cover_url,
                    tags,opening_statement,suggested_questions,pre_prompt,llm_model,api_base_url,age_rating,gender,
                    language,status,is_public,sort_weight,extra_settings,created_at,updated_at)
-                   values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (app_id, "admin", None, normalized.get("name") or "未命名官方角色",
+                   values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (app_id, display_id, "admin", None, normalized.get("name") or "未命名官方角色",
                   normalized.get("summary") or "", normalized.get("description") or "",
                   normalized.get("cover_url") or "", json.dumps(normalized.get("tags") or [], ensure_ascii=False),
                   normalized.get("opening_statement") or "", json.dumps(normalized.get("suggested_questions") or [], ensure_ascii=False),
@@ -4251,6 +4319,7 @@ class Store:
 
     def update_admin_app(self, app_id: str, data: dict) -> sqlite3.Row | None:
         with self.lock:
+            app_id = self.resolve_local_app_id(app_id)
             row = self.conn.execute(
                 "select * from local_apps where id=?",
                 (app_id,),
@@ -4298,6 +4367,7 @@ class Store:
 
     def delete_admin_app(self, app_id: str) -> bool:
         with self.lock:
+            app_id = self.resolve_local_app_id(app_id)
             cur = self.conn.execute(
                 "delete from local_apps where id=?",
                 (app_id,),
@@ -4367,11 +4437,12 @@ class Store:
         errors: list[dict] = []
         ts = now_ms()
         with self.lock:
-            for app_id in ids:
+            for raw_app_id in ids:
                 try:
+                    app_id = self.resolve_local_app_id(raw_app_id)
                     row = self.conn.execute("select * from local_apps where id=?", (app_id,)).fetchone()
                     if not row:
-                        not_found.append(app_id)
+                        not_found.append(raw_app_id)
                         continue
                     row_d = dict(row)
                     updates: dict[str, object] = {}
@@ -4425,6 +4496,7 @@ class Store:
 
     def update_user_app(self, app_id: str, owner_user_id: str, data: dict) -> sqlite3.Row | None:
         with self.lock:
+            app_id = self.resolve_local_app_id(app_id)
             row = self.conn.execute(
                 "select * from local_apps where id=? and owner_user_id=? and source='user'",
                 (app_id, owner_user_id),
@@ -4473,6 +4545,7 @@ class Store:
 
     def delete_user_app(self, app_id: str, owner_user_id: str) -> bool:
         with self.lock:
+            app_id = self.resolve_local_app_id(app_id)
             cur = self.conn.execute(
                 "delete from local_apps where id=? and owner_user_id=? and source='user'",
                 (app_id, owner_user_id),
@@ -4482,7 +4555,23 @@ class Store:
 
     def get_local_app(self, app_id: str) -> sqlite3.Row | None:
         with self.lock:
-            return self.conn.execute("select * from local_apps where id=?", (app_id,)).fetchone()
+            clean = unquote(str(app_id or "").strip())
+            if not clean:
+                return None
+            row = self.conn.execute("select * from local_apps where id=?", (clean,)).fetchone()
+            if row:
+                return row
+            lookup = clean[1:] if clean.startswith("#") else clean
+            if lookup.lower().startswith("id:"):
+                lookup = lookup[3:].strip()
+            if not lookup:
+                return None
+            return self.conn.execute("select * from local_apps where display_id=?", (lookup,)).fetchone()
+
+    def resolve_local_app_id(self, app_id: str) -> str:
+        clean = unquote(str(app_id or "").strip())
+        row = self.get_local_app(clean)
+        return str(row["id"]) if row else clean
 
     def list_local_apps(self, *, source: str | None = None, owner_user_id: str | None = None,
                         search: str = "", tag: str = "", sort: str = "default",
@@ -4504,8 +4593,8 @@ class Store:
             where = ["owner_user_id=?"]  # 我的角色：不限 public/status
             params = [owner_user_id]
         if search:
-            where.append("(id like ? or name like ? or summary like ? or description like ? or tags like ?)")
-            params.extend([f"%{search}%", f"%{search}%", f"%{search}%", f"%{search}%", f"%{search}%"])
+            where.append("(id like ? or display_id like ? or name like ? or summary like ? or description like ? or tags like ?)")
+            params.extend([f"%{search}%", f"%{search}%", f"%{search}%", f"%{search}%", f"%{search}%", f"%{search}%"])
         if tag:
             where.append("tags like ?")
             params.append(f"%{tag}%")
@@ -4539,7 +4628,7 @@ class Store:
         select_cols = "*"
         if lightweight:
             select_cols = (
-                "id,name,summary,description,cover_url,tags,age_rating,gender,language,"
+                "id,display_id,name,summary,description,cover_url,tags,age_rating,gender,language,"
                 "players_count,like_count,source,status,is_public,sort_weight,created_at,updated_at"
             )
         with self.lock:
@@ -4623,6 +4712,9 @@ class Store:
     def toggle_favorite(self, user_id: str, app_id: str) -> dict:
         ts = now_ms()
         with self.lock:
+            app_id = self.resolve_local_app_id(app_id)
+            if not self.conn.execute("select 1 from local_apps where id=?", (app_id,)).fetchone():
+                raise ValueError("not found")
             exists = self.conn.execute(
                 "select 1 from user_favorites where user_id=? and app_id=?",
                 (user_id, app_id),
@@ -4643,6 +4735,9 @@ class Store:
     def toggle_like(self, user_id: str, app_id: str) -> dict:
         ts = now_ms()
         with self.lock:
+            app_id = self.resolve_local_app_id(app_id)
+            if not self.conn.execute("select 1 from local_apps where id=?", (app_id,)).fetchone():
+                raise ValueError("not found")
             exists = self.conn.execute(
                 "select 1 from user_likes where user_id=? and app_id=?",
                 (user_id, app_id),
@@ -4686,7 +4781,7 @@ class Store:
         }
 
     def list_app_comments(self, app_id: str, user_id: str = "", *, limit: int = 3) -> dict:
-        clean_app = str(app_id or "").strip()
+        clean_app = self.resolve_local_app_id(app_id)
         clean_user = str(user_id or "").strip()
         clean_limit = max(1, min(int(limit or 3), 100))
         if not clean_app:
@@ -4718,7 +4813,7 @@ class Store:
 
     def create_app_comment(self, user_id: str, app_id: str, content: str) -> dict:
         clean_user = str(user_id or "").strip()
-        clean_app = str(app_id or "").strip()
+        clean_app = self.resolve_local_app_id(app_id)
         clean_content = re.sub(r"\s+\n", "\n", str(content or "").replace("\r\n", "\n").replace("\r", "\n")).strip()
         clean_content = re.sub(r"\n{4,}", "\n\n\n", clean_content)
         if not clean_user:
@@ -4808,6 +4903,7 @@ class Store:
     def is_liked(self, user_id: str | None, app_id: str) -> bool:
         if not user_id or not app_id:
             return False
+        app_id = self.resolve_local_app_id(app_id)
         with self.lock:
             return bool(self.conn.execute(
                 "select 1 from user_likes where user_id=? and app_id=?",
@@ -4817,6 +4913,7 @@ class Store:
     def is_favorite(self, user_id: str | None, app_id: str) -> bool:
         if not user_id or not app_id:
             return False
+        app_id = self.resolve_local_app_id(app_id)
         with self.lock:
             return bool(self.conn.execute(
                 "select 1 from user_favorites where user_id=? and app_id=?",
@@ -4825,7 +4922,7 @@ class Store:
 
     def list_user_app_tags(self, user_id: str | None, app_id: str) -> list[str]:
         clean_user = str(user_id or "").strip()
-        clean_app = str(app_id or "").strip()
+        clean_app = self.resolve_local_app_id(app_id)
         if not clean_user or not clean_app:
             return []
         with self.lock:
@@ -4837,7 +4934,7 @@ class Store:
 
     def set_user_app_tags(self, user_id: str, app_id: str, tags: list | str) -> dict:
         clean_user = str(user_id or "").strip()
-        clean_app = str(app_id or "").strip()
+        clean_app = self.resolve_local_app_id(app_id)
         if not clean_user:
             raise ValueError("unauthorized")
         if not clean_app:
@@ -7243,6 +7340,9 @@ def local_app_to_card(row: dict) -> dict:
         regex_scripts = []
     return {
         "id": row["id"],
+        "display_id": row.get("display_id") or "",
+        "card_no": row.get("display_id") or "",
+        "short_id": row.get("display_id") or "",
         "name": row.get("name") or "",
         "summary": row.get("summary") or "",
         "description": row.get("description") or "",
@@ -7320,6 +7420,9 @@ def local_app_to_list_card(row: dict) -> dict:
     tags = [str(t).strip() for t in _json(row.get("tags"), []) if str(t).strip()]
     return {
         "id": row.get("id") or "",
+        "display_id": row.get("display_id") or "",
+        "card_no": row.get("display_id") or "",
+        "short_id": row.get("display_id") or "",
         "name": _trim(row.get("name"), 80),
         "summary": _trim(row.get("summary"), 220),
         "description": _trim(row.get("description"), 260),
@@ -10302,6 +10405,7 @@ class Handler(BaseHTTPRequestHandler):
         if not app_id or not content:
             self.send_json(400, error_response("app_id and content are required"))
             return
+        app_id = self.store.resolve_local_app_id(app_id)
         try:
             self.store.require_credit_points(user["id"], CHAT_MESSAGE_COST)
         except ValueError as exc:
@@ -11231,6 +11335,7 @@ class Handler(BaseHTTPRequestHandler):
             content = str(body.get("query") or body.get("content") or body.get("message") or "").strip()
             if not content:
                 return error_response("query is required")
+            app_id = self.store.resolve_local_app_id(app_id)
             try:
                 self.store.require_credit_points(user["id"], CHAT_MESSAGE_COST)
             except ValueError as exc:
@@ -11359,6 +11464,7 @@ class Handler(BaseHTTPRequestHandler):
             content = str(body.get("query") or body.get("content") or body.get("message") or "").strip()
             if not content:
                 return error_response("query is required")
+            app_id = self.store.resolve_local_app_id(app_id)
             try:
                 self.store.require_credit_points(user["id"], CHAT_MESSAGE_COST)
             except ValueError as exc:
@@ -11516,6 +11622,7 @@ class Handler(BaseHTTPRequestHandler):
             app_id = str(body.get("app_id") or "").strip()
             if not app_id:
                 return error_response("app_id is required")
+            app_id = self.store.resolve_local_app_id(app_id)
             app_row = self.store.get_local_app(app_id)
             card = local_app_to_card(dict(app_row)) if app_row else {}
             app_name = str(body.get("app_name") or card.get("name") or "").strip()
@@ -11718,6 +11825,7 @@ class Handler(BaseHTTPRequestHandler):
             model_override = self.store.public_model_selection(body.get("model_id") or body.get("llm_model"))
             if not app_id or not content:
                 return error_response("app_id and content are required")
+            app_id = self.store.resolve_local_app_id(app_id)
             try:
                 self.store.require_credit_points(user["id"], CHAT_MESSAGE_COST)
             except ValueError as exc:
