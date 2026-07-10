@@ -10,8 +10,8 @@
   <link rel="modulepreload" href="/assets/js/api.js">
   <link rel="modulepreload" href="/app/assets/js/app-core.js?v=20260710-web-reliability">
   <link rel="modulepreload" href="/app/assets/js/layout.js?v=20260710-resume-chat">
-  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260710-card-display-id">
-  <script type="module" src="/app/assets/js/explore.js?v=20260710-web-reliability"></script>
+  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260711-role-annotations">
+  <script type="module" src="/app/assets/js/explore.js?v=20260711-role-annotations-b"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
@@ -134,53 +134,70 @@
       </div>
 
       <section class="home-section" x-show="featuredCards().length > 0">
-        <div class="home-section-title" x-text="appHomeText('featured_title', '🌟 官方每周推荐')">🌟 官方每周推荐</div>
+        <div class="home-section-title" x-text="appHomeText('featured_title', '官方每周推荐')">官方每周推荐</div>
         <div class="featured-grid">
           <template x-for="card in featuredCards()" :key="`featured-${card.id}`">
-            <a class="feature-card" :class="{ 'is-pictureless': pictureless || card.pictureless }" :href="`/app/character.html?id=${encodeURIComponent(card.id)}`" @click="rememberBrowsePosition(card)">
-              <div class="feature-card__cover">
-                <img class="feature-card__img" :src="card.cover || card.icon || '/assets/img/apk/avatar.webp'" :alt="card.name" loading="lazy" referrerpolicy="no-referrer" onerror="this.src='/assets/img/apk/avatar.webp'">
-                <span class="feature-card__badge" x-text="appHomeText('featured_badge', '▶ 官方推荐')">▶ 官方推荐</span>
-                <p class="feature-card__summary" x-text="card.description || card.summary || appHomeText('card_summary_fallback', '点击开始对话')"></p>
-              </div>
+            <article class="feature-card" :class="{ 'is-pictureless': pictureless || card.pictureless }">
+              <a class="feature-card__link" :href="`/app/character.html?id=${encodeURIComponent(card.id)}`" @click="rememberBrowsePosition(card)">
+                <div class="feature-card__cover">
+                  <img class="feature-card__img" :src="card.cover || card.icon || '/assets/img/apk/avatar.webp'" :alt="card.name" loading="lazy" referrerpolicy="no-referrer" onerror="this.src='/assets/img/apk/avatar.webp'">
+                  <span class="feature-card__badge" x-text="appHomeText('featured_badge', '官方推荐')">官方推荐</span>
+                  <p class="feature-card__summary" x-text="card.description || appHomeText('card_summary_fallback', '点击查看角色设定')"></p>
+                </div>
+                <div class="feature-card__body">
+                  <h2 class="feature-card__title" x-text="card.name"></h2>
+                  <p class="feature-card__desc" x-text="card.description || appHomeText('card_summary_fallback', '点击查看角色设定')"></p>
+                  <div class="card-capabilities" aria-label="角色能力">
+                    <span class="capability-badge" :class="card.hasOpening ? 'is-on capability-badge--opening' : 'is-off'"><b x-text="card.hasOpening ? '✓' : '—'"></b>开场</span>
+                    <span class="capability-badge" :class="card.hasWorldInfo ? 'is-on capability-badge--world' : 'is-off'"><b x-text="card.hasWorldInfo ? '✓' : '—'"></b>世界书</span>
+                    <span class="capability-badge" :class="card.hasRegex ? 'is-on capability-badge--regex' : 'is-off'"><b x-text="card.hasRegex ? '✓' : '—'"></b>正则</span>
+                  </div>
+                  <code class="card-id-chip" x-text="`ID: ${card.displayId || card.id}`"></code>
+                  <div class="feature-card__meta">
+                    <span x-text="card.author || appHomeText('official_author', 'AI星月官方')"></span>
+                    <span class="feature-card__stats" x-show="card.likeCount || card.playersCount">
+                      <span x-show="card.likeCount" x-text="`♥ ${card.likeCount}`"></span>
+                      <span x-show="card.playersCount" x-text="`对话 ${card.playersCount}`"></span>
+                    </span>
+                  </div>
+                  <div class="feature-card__tags">
+                    <template x-for="t in (card.tags || []).slice(0, 4)" :key="t"><span x-text="t"></span></template>
+                  </div>
+                </div>
+              </a>
               <button class="char-card__fav feature-card__fav" :class="{ 'is-active': card.favorited }" @click="toggleFavorite(card, $event)" :aria-label="appHomeText('favorite_label', '收藏')">♥</button>
-              <div class="feature-card__body">
-                <h2 class="feature-card__title" x-text="card.name"></h2>
-                <p class="feature-card__desc" x-text="card.description || card.summary || appHomeText('card_summary_fallback', '点击开始对话')"></p>
-                <code class="card-id-chip" x-text="`ID: ${card.displayId || card.id}`"></code>
-                <div class="feature-card__meta">
-                  <span x-text="card.author || appHomeText('official_author', '官方角色')"></span>
-                  <span class="feature-card__rating">★ <span x-text="card.rating"></span></span>
-                </div>
-                <div class="feature-card__tags">
-                  <template x-for="t in (card.tags || []).slice(0, 4)" :key="t"><span x-text="t"></span></template>
-                </div>
-              </div>
-            </a>
+            </article>
           </template>
         </div>
       </section>
 
       <section class="home-section" x-show="recommendedCards().length > 0">
-        <div class="home-section-title" x-text="appHomeText('recommended_title', '💖 为你推荐')">💖 为你推荐</div>
+        <div class="home-section-title" x-text="appHomeText('recommended_title', '为你推荐')">为你推荐</div>
         <div class="char-grid home-recommend-grid">
         <template x-for="card in recommendedCards()" :key="card.id">
-          <a class="char-card" :class="{ 'is-pictureless': pictureless || card.pictureless }" :href="`/app/character.html?id=${encodeURIComponent(card.id)}`" @click="rememberBrowsePosition(card)">
-            <div class="char-card__cover">
-              <img class="char-card__img" :src="card.cover || card.icon || '/assets/img/apk/avatar.webp'" :alt="card.name" loading="lazy" referrerpolicy="no-referrer" onerror="this.src='/assets/img/apk/avatar.webp'">
-              <div class="char-card__overlay"></div>
-              <div class="char-card__tags">
-                <template x-for="t in (card.tags || []).slice(0, 2)" :key="t"><span class="char-card__tag" x-text="t"></span></template>
+          <article class="char-card" :class="{ 'is-pictureless': pictureless || card.pictureless }">
+            <a class="char-card__link" :href="`/app/character.html?id=${encodeURIComponent(card.id)}`" @click="rememberBrowsePosition(card)">
+              <div class="char-card__cover">
+                <img class="char-card__img" :src="card.cover || card.icon || '/assets/img/apk/avatar.webp'" :alt="card.name" loading="lazy" referrerpolicy="no-referrer" onerror="this.src='/assets/img/apk/avatar.webp'">
+                <div class="char-card__overlay"></div>
+                <div class="char-card__tags">
+                  <template x-for="t in (card.tags || []).slice(0, 2)" :key="t"><span class="char-card__tag" x-text="t"></span></template>
+                </div>
               </div>
-            </div>
+              <div class="char-card__body">
+                <div class="char-card__author" x-text="card.author || 'AI星月官方'"></div>
+                <code class="card-id-chip card-id-chip--compact" x-text="`ID: ${card.displayId || card.id}`"></code>
+                <div class="char-card__name" x-text="card.name"></div>
+                <div class="char-card__desc" x-text="card.description || '点击查看角色设定'"></div>
+                <div class="card-capabilities card-capabilities--compact" aria-label="角色能力">
+                  <span class="capability-badge" :class="card.hasOpening ? 'is-on capability-badge--opening' : 'is-off'"><b x-text="card.hasOpening ? '✓' : '—'"></b>开场</span>
+                  <span class="capability-badge" :class="card.hasWorldInfo ? 'is-on capability-badge--world' : 'is-off'"><b x-text="card.hasWorldInfo ? '✓' : '—'"></b>世界书</span>
+                  <span class="capability-badge" :class="card.hasRegex ? 'is-on capability-badge--regex' : 'is-off'"><b x-text="card.hasRegex ? '✓' : '—'"></b>正则</span>
+                </div>
+              </div>
+            </a>
             <button class="char-card__fav" :class="{ 'is-active': card.favorited }" @click="toggleFavorite(card, $event)" :aria-label="appHomeText('favorite_label', '收藏')">♥</button>
-            <div class="char-card__body">
-              <div class="char-card__author" x-text="card.author || '官方角色'"></div>
-              <code class="card-id-chip card-id-chip--compact" x-text="`ID: ${card.displayId || card.id}`"></code>
-              <div class="char-card__name" x-text="card.name"></div>
-              <div class="char-card__desc" x-text="card.description || card.summary || '点击开始对话'"></div>
-            </div>
-          </a>
+          </article>
         </template>
         </div>
       </section>

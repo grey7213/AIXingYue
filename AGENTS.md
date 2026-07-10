@@ -499,3 +499,8 @@
   Cause: `/admin/api/apps/import` 会生成新角色 ID，且角色名/display_id 不是业务关联主键；完整卡还包含世界书、Regex、Prompt、封面等不应随标签回填变更的字段。
   Fix: 使用 `tools/export_role_cards_for_tagging.py` 导出公开已发布 admin 卡；Manifest 将 `display_id` 映射到 `local_apps.id`。回传时先备份 DB 和 dry-run，只按 internal ID 完整替换 `local_apps.tags`。
   Verify: 2026-07-10 导出 8778 张公开官方卡，internal/display ID 均唯一；完整包与轻量标签包通过 ZIP CRC、Manifest、CSV、抽样 JSON 和 SHA-256 校验，用户卡和私有卡未导出。
+
+- Symptom: 第三方回传角色卡 ZIP 后，文件名同时包含标准分类和三位 `√/✗`，直接按文件名拆标签会把 `NTR/NTL`、`人妻/熟女` 等组合标签错误拆开，或把能力标记混进分类标签。
+  Cause: 文件名是给人核对的展开视图；无损标准标签在 `tag-overrides.filled.csv` 的 `new_tags_json`，三位标记依次是主开场白、顶层世界书、顶层正则，属于独立能力维度。
+  Fix: 使用 `tools/import_role_card_annotations.py` 校验 ZIP/Manifest/卡 SHA/CSV/ID，按 filled CSV 覆盖 `local_apps.tags`；能力写入 `role_card_annotations`，且不更新 `local_apps.updated_at`，避免全库探索排序漂移。
+  Verify: 2026-07-11 线上 dry-run 8778/8778、冲突 0；备份和 live DB `quick_check=ok`；6351 行标签实际变化、8778 标注写入，逐卡标签/标注 mismatch 均为 0；Explore/详情在 375/1440 宽度显示能力徽标且 console error 0。

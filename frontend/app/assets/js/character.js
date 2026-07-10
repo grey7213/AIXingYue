@@ -67,8 +67,27 @@ function valueToText(value) {
   return String(value).replace(/\uFFFD/g, '').trim();
 }
 
+function plainDisplayText(value) {
+  const raw = String(value || '').replace(/\r/g, '').trim();
+  if (!raw) return '';
+  const visualOnly = /<(?:img|video|audio|iframe|style|script)\b/i.test(raw);
+  const stripped = raw
+    .replace(/<br\s*\/?\s*>/gi, '\n')
+    .replace(/<\/?(?:基本信息|角色设定|开场白|CoreIdentity)\b[^>]*>/gi, ' ')
+    .replace(/<[^>]*>/g, ' ');
+  const decoder = document.createElement('textarea');
+  decoder.innerHTML = stripped;
+  const text = String(decoder.value || '')
+    .replace(/\{\{\s*(?:char|user)\s*\}\}/gi, match => match.toLowerCase().includes('char') ? '角色' : '你')
+    .replace(/(?:^|\s)-\s+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (visualOnly && text.length < 12) return '';
+  return text;
+}
+
 function compactText(value, limit = 160) {
-  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  const text = plainDisplayText(value);
   return text.length > limit ? `${text.slice(0, limit)}...` : text;
 }
 
@@ -86,7 +105,8 @@ function structuredDetail(rawText) {
   const parsed = tryParseJsonLike(raw);
   const source = objectSource(parsed);
   if (!source) {
-    return { structured: false, raw, summary: compactText(raw), plain: raw, sections: [] };
+    const plain = plainDisplayText(raw);
+    return { structured: false, raw, summary: compactText(plain), plain, sections: [] };
   }
 
   const sections = [];
@@ -127,9 +147,15 @@ function normalizeCard(raw) {
   const summary = data.summary || data.intro || '';
   const description = data.description || data.prompt || '';
   const opening = data.opening_statement || data.opening || '';
+  const flags = data.feature_flags && typeof data.feature_flags === 'object' ? data.feature_flags : {};
+  const worldInfo = Array.isArray(data.world_info) ? data.world_info : [];
+  const regexScripts = Array.isArray(data.regex_scripts) ? data.regex_scripts : [];
   const summaryDetail = structuredDetail(summary);
   const descriptionDetail = structuredDetail(description);
   const openingDetail = structuredDetail(opening);
+  if (/<(?:img|video|iframe)\b|background-image\s*:/i.test(opening)) {
+    openingDetail.summary = '已配置视觉化开场，进入聊天后可查看完整效果。';
+  }
   return {
     id: String(data.id || data.app_id || ''),
     displayId: String(data.display_id || data.card_no || data.short_id || data.public_id || data.id || data.app_id || ''),
@@ -148,6 +174,9 @@ function normalizeCard(raw) {
     favorited: !!data.favorited,
     liked: !!data.liked,
     like_count: Number(data.like_count || 0),
+    hasOpening: data.has_opening != null ? !!data.has_opening : (flags.opening != null ? !!flags.opening : !!String(opening).trim()),
+    hasWorldInfo: data.has_world_info != null ? !!data.has_world_info : (flags.world_info != null ? !!flags.world_info : worldInfo.length > 0),
+    hasRegex: data.has_regex != null ? !!data.has_regex : (flags.regex != null ? !!flags.regex : regexScripts.length > 0),
   };
 }
 

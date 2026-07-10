@@ -412,22 +412,66 @@ function explorePage() {
   };
 }
 
+function compactPreview(value) {
+  let text = String(value || '').replace(/\r/g, '').trim();
+  if (!text) return '';
+  if (/^[{[]/.test(text)) {
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed === 'object') {
+        text = String(parsed.description || parsed.summary || parsed.profile || parsed.personality || '');
+      }
+    } catch {}
+  }
+  text = text
+    .replace(/<\/?(?:CoreIdentity|CharacterProfile|StatusPlaceHolderImpl|prologue\d*)\b[^>]*>/gi, ' ')
+    .replace(/<[^>]{0,120}>/g, ' ')
+    .replace(/\{\{[^}]{1,120}\}\}/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const bulletCount = (text.match(/(?:^|\s)-\s+/g) || []).length;
+  const quotedKeyCount = (text.match(/["']?[A-Za-z_][A-Za-z0-9_]*["']?\s*[:：]/g) || []).length;
+  if (
+    !text
+    || /^(?:system|assistant|user|prompt|json)\s*[:：]/i.test(text)
+    || bulletCount >= 3
+    || quotedKeyCount >= 4
+    || /\b(?:import\s+[A-Za-z_]|from\s+[A-Za-z_.]+\s+import|class\s+[A-Za-z_]|def\s+[A-Za-z_]|__init__|collections\.)\b/.test(text)
+  ) return '';
+  return text.length > 150 ? `${text.slice(0, 150).trim()}…` : text;
+}
+
+function firstCleanPreview(...values) {
+  for (const value of values) {
+    const clean = compactPreview(value);
+    if (clean) return clean;
+  }
+  return '';
+}
+
 function normalizeCard(raw, copy = {}, index = 0) {
   if (!raw || typeof raw !== 'object') return null;
   const id = raw.id || raw.app_id || raw.appId || raw.installed_app_id;
   if (!id) return null;
   const tags = Array.isArray(raw.tags) ? raw.tags : (Array.isArray(raw.category) ? raw.category : []);
-  const ratingSeed = ((String(id).charCodeAt(0) || index) + index) % 4;
+  const description = firstCleanPreview(raw.summary, raw.intro, raw.subtitle, raw.description)
+    || copy.summary_fallback
+    || '点击查看角色设定';
+  const flags = raw.feature_flags && typeof raw.feature_flags === 'object' ? raw.feature_flags : {};
   return {
     id: String(id),
     displayId: String(raw.display_id || raw.card_no || raw.short_id || raw.public_id || id),
     name: raw.name || raw.app_name || raw.title || copy.unnamed_role || '未命名角色',
-    description: raw.description || raw.summary || raw.intro || raw.subtitle || copy.summary_fallback || '',
+    description,
     author: raw.author || raw.creator || raw.publisher || raw.user_name || raw.created_by || copy.official_author || '',
     cover: raw.cover || raw.cover_url || raw.image || raw.icon_url || raw.banner || '',
     icon: raw.icon || raw.icon_url || raw.avatar || '',
     tags,
-    rating: raw.rating || raw.score || raw.stars || (4.6 + ratingSeed / 10).toFixed(1),
+    likeCount: Number(raw.like_count || raw.likes || 0),
+    playersCount: Number(raw.players_count || raw.players || raw.chat_count || 0),
+    hasOpening: raw.has_opening != null ? !!raw.has_opening : !!flags.opening,
+    hasWorldInfo: raw.has_world_info != null ? !!raw.has_world_info : !!flags.world_info,
+    hasRegex: raw.has_regex != null ? !!raw.has_regex : !!flags.regex,
     favorited: !!raw.favorited,
     pictureless: !!raw.pictureless,
   };

@@ -7,15 +7,15 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
   <link rel="icon" href="/favicon.ico">
   <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260710-card-display-id">
-  <script type="module" src="/app/assets/js/character.js?v=20260710-resume-chat"></script>
+  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260711-role-annotations">
+  <script type="module" src="/app/assets/js/character.js?v=20260711-role-annotations-c"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
   <div class="xy-stars-bg"></div>
   <div class="xy-meteor"></div>
 
-  <div class="app-shell" x-data="characterPage()" x-init="init()" x-cloak>
+  <div class="app-shell" x-data="characterPage()" x-cloak>
     <aside class="app-sidebar" data-app-sidebar></aside>
 
     <main class="app-main">
@@ -30,16 +30,35 @@
         <div class="xy-loading"></div>
       </div>
 
-      <section x-show="!loading && card" class="app-page-pad max-w-6xl mx-auto grid lg:grid-cols-[380px_1fr] gap-6">
+      <section x-show="!loading && card" class="app-page-pad max-w-6xl mx-auto grid lg:grid-cols-[380px_1fr] gap-6 character-detail-layout">
         <div class="detail-cover">
           <img :src="card?.cover || card?.icon || '/assets/img/apk/avatar.webp'" :alt="card?.name" referrerpolicy="no-referrer" onerror="this.src='/assets/img/apk/avatar.webp'">
+          <div class="detail-cover__shade"></div>
+          <div class="detail-cover__caption">
+            <span x-text="card?.source === 'user' ? characterText('user_badge', '用户角色') : characterText('official_badge', '官方角色')"></span>
+            <code x-text="`#${card?.displayId || card?.id || ''}`"></code>
+          </div>
         </div>
         <div class="space-y-5">
-          <div class="xy-glass p-7">
+          <div class="xy-glass p-7 character-hero-panel">
             <div class="flex items-start justify-between gap-4">
               <div>
                 <h2 class="text-3xl font-bold text-white mb-2" x-text="card?.name || characterText('unnamed_role', '未命名角色')"></h2>
                 <p class="text-violet-100/85 leading-relaxed" x-text="cardSummary()"></p>
+                <div class="character-capabilities" aria-label="角色能力">
+                  <div class="character-capability" :class="card?.hasOpening ? 'is-on' : 'is-off'">
+                    <span class="character-capability__mark" x-text="card?.hasOpening ? '✓' : '—'"></span>
+                    <span><strong>开场白</strong><small x-text="card?.hasOpening ? '已配置' : '未配置'"></small></span>
+                  </div>
+                  <div class="character-capability" :class="card?.hasWorldInfo ? 'is-on' : 'is-off'">
+                    <span class="character-capability__mark" x-text="card?.hasWorldInfo ? '✓' : '—'"></span>
+                    <span><strong>世界书</strong><small x-text="card?.hasWorldInfo ? '已配置' : '未配置'"></small></span>
+                  </div>
+                  <div class="character-capability" :class="card?.hasRegex ? 'is-on' : 'is-off'">
+                    <span class="character-capability__mark" x-text="card?.hasRegex ? '✓' : '—'"></span>
+                    <span><strong>正则</strong><small x-text="card?.hasRegex ? '已配置' : '未配置'"></small></span>
+                  </div>
+                </div>
                 <div class="detail-id-row">
                   <code x-text="`ID: ${card?.displayId || card?.id || ''}`"></code>
                   <button type="button" class="xy-btn xy-btn-ghost text-xs px-2 py-1" @click="copyCardId" x-text="characterText('copy_id_text', '复制 ID')">复制 ID</button>
@@ -49,12 +68,22 @@
                   <button type="button" class="xy-btn xy-btn-ghost text-xs" :class="{ 'is-active': card?.favorited }" @click="toggleFavorite($event)" x-text="favoriteLabel()">收藏</button>
                 </div>
               </div>
-              <span class="xy-badge xy-badge-purple" x-text="card?.source === 'user' ? characterText('user_badge', '用户角色') : characterText('official_badge', '角色设定')"></span>
+              <span class="xy-badge xy-badge-purple character-source-badge" x-text="card?.source === 'user' ? characterText('user_badge', '用户角色') : characterText('official_badge', '角色设定')"></span>
             </div>
-            <div class="flex flex-wrap gap-2 mt-5">
+            <div class="flex flex-wrap gap-2 mt-5 character-category-tags">
               <template x-for="t in (card?.tags || [])" :key="t">
                 <span class="chip" x-text="t"></span>
               </template>
+            </div>
+            <div class="character-copy-grid" x-show="card?.description_detail?.summary || card?.opening_detail?.summary">
+              <article x-show="card?.description_detail?.summary">
+                <span>角色设定</span>
+                <p x-text="card?.description_detail?.summary"></p>
+              </article>
+              <article x-show="card?.opening_detail?.summary">
+                <span>开场预览</span>
+                <p x-text="card?.opening_detail?.summary"></p>
+              </article>
             </div>
             <div class="user-tags-box mt-5">
               <div class="user-tags-box__head">

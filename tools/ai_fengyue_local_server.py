@@ -2263,6 +2263,14 @@ class Store:
                 );
                 create index if not exists idx_local_apps_source on local_apps(source, sort_weight desc, updated_at desc);
                 create index if not exists idx_local_apps_owner on local_apps(owner_user_id, updated_at desc);
+                create table if not exists role_card_annotations (
+                    app_id text primary key,
+                    has_opening integer not null,
+                    has_world_info integer not null,
+                    has_regex integer not null,
+                    annotation_source text not null,
+                    annotated_at integer not null
+                );
                 create table if not exists content_media_urls (
                     url text primary key,
                     first_seen_cache_key text,
@@ -4688,7 +4696,15 @@ class Store:
             clean = unquote(str(app_id or "").strip())
             if not clean:
                 return None
-            row = self.conn.execute("select * from local_apps where id=?", (clean,)).fetchone()
+            row = self.conn.execute(
+                """
+                select a.*,ra.has_opening,ra.has_world_info,ra.has_regex
+                from local_apps a
+                left join role_card_annotations ra on ra.app_id=a.id
+                where a.id=?
+                """,
+                (clean,),
+            ).fetchone()
             if row:
                 return row
             lookup = clean[1:] if clean.startswith("#") else clean
@@ -4696,7 +4712,15 @@ class Store:
                 lookup = lookup[3:].strip()
             if not lookup:
                 return None
-            return self.conn.execute("select * from local_apps where display_id=?", (lookup,)).fetchone()
+            return self.conn.execute(
+                """
+                select a.*,ra.has_opening,ra.has_world_info,ra.has_regex
+                from local_apps a
+                left join role_card_annotations ra on ra.app_id=a.id
+                where a.display_id=?
+                """,
+                (lookup,),
+            ).fetchone()
 
     def resolve_local_app_id(self, app_id: str) -> str:
         clean = unquote(str(app_id or "").strip())
@@ -4763,7 +4787,13 @@ class Store:
         if lightweight:
             select_cols = (
                 "id,display_id,name,summary,description,cover_url,tags,age_rating,gender,language,"
-                "players_count,like_count,source,status,is_public,sort_weight,created_at,updated_at"
+                "players_count,like_count,source,status,is_public,sort_weight,created_at,updated_at,"
+                "coalesce((select has_opening from role_card_annotations ra where ra.app_id=local_apps.id),"
+                "case when length(trim(coalesce(opening_statement,'')))>0 then 1 else 0 end) as has_opening,"
+                "coalesce((select has_world_info from role_card_annotations ra where ra.app_id=local_apps.id),"
+                "case when json_valid(extra_settings) and json_array_length(extra_settings,'$.world_info')>0 then 1 else 0 end) as has_world_info,"
+                "coalesce((select has_regex from role_card_annotations ra where ra.app_id=local_apps.id),"
+                "case when json_valid(extra_settings) and json_array_length(extra_settings,'$.regex_scripts')>0 then 1 else 0 end) as has_regex"
             )
         with self.lock:
             total = self.conn.execute(f"select count(*) from local_apps{where_sql}", params).fetchone()[0]
@@ -7625,6 +7655,41 @@ def chat_greetings_from_card(card: dict, char_name: str = "", user_name: str = "
     return greetings[:20]
 
 
+def local_app_feature_flags(row: dict, extra: dict | None = None) -> dict[str, bool]:
+    """Return lightweight, UI-facing feature flags for one role card.
+
+    Imported human annotations are authoritative. New/unannotated cards fall
+    back to their top-level card fields; the regex flag intentionally follows
+    the visible `extra_settings.regex_scripts` annotation convention rather
+    than nested TavernHelper extension scripts.
+    """
+    annotated_keys = ("has_opening", "has_world_info", "has_regex")
+    if all(key in row and row.get(key) is not None for key in annotated_keys):
+        return {
+            "opening": bool(row.get("has_opening")),
+            "world_info": bool(row.get("has_world_info")),
+            "regex": bool(row.get("has_regex")),
+        }
+    if extra is None:
+        raw_extra = row.get("extra_settings")
+        if isinstance(raw_extra, dict):
+            extra = raw_extra
+        else:
+            try:
+                extra = json.loads(raw_extra) if raw_extra else {}
+            except Exception:
+                extra = {}
+    if not isinstance(extra, dict):
+        extra = {}
+    world_info = extra.get("world_info")
+    regex_scripts = extra.get("regex_scripts")
+    return {
+        "opening": bool(str(row.get("opening_statement") or "").strip()),
+        "world_info": bool(world_info) if isinstance(world_info, (list, dict)) else bool(str(world_info or "").strip()),
+        "regex": bool(regex_scripts) if isinstance(regex_scripts, (list, dict)) else bool(str(regex_scripts or "").strip()),
+    }
+
+
 def local_app_to_card(row: dict) -> dict:
     """把 local_apps 行转成 explore/详情 期望的角色卡格式。"""
     def _json(v, default):
@@ -7653,6 +7718,7 @@ def local_app_to_card(row: dict) -> dict:
     regex_scripts = extra.get("regex_scripts")
     if not isinstance(regex_scripts, list):
         regex_scripts = []
+    feature_flags = local_app_feature_flags(row, extra)
     return {
         "id": row["id"],
         "display_id": row.get("display_id") or "",
@@ -7695,6 +7761,10 @@ def local_app_to_card(row: dict) -> dict:
         "prompt_blocks": prompt_blocks,
         "quick_replies": quick_replies,
         "regex_scripts": regex_scripts,
+        "has_opening": feature_flags["opening"],
+        "has_world_info": feature_flags["world_info"],
+        "has_regex": feature_flags["regex"],
+        "feature_flags": feature_flags,
         "creator_notes": str(extra.get("creator_notes") or ""),
         "creator": str(extra.get("creator") or ""),
         "character_version": str(extra.get("character_version") or ""),
@@ -7733,6 +7803,7 @@ def local_app_to_list_card(row: dict) -> dict:
     source = row.get("source") or "upstream"
     cover = row.get("cover_url") or ""
     tags = [str(t).strip() for t in _json(row.get("tags"), []) if str(t).strip()]
+    feature_flags = local_app_feature_flags(row)
     return {
         "id": row.get("id") or "",
         "display_id": row.get("display_id") or "",
@@ -7746,6 +7817,10 @@ def local_app_to_list_card(row: dict) -> dict:
         "cover_tiny": "",
         "icon": cover,
         "tags": tags[:6],
+        "has_opening": feature_flags["opening"],
+        "has_world_info": feature_flags["world_info"],
+        "has_regex": feature_flags["regex"],
+        "feature_flags": feature_flags,
         "age_rating": row.get("age_rating") or 0,
         "gender": row.get("gender") or 0,
         "language": row.get("language") or "zh-Hans",
