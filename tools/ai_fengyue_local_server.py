@@ -10,8 +10,10 @@ import math
 import os
 import random
 import re
+import select
 import shutil
 import smtplib
+import socket
 import sqlite3
 import subprocess
 import threading
@@ -22,6 +24,7 @@ import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse, unquote, quote
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 
@@ -93,6 +96,10 @@ def now_ms() -> int:
 
 def log(message: str) -> None:
     print(f"[ai-fengyue-local] {message}", flush=True)
+
+
+def is_client_disconnect_error(exc: BaseException) -> bool:
+    return isinstance(exc, (BrokenPipeError, ConnectionResetError, ConnectionAbortedError))
 
 
 class GenerationLimitError(RuntimeError):
@@ -449,6 +456,50 @@ def error_response(message: str, code: int = 400) -> dict:
     return {"result": "failure", "message": message, "code": str(code), "status": code, "data": message, "msg": message}
 
 
+def _resend_api_key() -> str:
+    explicit = str(os.environ.get("RESEND_API_KEY") or "").strip()
+    if explicit:
+        return explicit
+    host = str(os.environ.get("SMTP_HOST") or "").strip().lower()
+    user = str(os.environ.get("SMTP_USER") or "").strip().lower()
+    if host == "smtp.resend.com" or user == "resend":
+        return str(os.environ.get("SMTP_PASSWORD") or "").strip()
+    return ""
+
+
+def _send_verification_email_resend(to_email: str, sender: str, subject: str, body: str) -> str:
+    api_key = _resend_api_key()
+    if not api_key:
+        raise RuntimeError("Resend API key is not configured")
+    endpoint = str(os.environ.get("RESEND_API_URL") or "https://api.resend.com/emails").strip()
+    payload = {"from": sender, "to": [to_email], "subject": subject, "text": body}
+    request = Request(
+        endpoint,
+        data=json_bytes(payload),
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": LLM_UPSTREAM_USER_AGENT,
+        },
+    )
+    timeout = _bounded_int(os.environ.get("RESEND_HTTP_TIMEOUT"), 8, 2, 15)
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            raw = response.read()
+            status = int(getattr(response, "status", 200) or 200)
+    except HTTPError as exc:
+        raise RuntimeError(f"Resend HTTP {int(getattr(exc, 'code', 0) or 0)}") from exc
+    if status < 200 or status >= 300:
+        raise RuntimeError(f"Resend HTTP {status}")
+    try:
+        data = json.loads(raw.decode("utf-8", errors="replace")) if raw else {}
+    except Exception:
+        data = {}
+    return str(data.get("id") or "").strip() if isinstance(data, dict) else ""
+
+
 def send_verification_email(to_email: str, code: str, lang: str = "zh-Hans", purpose: str = "register") -> None:
     host = os.environ.get("SMTP_HOST")
     sender = os.environ.get("SMTP_FROM") or f"noreply@patcher.villainy.top"
@@ -465,26 +516,33 @@ def send_verification_email(to_email: str, code: str, lang: str = "zh-Hans", pur
     msg["To"] = to_email
     msg["Subject"] = subject
     msg.set_content(body)
+    if _resend_api_key():
+        try:
+            message_id = _send_verification_email_resend(to_email, sender, subject, body)
+            suffix = f" id={message_id}" if message_id else ""
+            log(f"accepted verification email for {to_email} via Resend HTTPS{suffix}")
+            return
+        except Exception as exc:
+            log(f"Resend HTTPS email failed for {to_email}; falling back to SMTP: {type(exc).__name__}: {exc}")
     if not host:
         sendmail_path = os.environ.get("SENDMAIL_PATH") or shutil.which("sendmail") or "/usr/sbin/sendmail"
         if Path(sendmail_path).exists():
             subprocess.run([sendmail_path, "-t", "-oi"], input=msg.as_bytes(), check=True)
             log(f"sent verification email for {to_email} through sendmail")
             return
-        log(f"SMTP/sendmail not configured; verification code for {to_email}: {code}")
-        return
+        raise RuntimeError("SMTP/sendmail is not configured")
     port = int(os.environ.get("SMTP_PORT", "587"))
     user = os.environ.get("SMTP_USER", "")
     password = os.environ.get("SMTP_PASSWORD", "")
     use_ssl = os.environ.get("SMTP_SSL", "false").lower() in ("1", "true", "yes")
     use_starttls = os.environ.get("SMTP_STARTTLS", "true").lower() not in ("0", "false", "no")
     if use_ssl:
-        with smtplib.SMTP_SSL(host, port, timeout=20) as smtp:
+        with smtplib.SMTP_SSL(host, port, timeout=10) as smtp:
             if user:
                 smtp.login(user, password)
             smtp.send_message(msg)
     else:
-        with smtplib.SMTP(host, port, timeout=20) as smtp:
+        with smtplib.SMTP(host, port, timeout=10) as smtp:
             if use_starttls:
                 smtp.starttls()
             if user:
@@ -3345,6 +3403,22 @@ class Store:
             self.conn.commit()
         return code
 
+    def delete_email_code(self, email: str, code: str, purpose: str = "register") -> bool:
+        value = normalize_email(email)
+        clean_code = str(code or "").strip()
+        purpose_value = (purpose or "register").strip().lower() or "register"
+        if purpose_value in ("reset", "reset_password"):
+            purpose_value = "password_reset"
+        if not value or not clean_code:
+            return False
+        with self.lock:
+            cur = self.conn.execute(
+                "delete from email_codes where email=? and code=? and purpose=? and consumed_at is null",
+                (value, clean_code, purpose_value),
+            )
+            self.conn.commit()
+            return cur.rowcount > 0
+
     def verify_email_code(self, email: str, code: str, purpose: str = "register") -> bool:
         value = normalize_email(email)
         clean_code = (code or "").strip()
@@ -3385,6 +3459,14 @@ class Store:
                 )
             self.conn.commit()
             return self.conn.execute("select * from conversations where id=?", (conv_id,)).fetchone()
+
+    def get_conversation(self, conv_id: str, user_id: str) -> dict | None:
+        with self.lock:
+            row = self.conn.execute(
+                "select * from conversations where id=? and user_id=?",
+                (conv_id, user_id),
+            ).fetchone()
+            return dict(row) if row else None
 
     def append_message(self, conv_id: str, user_id: str, role: str, content: str, swipes: list | None = None) -> sqlite3.Row:
         with self.lock:
@@ -3662,6 +3744,26 @@ class Store:
             self.conn.execute("delete from conversations where id=? and user_id=?", (conv_id, user_id))
             self.conn.commit()
             return True
+
+    def delete_empty_conversation(self, conv_id: str, user_id: str) -> bool:
+        with self.lock:
+            cur = self.conn.execute(
+                """
+                delete from conversations
+                where id=? and user_id=?
+                  and not exists (
+                    select 1 from messages where conversation_id=? and user_id=?
+                  )
+                """,
+                (conv_id, user_id, conv_id, user_id),
+            )
+            if cur.rowcount > 0:
+                self.conn.execute(
+                    "delete from conversation_summaries where conversation_id=? and user_id=?",
+                    (conv_id, user_id),
+                )
+            self.conn.commit()
+            return cur.rowcount > 0
 
     def copy_conversation(self, conv_id: str, user_id: str) -> dict | None:
         with self.lock:
@@ -4639,8 +4741,12 @@ class Store:
         sort_key = (sort or "default").strip().lower()
         order_params: list = []
         if sort_key == "random" and random_seed is not None:
-            order_by = "abs(((rowid * (? + 1) * 1103515245) + 12345) % 2147483647), updated_at desc"
-            order_params.append(int(random_seed) & 0x7FFFFFFF)
+            order_by = (
+                "abs(((rowid * rowid * 1103515245) + "
+                "(rowid * (? + 1) * 12345) + (? * 2654435761)) % 2147483647), updated_at desc"
+            )
+            seed_value = int(random_seed) & 0x7FFFFFFF
+            order_params.extend([seed_value, seed_value])
         else:
             order_by = {
                 "popular": "players_count desc, like_count desc, sort_weight desc, updated_at desc",
@@ -4947,6 +5053,26 @@ class Store:
                 "select 1 from user_favorites where user_id=? and app_id=?",
                 (user_id, app_id),
             ).fetchone())
+
+    def app_interaction_states(self, user_id: str | None, app_ids: list[str]) -> tuple[set[str], set[str]]:
+        clean_user = str(user_id or "").strip()
+        clean_ids = list(dict.fromkeys(str(app_id or "").strip() for app_id in app_ids if str(app_id or "").strip()))
+        if not clean_user or not clean_ids:
+            return set(), set()
+        placeholders = ",".join("?" for _ in clean_ids)
+        with self.lock:
+            favorite_rows = self.conn.execute(
+                f"select app_id from user_favorites where user_id=? and app_id in ({placeholders})",
+                (clean_user, *clean_ids),
+            ).fetchall()
+            liked_rows = self.conn.execute(
+                f"select app_id from user_likes where user_id=? and app_id in ({placeholders})",
+                (clean_user, *clean_ids),
+            ).fetchall()
+        return (
+            {str(row["app_id"]) for row in favorite_rows},
+            {str(row["app_id"]) for row in liked_rows},
+        )
 
     def list_user_app_tags(self, user_id: str | None, app_id: str) -> list[str]:
         clean_user = str(user_id or "").strip()
@@ -9823,7 +9949,19 @@ def chunk_text(text: str, size: int = 12):
         yield value[idx:idx + size]
 
 
-def stream_user_llm_chunks(app: dict, content: str, messages: list[dict] | None = None, settings: dict | None = None, persona: dict | None = None, context: dict | None = None):
+def _stream_event_is_terminal(event: object) -> bool:
+    if not isinstance(event, dict):
+        return False
+    event_type = str(event.get("type") or event.get("event") or "").strip().lower()
+    if event_type in {"message_stop", "response.completed", "response.done", "completion_end", "done"}:
+        return True
+    choices = event.get("choices")
+    if isinstance(choices, list):
+        return any(isinstance(choice, dict) and choice.get("finish_reason") is not None for choice in choices)
+    return False
+
+
+def stream_user_llm_chunks(app: dict, content: str, messages: list[dict] | None = None, settings: dict | None = None, persona: dict | None = None, context: dict | None = None, *, strict: bool = False):
     request_info = build_user_llm_request(app, content, messages, settings, persona, context)
     fallback = str(request_info.get("fallback") or build_chat_reply(content, str(app.get("name") or "Ta")))
     if not request_info.get("enabled"):
@@ -9836,6 +9974,7 @@ def stream_user_llm_chunks(app: dict, content: str, messages: list[dict] | None 
     stream_headers = dict(headers)
     stream_headers["Accept"] = "text/event-stream"
     emitted = False
+    completed = False
     try:
         req = Request(endpoint, data=json_bytes(payload), method="POST", headers=stream_headers)
         with urlopen(req, timeout=60) as resp:
@@ -9848,6 +9987,7 @@ def stream_user_llm_chunks(app: dict, content: str, messages: list[dict] | None 
                 if not line:
                     continue
                 if line == "[DONE]":
+                    completed = True
                     break
                 try:
                     event = json.loads(line)
@@ -9857,10 +9997,18 @@ def stream_user_llm_chunks(app: dict, content: str, messages: list[dict] | None 
                 if delta:
                     emitted = True
                     yield delta
+                if _stream_event_is_terminal(event):
+                    completed = True
     except Exception as exc:
         log(f"user llm stream failed for {app.get('id')}: {exc}")
+        if strict:
+            raise RuntimeError("模型流式响应失败，请重试") from exc
         if emitted:
             return
+    if strict and emitted and not completed:
+        raise RuntimeError("模型流式响应提前结束，请重试")
+    if strict and not emitted:
+        raise RuntimeError("模型没有返回有效内容，请重试")
     if not emitted:
         yield from chunk_text(fallback)
 
@@ -10591,6 +10739,20 @@ class Handler(BaseHTTPRequestHandler):
             return real_ip[:80]
         return (self.client_address[0] if self.client_address else "")[:80]
 
+    def client_connection_closed(self, wait_seconds: float = 0.0) -> bool:
+        connection = getattr(self, "connection", None)
+        if connection is None:
+            return True
+        try:
+            readable, _, _ = select.select([connection], [], [], max(0.0, float(wait_seconds or 0.0)))
+            if not readable:
+                return False
+            return connection.recv(1, socket.MSG_PEEK) == b""
+        except (BlockingIOError, InterruptedError):
+            return False
+        except Exception as exc:
+            return is_client_disconnect_error(exc)
+
     @property
     def store(self) -> Store:
         return self.server.store
@@ -10787,15 +10949,19 @@ class Handler(BaseHTTPRequestHandler):
         if not conv_id:
             conv_id = str(uuid.uuid4())
         title = content[:30] if not body.get("conversation_id") else None
+        conversation_existed = bool(self.store.get_conversation(conv_id, user["id"]))
         try:
             slot = GENERATION_LIMITER.acquire(user["id"], self.client_ip(), "web_chat_stream")
             slot.__enter__()
         except GenerationLimitError as exc:
             self.send_json(429, error_response(str(exc), 429))
             return
-        self.send_sse_headers(200)
-        self.write_sse_event("start", {"conversation_id": conv_id, "app_id": app_id})
+        user_message_id = ""
+        reply_message_id = ""
+        charged = False
         try:
+            self.send_sse_headers(200)
+            self.write_sse_event("start", {"conversation_id": conv_id, "app_id": app_id})
             self.store.upsert_conversation(
                 conv_id,
                 user["id"],
@@ -10804,7 +10970,8 @@ class Handler(BaseHTTPRequestHandler):
                 app_icon=app_icon,
                 title=title,
             )
-            self.store.append_message(conv_id, user["id"], "user", content)
+            user_row = self.store.append_message(conv_id, user["id"], "user", content)
+            user_message_id = str(user_row["id"])
             self.store.log_event(user["id"], "chat", f"与 {app_name or app_id} 对话", {"app_id": app_id, "conversation_id": conv_id})
             app_row = self.store.get_local_app(app_id)
             app = dict(app_row) if app_row else {}
@@ -10820,7 +10987,7 @@ class Handler(BaseHTTPRequestHandler):
                     history = []
                 settings = self.store.effective_llm_settings(app, user_id=user["id"])
                 context = self.store.chat_context(user["id"], app_id, conv_id, content, history)
-                chunks = stream_user_llm_chunks(app, content, history, settings, persona, context)
+                chunks = stream_user_llm_chunks(app, content, history, settings, persona, context, strict=True)
             else:
                 app_row, reply = chat_reply_for_app(
                     self.store,
@@ -10836,13 +11003,19 @@ class Handler(BaseHTTPRequestHandler):
                 chunks = chunk_text(str(reply or ""))
             if app:
                 raw_reply = "".join(str(chunk) for chunk in chunks if chunk)
+                if not raw_reply.strip():
+                    raise RuntimeError("模型没有返回有效内容，请重试")
                 reply_text = process_model_reply(
                     app,
-                    raw_reply or build_chat_reply(content, str(app.get("name") or app_name or "Ta")),
+                    raw_reply,
                     char_name=str(app.get("name") or app_name or "Ta"),
                     user_name=str((persona or {}).get("name") or "你"),
                     template_context=context,
                 )
+                if not str(reply_text or "").strip():
+                    raise RuntimeError("模型回复处理后为空，请重试")
+                if self.client_connection_closed():
+                    raise ConnectionAbortedError("client disconnected")
                 for chunk in chunk_text(reply_text):
                     reply_parts.append(str(chunk))
                     self.write_sse_event("delta", {"content": str(chunk)})
@@ -10852,13 +11025,21 @@ class Handler(BaseHTTPRequestHandler):
                         continue
                     reply_parts.append(str(chunk))
                     self.write_sse_event("delta", {"content": str(chunk)})
-                reply_text = "".join(reply_parts) or build_chat_reply(content, str(app.get("name") or app_name or "Ta"))
+                reply_text = "".join(reply_parts)
+                if not reply_text.strip():
+                    raise RuntimeError("模型没有返回有效内容，请重试")
+                if self.client_connection_closed():
+                    raise ConnectionAbortedError("client disconnected")
+            if self.client_connection_closed(0.05):
+                raise ConnectionAbortedError("client disconnected")
             reply_row = self.store.append_message(conv_id, user["id"], "assistant", reply_text)
+            reply_message_id = str(reply_row["id"])
             charge = self.store.spend_credit_points(
                 user["id"],
                 CHAT_MESSAGE_COST,
                 payload={"app_id": app_id, "conversation_id": conv_id, "message_id": reply_row["id"]},
             )
+            charged = True
             try:
                 self.store.maybe_refresh_summary(user["id"], conv_id)
             except Exception as exc:
@@ -10877,8 +11058,161 @@ class Handler(BaseHTTPRequestHandler):
                 payload["model_preset_id"] = effective.get("preset_id") or app.get("llm_model") or ""
             self.write_sse_event("message_end", payload)
         except Exception as exc:
-            log(f"web chat stream failed: {exc}")
-            self.write_sse_event("error", {"message": str(exc)[:500] or "stream failed"})
+            disconnected = is_client_disconnect_error(exc)
+            if reply_message_id and not charged:
+                try:
+                    self.store.delete_message(reply_message_id, user["id"])
+                except Exception as cleanup_exc:
+                    log(f"web chat reply cleanup failed for {reply_message_id}: {cleanup_exc}")
+            if user_message_id and not charged:
+                try:
+                    self.store.delete_message(user_message_id, user["id"])
+                except Exception as cleanup_exc:
+                    log(f"web chat user cleanup failed for {user_message_id}: {cleanup_exc}")
+            if not conversation_existed and not charged:
+                try:
+                    self.store.delete_empty_conversation(conv_id, user["id"])
+                except Exception as cleanup_exc:
+                    log(f"web chat empty conversation cleanup failed for {conv_id}: {cleanup_exc}")
+            if disconnected:
+                log(f"web chat stream client disconnected for conversation {conv_id}")
+            else:
+                log(f"web chat stream failed: {exc}")
+                try:
+                    self.write_sse_event("error", {"message": str(exc)[:500] or "stream failed"})
+                except Exception as write_exc:
+                    if not is_client_disconnect_error(write_exc):
+                        log(f"web chat stream error event failed: {write_exc}")
+        finally:
+            slot.__exit__(None, None, None)
+            self.close_connection = True
+
+    def handle_web_chat_continue_stream(self, body: object) -> None:
+        user = self.authenticated_user()
+        if not user:
+            self.send_json(401, error_response("unauthorized", 401))
+            return
+        if not isinstance(body, dict):
+            self.send_json(400, error_response("invalid body"))
+            return
+        conv_id = str(body.get("conversation_id") or "").strip()
+        if not conv_id:
+            self.send_json(400, error_response("conversation_id is required"))
+            return
+        conversation = self.store.get_conversation(conv_id, user["id"])
+        if not conversation:
+            self.send_json(404, error_response("conversation not found", 404))
+            return
+        history = self.store.list_messages(conv_id, user["id"], limit=100)
+        last_message = history[-1] if history else None
+        if not last_message or str(last_message.get("role") or "") != "assistant":
+            self.send_json(409, error_response("最后一条消息不是角色回复，无法续写", 409))
+            return
+        app_id = self.store.resolve_local_app_id(str(conversation.get("app_id") or ""))
+        app_row = self.store.get_local_app(app_id)
+        if not app_row or not user_can_access_app(app_row, user["id"]):
+            self.send_json(404, error_response("role not found", 404))
+            return
+        try:
+            self.store.require_credit_points(user["id"], CHAT_MESSAGE_COST)
+        except ValueError as exc:
+            self.send_json(402, error_response(str(exc), 402))
+            return
+        try:
+            slot = GENERATION_LIMITER.acquire(user["id"], self.client_ip(), "web_chat_continue_stream")
+            slot.__enter__()
+        except GenerationLimitError as exc:
+            self.send_json(429, error_response(str(exc), 429))
+            return
+        reply_message_id = ""
+        charged = False
+        try:
+            self.send_sse_headers(200)
+            self.write_sse_event("start", {"conversation_id": conv_id, "app_id": app_id, "mode": "continue"})
+            app = dict(app_row)
+            model_override = self.store.public_model_selection(body.get("model_id") or body.get("llm_model"))
+            if model_override:
+                app["llm_model"] = model_override
+            persona = self.store.get_persona(user["id"])
+            instruction = (
+                "请从上一条角色回复的结尾自然继续写下去。不要复述、总结或改写上一条内容，"
+                "不要提到这条续写指令，也不要替用户发言；直接输出紧接上一段的新内容。"
+            )
+            context = self.store.chat_context(user["id"], app_id, conv_id, instruction, history)
+            settings = self.store.effective_llm_settings(app, user_id=user["id"])
+            raw_reply = "".join(
+                str(chunk)
+                for chunk in stream_user_llm_chunks(
+                    app,
+                    instruction,
+                    history,
+                    settings,
+                    persona,
+                    context,
+                    strict=True,
+                )
+                if chunk
+            )
+            if not raw_reply.strip():
+                raise RuntimeError("模型没有返回有效续写，请重试")
+            reply_text = process_model_reply(
+                app,
+                raw_reply,
+                char_name=str(app.get("name") or conversation.get("app_name") or "Ta"),
+                user_name=str((persona or {}).get("name") or "你"),
+                template_context=context,
+            )
+            reply_text = str(reply_text or "").strip()
+            if not reply_text:
+                raise RuntimeError("模型续写处理后为空，请重试")
+            if reply_text == str(last_message.get("content") or "").strip():
+                raise RuntimeError("模型重复了上一条回复，请重试")
+            if self.client_connection_closed():
+                raise ConnectionAbortedError("client disconnected")
+            for chunk in chunk_text(reply_text):
+                self.write_sse_event("delta", {"content": str(chunk)})
+            if self.client_connection_closed(0.05):
+                raise ConnectionAbortedError("client disconnected")
+            reply_row = self.store.append_message(conv_id, user["id"], "assistant", reply_text)
+            reply_message_id = str(reply_row["id"])
+            charge = self.store.spend_credit_points(
+                user["id"],
+                CHAT_MESSAGE_COST,
+                payload={"app_id": app_id, "conversation_id": conv_id, "message_id": reply_row["id"], "mode": "continue"},
+            )
+            charged = True
+            try:
+                self.store.maybe_refresh_summary(user["id"], conv_id)
+            except Exception as exc:
+                log(f"auto summary refresh failed for {conv_id}: {exc}")
+            effective = self.store.effective_llm_settings(app, user_id=user["id"])
+            self.write_sse_event("message_end", {
+                "conversation_id": conv_id,
+                "message_id": reply_row["id"],
+                "reply": reply_text,
+                "created_at": reply_row["created_at"],
+                "app_name": app.get("name") or conversation.get("app_name") or "",
+                "model_id": effective.get("model") or app.get("llm_model") or USER_LLM_MODEL,
+                "model_preset_id": effective.get("preset_id") or app.get("llm_model") or "",
+                "mode": "continue",
+                **charge,
+            })
+        except Exception as exc:
+            disconnected = is_client_disconnect_error(exc)
+            if reply_message_id and not charged:
+                try:
+                    self.store.delete_message(reply_message_id, user["id"])
+                except Exception as cleanup_exc:
+                    log(f"continue reply cleanup failed for {reply_message_id}: {cleanup_exc}")
+            if disconnected:
+                log(f"web chat continue client disconnected for conversation {conv_id}")
+            else:
+                log(f"web chat continue failed: {exc}")
+                try:
+                    self.write_sse_event("error", {"message": str(exc)[:500] or "continue failed"})
+                except Exception as write_exc:
+                    if not is_client_disconnect_error(write_exc):
+                        log(f"web chat continue error event failed: {write_exc}")
         finally:
             slot.__exit__(None, None, None)
             self.close_connection = True
@@ -10930,6 +11264,18 @@ class Handler(BaseHTTPRequestHandler):
             log(f"{self.command} {path}" + (f"?{parsed.query}" if parsed.query else "") + " -> 200")
             self.handle_web_chat_stream(body)
             return
+        if path == "/console/api/web/chat/continue/stream":
+            self.store.log_request(
+                self.command,
+                path,
+                parsed.query,
+                {k: v for k, v in self.headers.items()},
+                body_text,
+                200,
+            )
+            log(f"{self.command} {path}" + (f"?{parsed.query}" if parsed.query else "") + " -> 200")
+            self.handle_web_chat_continue_stream(body)
+            return
         payload = self.route(path, parsed.query, body)
         self.store.log_request(
             self.command,
@@ -10962,6 +11308,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.store.ensure_beta_registration_available(email_value)
             except ValueError as exc:
                 return error_response(str(exc), 403)
+            code = ""
             try:
                 code = self.store.create_email_code(email_value, self.client_ip())
                 send_verification_email(email_value, code, str(lang))
@@ -10969,6 +11316,11 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as exc:
                 return error_response(str(exc), 429 if "too many" in str(exc) else 400)
             except Exception as exc:
+                if code:
+                    try:
+                        self.store.delete_email_code(email_value, code, "register")
+                    except Exception as cleanup_exc:
+                        log(f"registration email code cleanup failed for {email_value}: {cleanup_exc}")
                 log(f"email send failed for {email_value}: {exc}")
                 if allow_email_send_failure():
                     return ok_response("sent")
@@ -10981,6 +11333,7 @@ class Handler(BaseHTTPRequestHandler):
                 return error_response("invalid email")
             if not self.store.get_user_by_email(email_value):
                 return ok_response("sent")
+            code = ""
             try:
                 code = self.store.create_email_code(email_value, self.client_ip(), purpose="password_reset")
                 send_verification_email(email_value, code, str(lang), purpose="password_reset")
@@ -10988,6 +11341,11 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as exc:
                 return error_response(str(exc), 429 if "too many" in str(exc) else 400)
             except Exception as exc:
+                if code:
+                    try:
+                        self.store.delete_email_code(email_value, code, "password_reset")
+                    except Exception as cleanup_exc:
+                        log(f"password reset email code cleanup failed for {email_value}: {cleanup_exc}")
                 log(f"password reset email send failed for {email_value}: {exc}")
                 if allow_email_send_failure():
                     return ok_response("sent")
@@ -11880,12 +12238,36 @@ class Handler(BaseHTTPRequestHandler):
 
         if normalized == "go/api/explore/search":
             # 本地优先：local_apps 有数据就直接返回本地（含自建+上游），断上游也能用
-            page = parse_query_int(query, "page", 1, 1, 100000)
-            page_size = parse_query_int(query, "page_size", 30, 1, 60)
             params = parse_qs(query)
-            kw = (params.get("keyword") or params.get("q") or [""])[0].strip()
-            tag = (params.get("tag") or params.get("category") or [""])[0].strip()
-            sort = (params.get("sort") or params.get("rank") or ["default"])[0].strip()
+            page = parse_query_int(query, "page", 1, 1, 100000)
+            page_size_value = (params.get("page_size") or params.get("limit") or ["30"])[0]
+            try:
+                page_size = max(1, min(int(page_size_value or 30), 60))
+            except (TypeError, ValueError):
+                page_size = 30
+            kw = (params.get("keyword") or params.get("keywords") or params.get("q") or [""])[0].strip()
+            tag = (params.get("tag") or params.get("category") or params.get("tag_ids") or params.get("tag_id") or [""])[0].strip()
+            if "," in tag:
+                tag = next((item.strip() for item in tag.split(",") if item.strip()), "")
+            sort = (
+                params.get("sort")
+                or params.get("rank")
+                or params.get("ranking")
+                or params.get("ranking_type")
+                or params.get("order")
+                or ["default"]
+            )[0].strip().lower()
+            sort_aliases = {
+                "recommended_week": "random",
+                "random_recommended": "random",
+                "recommended": "random",
+                "recommend": "random",
+                "newest": "latest",
+                "hot": "popular",
+                "recommend_daily": "daily",
+                "recommend_monthly": "monthly",
+            }
+            sort = sort_aliases.get(sort, sort or "default")
             requested_zone = (params.get("zone") or params.get("content_zone") or [""])[0].strip().lower()
             if requested_zone in ("all", "full", "search"):
                 content_zone = "all"
@@ -11894,20 +12276,26 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 content_zone = "all" if kw else "clean"
             random_seed = parse_query_int(query, "seed", 0, 0, 2147483647) or None
+            if sort == "random" and random_seed is None:
+                random_seed = random.SystemRandom().randint(1, 2147483647)
             pictureless = (params.get("pictureless") or [""])[0].strip().lower() in ("1", "true", "yes")
             rows, total = self.store.list_local_apps(search=kw, tag=tag, sort=sort, content_zone=content_zone, random_seed=random_seed, page=page, page_size=page_size, lightweight=True)
             if rows:
                 cards = []
+                favorite_ids, liked_ids = self.store.app_interaction_states(
+                    user["id"] if user else None,
+                    [str(row.get("id") or "") for row in rows],
+                )
                 for r in rows:
                     card = local_app_to_list_card(r)
-                    card["favorited"] = self.store.is_favorite(user["id"] if user else None, card["id"])
-                    card["liked"] = self.store.is_liked(user["id"] if user else None, card["id"])
+                    card["favorited"] = card["id"] in favorite_ids
+                    card["liked"] = card["id"] in liked_ids
                     if pictureless:
                         card["pictureless"] = True
                         card["cover"] = ""
                         card["icon"] = ""
                     cards.append(card)
-                return go_response({"apps": cards, "total": total, "is_cache": True, "page": page, "page_size": page_size, "sort": sort, "tag": tag, "pictureless": pictureless, "zone": content_zone})
+                return go_response({"apps": cards, "total": total, "is_cache": True, "page": page, "page_size": page_size, "sort": sort, "tag": tag, "seed": random_seed, "pictureless": pictureless, "zone": content_zone})
             # 本地空 → 回源上游
             fallback = go_response({"apps": [], "total": 0, "is_cache": False})
             explore_payload = self.store.first_nonempty_explore_payload()

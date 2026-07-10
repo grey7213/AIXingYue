@@ -20,11 +20,16 @@ async function rawRequest(path, opts = {}) {
   return data;
 }
 
-async function sseRequest(path, payload, handlers = {}) {
+async function sseRequest(path, payload, handlers = {}, options = {}) {
   const headers = { Accept: 'text/event-stream', 'Content-Type': 'application/json' };
   const token = getToken();
   if (token) headers['Authorization'] = `Bearer ${token}`;
-  const res = await fetch(path, { method: 'POST', headers, body: JSON.stringify(payload || {}) });
+  const res = await fetch(path, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload || {}),
+    signal: options.signal,
+  });
   if (!res.ok || !res.body) {
     let message = `HTTP ${res.status}`;
     try {
@@ -37,6 +42,7 @@ async function sseRequest(path, payload, handlers = {}) {
   const reader = res.body.getReader();
   let buffer = '';
   let finalPayload = null;
+  let sawMessageEnd = false;
 
   const dispatch = (block) => {
     const lines = block.split(/\r?\n/);
@@ -51,7 +57,11 @@ async function sseRequest(path, payload, handlers = {}) {
     try { data = JSON.parse(data); } catch {}
     if (event === 'start') handlers.onStart?.(data);
     else if (event === 'delta') handlers.onDelta?.(data?.content ?? String(data ?? ''));
-    else if (event === 'message_end') { finalPayload = data; handlers.onEnd?.(data); }
+    else if (event === 'message_end') {
+      sawMessageEnd = true;
+      finalPayload = data;
+      handlers.onEnd?.(data);
+    }
     else if (event === 'error') {
       const msg = data?.message || '流式生成失败';
       handlers.onError?.(msg);
@@ -75,6 +85,9 @@ async function sseRequest(path, payload, handlers = {}) {
   }
   const tail = buffer.trim();
   if (tail) dispatch(tail);
+  if (!sawMessageEnd) {
+    throw new ApiError('连接提前中断，本次回复未完成，请重试', 502, { code: 'stream_incomplete' });
+  }
   return finalPayload;
 }
 
@@ -152,7 +165,8 @@ export const api = {
   conversationSummary: (convId) => rawRequest(`/console/api/web/conversations/${encodeURIComponent(convId)}/summary`),
   saveConversationSummary: (convId, payload) => rawRequest(`/console/api/web/conversations/${encodeURIComponent(convId)}/summary`, { method: 'POST', body: payload }),
   sendChat: (payload) => rawRequest('/console/api/web/chat', { method: 'POST', body: payload }),
-  sendChatStream: (payload, handlers) => sseRequest('/console/api/web/chat/stream', payload, handlers),
+  sendChatStream: (payload, handlers, options) => sseRequest('/console/api/web/chat/stream', payload, handlers, options),
+  continueChatStream: (payload, handlers, options) => sseRequest('/console/api/web/chat/continue/stream', payload, handlers, options),
   startConversation: (payload) => rawRequest('/console/api/web/conversations/start', { method: 'POST', body: payload }),
   copyConversation: (convId) => rawRequest(`/console/api/web/conversations/${encodeURIComponent(convId)}/copy`, { method: 'POST', body: {} }),
   deleteConversation: (convId) => rawRequest(`/console/api/web/conversations/${encodeURIComponent(convId)}/delete`, { method: 'POST', body: {} }),

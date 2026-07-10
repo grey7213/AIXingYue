@@ -1,24 +1,31 @@
-import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js';
-import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260704-home-search';
+import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js?v=20260710-web-reliability';
+import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260710-resume-chat';
 
 const DEFAULT_PAGE_SIZE = 12;
-const DEFAULT_FIRST_PAGE_PARAMS = Object.freeze({
-  page: 1,
-  page_size: DEFAULT_PAGE_SIZE,
-  sort: 'random',
-  rank: 'daily',
-  zone: 'clean',
-});
+const INITIAL_RANDOM_SEED = Math.floor(Math.random() * 2147483647);
 const BROWSE_STATE_KEY = 'ai_xingyue_home_browse_state';
 const BROWSE_RESTORE_KEY = 'ai_xingyue_home_restore_once';
 
-let defaultFirstPagePrefetch = api.exploreSearch(DEFAULT_FIRST_PAGE_PARAMS)
-  .then(data => ({ ok: true, data }))
-  .catch(error => ({ ok: false, error }));
+async function fetchExplorePage(params, signal) {
+  const response = await fetch(`/go/api/explore/search?${new URLSearchParams(params)}`, {
+    headers: { Accept: 'application/json' },
+    signal,
+  });
+  const text = await response.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
+  if (!response.ok) {
+    throw new ApiError(data?.message || data?.msg || `HTTP ${response.status}`, response.status, data);
+  }
+  if (data?.result === 'failure') {
+    throw new ApiError(data.message || data.msg || '请求失败', parseInt(data.code, 10) || response.status, data);
+  }
+  return data;
+}
 
 function explorePage() {
   return {
-    activeNav: 'home',
+    activeNav: 'explore',
     user: null,
     points: 0,
     stats: null,
@@ -34,7 +41,7 @@ function explorePage() {
     activeSort: 'random',
     activeRank: 'daily',
     activeZone: 'clean',
-    randomSeed: Math.floor(Math.random() * 2147483647),
+    randomSeed: INITIAL_RANDOM_SEED,
     pictureless: false,
     siteSettings: null,
     advancedOpen: false,
@@ -75,6 +82,8 @@ function explorePage() {
       { key: 'all', label: '全库' },
     ],
     _browsePageshowBound: false,
+    _listEpoch: 0,
+    _listAbortController: null,
 
     async init() {
       injectLayout(this.activeNav);
@@ -116,7 +125,7 @@ function explorePage() {
           }
         }
       })();
-      const listPromise = restoredBrowseState ? Promise.resolve() : this.loadList(true);
+      const listPromise = restoredBrowseState ? Promise.resolve() : this.loadList(false);
       await Promise.allSettled([settingsPromise, listPromise, accountPromise]);
       if (restoredBrowseState) this.restoreBrowseScroll(restoredBrowseState.scrollY, restoredBrowseState.clickedId);
     },
@@ -126,6 +135,15 @@ function explorePage() {
     setRank(k) { this.activeRank = k; this.syncAdvancedForm(); this.loadList(true); },
     setZone(k) { this.activeZone = k === 'all' ? 'all' : 'clean'; this.syncAdvancedForm(); this.loadList(true); },
     togglePictureless() { this.pictureless = !this.pictureless; this.syncAdvancedForm(); this.loadList(true); },
+    shuffleRandom() {
+      try {
+        sessionStorage.removeItem(BROWSE_RESTORE_KEY);
+        sessionStorage.removeItem(BROWSE_STATE_KEY);
+      } catch { /* ignore private mode storage errors */ }
+      this.activeSort = 'random';
+      this.syncAdvancedForm();
+      this.loadList(true);
+    },
 
     syncAdvancedForm() {
       this.advancedForm = {
@@ -219,18 +237,25 @@ function explorePage() {
     },
 
     async loadList(reset = false) {
+      if (!reset && (this.loading || !this.hasMore)) return;
       if (reset) {
+        this._listEpoch += 1;
+        this._listAbortController?.abort();
         this.page = 1;
         this.cards = [];
         this.hasMore = true;
         this.total = 0;
         if (this.activeSort === 'random') this.randomSeed = Math.floor(Math.random() * 2147483647);
       }
-      if (this.loading || !this.hasMore) return;
+      if (this._listEpoch === 0) this._listEpoch = 1;
+      const requestEpoch = this._listEpoch;
+      const requestPage = this.page;
+      const requestController = new AbortController();
+      this._listAbortController = requestController;
       this.loading = true;
       try {
         const params = {
-          page: this.page,
+          page: requestPage,
           page_size: this.pageSize,
           sort: this.activeSort,
           rank: this.activeRank,
@@ -241,25 +266,8 @@ function explorePage() {
         if (this.activeZone === 'all') params.zone = 'all';
         else if (!this.searchKeyword) params.zone = 'clean';
         if (this.pictureless) params.pictureless = 'true';
-        const canUsePrefetch = !!defaultFirstPagePrefetch
-          && params.page === 1
-          && params.page_size === DEFAULT_PAGE_SIZE
-          && params.sort === DEFAULT_FIRST_PAGE_PARAMS.sort
-          && params.rank === DEFAULT_FIRST_PAGE_PARAMS.rank
-          && params.zone === DEFAULT_FIRST_PAGE_PARAMS.zone
-          && !params.tag
-          && !params.q
-          && !params.pictureless
-          && !params.seed;
-        let r;
-        if (canUsePrefetch) {
-          const prefetched = await defaultFirstPagePrefetch;
-          defaultFirstPagePrefetch = null;
-          if (!prefetched.ok) throw prefetched.error;
-          r = prefetched.data;
-        } else {
-          r = await api.exploreSearch(params);
-        }
+        const r = await fetchExplorePage(params, requestController.signal);
+        if (requestEpoch !== this._listEpoch) return;
         const data = r?.data || {};
         const list = data.apps || data.list || data.items || [];
         const seen = new Set(this.cards.map(card => card.id));
@@ -271,12 +279,15 @@ function explorePage() {
         this.total = Number.isNaN(total) ? this.cards.length : total;
         const receivedCount = Array.isArray(list) ? list.length : 0;
         this.hasMore = this.cards.length < this.total && receivedCount > 0;
-        this.page += 1;
+        this.page = requestPage + 1;
       } catch (err) {
         // 上游不可达时静默
-        this.hasMore = false;
+        if (err?.name !== 'AbortError' && requestEpoch === this._listEpoch) this.hasMore = false;
       } finally {
-        this.loading = false;
+        if (requestEpoch === this._listEpoch && this._listAbortController === requestController) {
+          this._listAbortController = null;
+          this.loading = false;
+        }
       }
     },
 

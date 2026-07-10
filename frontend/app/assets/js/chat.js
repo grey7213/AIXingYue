@@ -1,4 +1,4 @@
-import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js';
+import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js?v=20260710-web-reliability';
 import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-channels-closed';
 
 const STATUS_LABELS = {
@@ -1006,6 +1006,7 @@ function chatPage() {
     points: 0,
     sidebarOpen: false,
     listOpen: false,
+    rightMenuOpen: false,
     conversations: [],
     conversation: null,
     messages: [],
@@ -1048,6 +1049,10 @@ function chatPage() {
     _generationTimer: null,
     _scrollSaveTimer: null,
     _lifecycleBound: false,
+    _generationSeq: 0,
+    _activeAbortController: null,
+    _conversationLoadSeq: 0,
+    _refreshAfterGeneration: false,
     siteSettings: null,
 
     async init() {
@@ -1123,6 +1128,7 @@ function chatPage() {
     toggleAdvancedRenderPanel() {
       this.advancedRenderOpen = !this.advancedRenderOpen;
       if (this.advancedRenderOpen) this.memoryOpen = false;
+      this.rightMenuOpen = false;
     },
 
     toggleAdvancedRenderEnabled() {
@@ -1194,9 +1200,13 @@ function chatPage() {
           this.persistMessageScroll();
           return;
         }
+        if (this.replying) {
+          this._refreshAfterGeneration = true;
+          return;
+        }
         if (this.conversation?.id) {
           const atBottom = this.isMessageAreaNearBottom();
-          this.refreshCurrentMessages({ stickToBottom: atBottom || this.replying });
+          this.refreshCurrentMessages({ stickToBottom: atBottom });
         }
       });
       window.addEventListener('pagehide', () => this.persistMessageScroll());
@@ -1204,6 +1214,9 @@ function chatPage() {
     },
 
     beginGeneration(mode = 'send') {
+      if (this._activeAbortController) this._activeAbortController.abort();
+      this._activeAbortController = new AbortController();
+      this._generationSeq += 1;
       if (this._generationTimer) clearInterval(this._generationTimer);
       this.replying = true;
       this.generationMode = mode;
@@ -1212,21 +1225,47 @@ function chatPage() {
       this._generationTimer = setInterval(() => {
         this.generationElapsedSeconds = Math.max(0, Math.floor((Date.now() - this.generationStartedAt) / 1000));
       }, 1000);
+      return this._generationSeq;
     },
 
-    endGeneration() {
+    endGeneration(seq = this._generationSeq) {
+      if (seq !== this._generationSeq) return false;
       if (this._generationTimer) clearInterval(this._generationTimer);
       this._generationTimer = null;
+      this._activeAbortController = null;
       this.replying = false;
       this.generationStartedAt = 0;
       this.generationElapsedSeconds = 0;
       this.generationMode = '';
+      const shouldRefresh = this._refreshAfterGeneration;
+      this._refreshAfterGeneration = false;
+      return shouldRefresh;
+    },
+
+    cancelActiveGeneration() {
+      if (this._activeAbortController) this._activeAbortController.abort();
+      this._generationSeq += 1;
+      if (this._generationTimer) clearInterval(this._generationTimer);
+      this._generationTimer = null;
+      this._activeAbortController = null;
+      this.replying = false;
+      this.generationStartedAt = 0;
+      this.generationElapsedSeconds = 0;
+      this.generationMode = '';
+      this._refreshAfterGeneration = false;
+    },
+
+    isGenerationActive(seq, conversationId = '') {
+      if (seq !== this._generationSeq) return false;
+      if (conversationId && this.conversation?.id !== conversationId) return false;
+      return true;
     },
 
     generationStatusLabel() {
       if (!this.replying && !this.generationMode) return '';
       const modeMap = {
         send: this.chatText('generating_text', '生成中'),
+        continue: this.chatText('continuing_text', 'AI续写中'),
         regenerate: this.chatText('regenerating_text', '重新生成中'),
         swipe: this.chatText('swipe_generating_text', '生成新回复中'),
       };
@@ -1288,11 +1327,18 @@ function chatPage() {
 
     async refreshCurrentMessages({ stickToBottom = false, preserveScroll = true } = {}) {
       if (!this.conversation?.id) return;
+      if (this.replying) {
+        this._refreshAfterGeneration = true;
+        return;
+      }
+      const conversationId = this.conversation.id;
+      const loadSeq = this._conversationLoadSeq;
       const el = this.$refs.messageArea;
       const previousHeight = el ? el.scrollHeight : 0;
       const previousTop = el ? el.scrollTop : 0;
       try {
-        const r = await api.messages(this.conversation.id, { limit: this.messageLimit });
+        const r = await api.messages(conversationId, { limit: this.messageLimit });
+        if (loadSeq !== this._conversationLoadSeq || this.conversation?.id !== conversationId) return;
         const data = r?.data || r || {};
         const list = data.list || [];
         if (!Array.isArray(list)) return;
@@ -1442,6 +1488,7 @@ function chatPage() {
         this.messages = (data.messages || []).map(this.normMsg);
         this.messageTotal = this.messages.length;
         this.hasOlderMessages = false;
+        try { localStorage.setItem('ai_xingyue_last_conversation_id', data.conversation_id); } catch { /* ignore */ }
         await this.loadConversations();
         await this.loadMemoryContext();
         this.scrollToBottom();
@@ -1456,6 +1503,7 @@ function chatPage() {
     normMsg(m) {
       return {
         id: m.id,
+        _localKey: m._localKey || m.id || `local-${Date.now()}-${Math.random().toString(36).slice(2)}`,
         role: m.role,
         content: m.content || '',
         created_at: m.created_at,
@@ -1467,33 +1515,42 @@ function chatPage() {
 
     touchMessage(msg) {
       if (!msg) return;
-      const idx = this.messages.findIndex(x => x === msg || x.id === msg.id);
-      if (idx >= 0) this.messages.splice(idx, 1, msg);
+      const idx = this.messages.findIndex(x => x === msg || x._localKey === msg._localKey || x.id === msg.id);
+      if (idx >= 0) this.messages.splice(idx, 1, { ...msg });
     },
 
     async selectConversation(c) {
       this.persistMessageScroll();
+      this.cancelActiveGeneration();
+      const loadSeq = ++this._conversationLoadSeq;
       this.conversation = c;
       this.appId = c.app_id;
       this.appName = c.app_name || c.title || this.chatText('conversation_fallback_title', '对话');
       this.appIcon = c.app_icon || '';
       this.restoreModelSelection();
       this.listOpen = false;
+      this.rightMenuOpen = false;
+      try { localStorage.setItem('ai_xingyue_last_conversation_id', c.id); } catch { /* ignore storage errors */ }
       this.messages = [];
       this.messageTotal = 0;
       this.hasOlderMessages = false;
       // 补头图：拉一次角色详情（容错）
       try {
         const r = await api.appDetails(c.app_id);
+        if (loadSeq !== this._conversationLoadSeq || this.conversation?.id !== c.id) return;
         const data = r?.data || r;
         this.appHero = data?.bg_url || data?.cover || data?.cover_url || '';
         this.appDesc = data?.description || data?.summary || '';
         if (!this.appIcon) this.appIcon = data?.icon || data?.cover || '';
         this.appFavorited = !!data?.favorited;
         this.quickReplies = Array.isArray(data?.quick_replies) ? data.quick_replies.filter(q => q.enabled !== false && q.message) : [];
-      } catch { this.appHero = ''; this.quickReplies = []; this.appFavorited = false; }
+      } catch {
+        if (loadSeq !== this._conversationLoadSeq || this.conversation?.id !== c.id) return;
+        this.appHero = ''; this.quickReplies = []; this.appFavorited = false;
+      }
       try {
         const r = await api.messages(c.id, { limit: this.messageLimit });
+        if (loadSeq !== this._conversationLoadSeq || this.conversation?.id !== c.id) return;
         const data = r?.data || r || {};
         const list = data.list || [];
         this.messages = list.map(this.normMsg);
@@ -1607,6 +1664,7 @@ function chatPage() {
     async toggleMemoryPanel() {
       this.memoryOpen = !this.memoryOpen;
       if (this.memoryOpen) this.advancedRenderOpen = false;
+      this.rightMenuOpen = false;
       if (this.memoryOpen) await this.loadMemoryContext();
     },
 
@@ -1735,7 +1793,9 @@ function chatPage() {
       replyMsg._typing = true;
       this.messages.push(replyMsg);
       this.messageTotal = Math.max(this.messageTotal + 2, this.messages.length);
-      this.beginGeneration('send');
+      const generationSeq = this.beginGeneration('send');
+      const initialConversationId = this.conversation?.id || '';
+      const signal = this._activeAbortController.signal;
       replyMsg._thinkingStartedAt = this.generationStartedAt;
       this.scrollToBottom();
       try {
@@ -1750,6 +1810,7 @@ function chatPage() {
         };
         const data = await api.sendChatStream(payload, {
           onStart: (event) => {
+            if (!this.isGenerationActive(generationSeq, initialConversationId)) return;
             if (event?.conversation_id && !this.conversation) {
               this.conversation = {
                 id: event.conversation_id,
@@ -1758,34 +1819,100 @@ function chatPage() {
                 app_icon: this.appIcon,
                 title: text.slice(0, 30),
               };
+              try { localStorage.setItem('ai_xingyue_last_conversation_id', event.conversation_id); } catch { /* ignore */ }
             }
           },
           onDelta: (chunk) => {
+            if (!this.isGenerationActive(generationSeq, initialConversationId)) return;
             replyMsg.content += chunk;
             this.touchMessage(replyMsg);
             this.scrollToBottom();
           },
           onEnd: (event) => {
+            if (!this.isGenerationActive(generationSeq, initialConversationId)) return;
             if (event?.message_id) replyMsg.id = event.message_id;
             if (event?.created_at) replyMsg.created_at = event.created_at;
-            if (event?.reply && !replyMsg.content) replyMsg.content = event.reply;
+            if (typeof event?.reply === 'string') replyMsg.content = event.reply;
             this.updatePointsFromPayload(event);
             replyMsg._typing = false;
             this.touchMessage(replyMsg);
           },
-        });
+        }, { signal });
+        if (!this.isGenerationActive(generationSeq, initialConversationId)) return;
         replyMsg._typing = false;
-        if (data?.reply && !replyMsg.content) replyMsg.content = data.reply;
+        if (typeof data?.reply === 'string') replyMsg.content = data.reply;
         this.touchMessage(replyMsg);
         this.updatePointsFromPayload(data);
         this.loadConversations();
       } catch (err) {
+        if (!this.isGenerationActive(generationSeq, initialConversationId)) return;
         replyMsg._typing = false;
         replyMsg.content = '⚠️ ' + this.chatText('error_prefix', '出错了：') + (err.message || this.chatText('retry_text', '请稍后重试'));
         this.touchMessage(replyMsg);
       } finally {
-        this.endGeneration();
-        this.scrollToBottom();
+        if (this.isGenerationActive(generationSeq, initialConversationId)) {
+          const shouldRefresh = this.endGeneration(generationSeq);
+          this.scrollToBottom();
+          if (shouldRefresh) await this.refreshCurrentMessages({ stickToBottom: true });
+        }
+      }
+    },
+
+    async continueMessage(m) {
+      if (this.replying || !this.conversation?.id || !this.isLastAssistant(m)) return;
+      const conversationId = this.conversation.id;
+      const replyMsg = this.normMsg({
+        id: 'continue-stream-' + Date.now(),
+        role: 'assistant',
+        content: '',
+        created_at: Date.now(),
+      });
+      replyMsg._typing = true;
+      this.messages.push(replyMsg);
+      this.messageTotal = Math.max(this.messageTotal + 1, this.messages.length);
+      const generationSeq = this.beginGeneration('continue');
+      const signal = this._activeAbortController.signal;
+      replyMsg._thinkingStartedAt = this.generationStartedAt;
+      this.scrollToBottom();
+      try {
+        const data = await api.continueChatStream({
+          conversation_id: conversationId,
+          model_id: this.currentModelId || '',
+          response_mode: 'streaming',
+        }, {
+          onDelta: (chunk) => {
+            if (!this.isGenerationActive(generationSeq, conversationId)) return;
+            replyMsg.content += chunk;
+            this.touchMessage(replyMsg);
+            this.scrollToBottom();
+          },
+          onEnd: (event) => {
+            if (!this.isGenerationActive(generationSeq, conversationId)) return;
+            if (event?.message_id) replyMsg.id = event.message_id;
+            if (event?.created_at) replyMsg.created_at = event.created_at;
+            if (typeof event?.reply === 'string') replyMsg.content = event.reply;
+            replyMsg._typing = false;
+            this.updatePointsFromPayload(event);
+            this.touchMessage(replyMsg);
+          },
+        }, { signal });
+        if (!this.isGenerationActive(generationSeq, conversationId)) return;
+        if (typeof data?.reply === 'string') replyMsg.content = data.reply;
+        replyMsg._typing = false;
+        this.touchMessage(replyMsg);
+        this.updatePointsFromPayload(data);
+        await this.loadConversations();
+      } catch (err) {
+        if (!this.isGenerationActive(generationSeq, conversationId)) return;
+        replyMsg._typing = false;
+        replyMsg.content = '⚠️ ' + this.chatText('error_prefix', '出错了：') + (err.message || this.chatText('retry_text', '请稍后重试'));
+        this.touchMessage(replyMsg);
+      } finally {
+        if (this.isGenerationActive(generationSeq, conversationId)) {
+          const shouldRefresh = this.endGeneration(generationSeq);
+          this.scrollToBottom();
+          if (shouldRefresh) await this.refreshCurrentMessages({ stickToBottom: true });
+        }
       }
     },
 
@@ -1823,17 +1950,20 @@ function chatPage() {
 
     async regenerate(m) {
       if (this.replying || !this.conversation) return;
-      this.beginGeneration('regenerate');
+      const conversationId = this.conversation.id;
+      const generationSeq = this.beginGeneration('regenerate');
       this.scrollToBottom();
       try {
-        const r = await api.regenerate(this.conversation.id, this.currentModelId || '');
+        const r = await api.regenerate(conversationId, this.currentModelId || '');
+        if (!this.isGenerationActive(generationSeq, conversationId)) return;
         this.applyUpdatedMessage(r, { animate: true });
         this.updatePointsFromPayload(r);
         this.loadConversations();
       } catch (err) {
+        if (!this.isGenerationActive(generationSeq, conversationId)) return;
         alert(err.message || this.chatText('regenerate_failed_text', '重新生成失败'));
       } finally {
-        this.endGeneration();
+        if (this.isGenerationActive(generationSeq, conversationId)) this.endGeneration(generationSeq);
       }
     },
 
@@ -1849,15 +1979,20 @@ function chatPage() {
       const len = (m.swipes && m.swipes.length) || 1;
       const atEnd = (m.swipe_index || 0) >= len - 1;
       if (atEnd && !this.isLastAssistant(m)) return; // 不从对话中段生成
-      if (atEnd) { this.beginGeneration('swipe'); this.scrollToBottom(); }
+      const conversationId = this.conversation?.id || '';
+      const generationSeq = atEnd ? this.beginGeneration('swipe') : this._generationSeq;
+      if (atEnd) this.scrollToBottom();
       try {
         const r = await api.swipeMessage(m.id, 'next', this.currentModelId || '');
+        if (atEnd && !this.isGenerationActive(generationSeq, conversationId)) return;
+        if (!atEnd && this.conversation?.id !== conversationId) return;
         this.applyUpdatedMessage(r, { animate: atEnd });
         this.updatePointsFromPayload(r);
       } catch (err) {
+        if (atEnd && !this.isGenerationActive(generationSeq, conversationId)) return;
         if (atEnd) alert(err.message || this.chatText('generate_failed_text', '生成失败'));
       } finally {
-        if (atEnd) this.endGeneration();
+        if (atEnd && this.isGenerationActive(generationSeq, conversationId)) this.endGeneration(generationSeq);
       }
     },
 

@@ -910,24 +910,244 @@
       .quick-replies { bottom: var(--xy-chat-quick-bottom); }
       .generation-status { bottom: var(--xy-chat-generation-bottom); }
     }
+
+    /* 沉浸式聊天：聊天页不使用全局侧栏/底栏，功能集中到固定顶栏。 */
+    :root {
+      --xy-chat-topbar-height: 66px;
+      --xy-chat-input-bottom: env(safe-area-inset-bottom);
+      --xy-chat-generation-bottom: calc(108px + env(safe-area-inset-bottom));
+      --xy-chat-quick-bottom: calc(148px + env(safe-area-inset-bottom));
+    }
+    .chat-shell { min-height: var(--xy-visual-height, 100vh); }
+    .immersive-chat-main {
+      width: 100%;
+      min-height: var(--xy-visual-height, 100vh);
+      padding-bottom: 0 !important;
+    }
+    .chat-window { min-height: var(--xy-visual-height, 100vh); }
+    .chat-immersive-topbar {
+      position: fixed;
+      inset: 0 0 auto 0;
+      z-index: 75;
+      height: var(--xy-chat-topbar-height);
+      display: grid;
+      grid-template-columns: 48px minmax(0, 1fr) 48px;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 16px;
+      border-bottom: 1px solid rgba(232, 166, 109, .24);
+      background: rgba(35, 25, 23, .92);
+      box-shadow: 0 10px 30px -24px rgba(0, 0, 0, .95);
+      backdrop-filter: blur(18px) saturate(120%);
+      -webkit-backdrop-filter: blur(18px) saturate(120%);
+    }
+    .immersive-menu-btn {
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
+      border: 1px solid rgba(232, 166, 109, .28);
+      color: #ffe8cf;
+      background: rgba(19, 14, 14, .78);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: border-color .16s ease, background .16s ease, transform .16s ease;
+    }
+    .immersive-menu-btn:hover,
+    .immersive-menu-btn.is-active {
+      border-color: #f3a66b;
+      background: rgba(239, 154, 95, .18);
+      transform: translateY(-1px);
+    }
+    .immersive-menu-btn svg { width: 21px; height: 21px; }
+    .chat-topbar-title {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      text-align: center;
+    }
+    .chat-topbar-title .avatar {
+      width: 38px;
+      height: 38px;
+      flex: 0 0 auto;
+      border-radius: 50%;
+      object-fit: cover;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-size: 14px;
+      font-weight: 800;
+      background: linear-gradient(135deg, #f0a868, #e8834e);
+      border: 1px solid rgba(255, 231, 207, .55);
+    }
+    .chat-topbar-title__text { min-width: 0; }
+    .chat-topbar-title__name {
+      color: #fff8ed;
+      font-size: 15px;
+      font-weight: 800;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .chat-topbar-title__save {
+      margin-top: 1px;
+      color: rgba(255, 222, 190, .58);
+      font-size: 10px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .chat-window__hero { margin-top: var(--xy-chat-topbar-height); }
+    .chat-tools { display: none !important; }
+    .chat-input .chat-model { display: none !important; }
+    .chat-menu-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 77;
+      background: rgba(8, 5, 5, .54);
+      backdrop-filter: blur(2px);
+      -webkit-backdrop-filter: blur(2px);
+    }
+    .chat-list {
+      position: fixed !important;
+      inset: 0 auto 0 0 !important;
+      z-index: 80 !important;
+      width: min(330px, 88vw) !important;
+      height: var(--xy-visual-height, 100vh) !important;
+      display: flex !important;
+      transform: translateX(-104%);
+      transition: transform .22s ease;
+      box-shadow: 24px 0 55px -30px rgba(0, 0, 0, .95);
+    }
+    .chat-list.is-open { transform: translateX(0); }
+    .chat-list__header { min-height: var(--xy-chat-topbar-height); }
+    .chat-drawer-close {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      border: 1px solid var(--fy-border);
+      color: var(--fy-text-soft);
+      background: var(--fy-panel-2);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .chat-drawer-links {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      padding: 12px;
+      border-bottom: 1px solid var(--fy-border);
+    }
+    .chat-drawer-links a {
+      min-height: 40px;
+      padding: 8px 10px;
+      border-radius: 12px;
+      border: 1px solid var(--fy-border);
+      background: var(--fy-panel-2);
+      color: var(--fy-text-soft);
+      font-size: 13px;
+      font-weight: 700;
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .chat-drawer-links a:hover { color: var(--fy-accent-2); border-color: var(--fy-accent); }
+    .chat-right-menu {
+      position: fixed;
+      top: calc(var(--xy-chat-topbar-height) + 10px);
+      right: 12px;
+      z-index: 82;
+      width: min(340px, calc(100vw - 24px));
+      padding: 14px;
+      border-radius: 18px;
+      border: 1px solid rgba(232, 166, 109, .28);
+      background: rgba(38, 27, 25, .97);
+      color: #fff8ed;
+      box-shadow: 0 24px 60px -28px rgba(0, 0, 0, .95);
+    }
+    .chat-right-menu__label {
+      display: block;
+      margin-bottom: 6px;
+      color: rgba(255, 222, 190, .64);
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .chat-right-menu select {
+      width: 100%;
+      height: 40px;
+      padding: 0 10px;
+      border-radius: 12px;
+      border: 1px solid rgba(232, 166, 109, .28);
+      color: #fff8ed;
+      background: rgba(17, 12, 12, .92);
+    }
+    .chat-right-menu__actions {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .chat-right-menu__actions button {
+      min-height: 62px;
+      padding: 8px 5px;
+      border-radius: 13px;
+      border: 1px solid rgba(232, 166, 109, .22);
+      background: rgba(255, 255, 255, .04);
+      color: rgba(255, 238, 216, .78);
+      font-size: 11px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+    }
+    .chat-right-menu__actions button:hover,
+    .chat-right-menu__actions button.is-active { border-color: #f3a66b; color: #fff8ed; background: rgba(239, 154, 95, .14); }
+    .chat-right-menu__actions svg { width: 19px; height: 19px; }
+    .continue-msg-act { color: var(--fy-accent-2) !important; }
+
+    @media (max-width: 768px) {
+      .chat-immersive-topbar { padding: 8px 10px; grid-template-columns: 44px minmax(0, 1fr) 44px; }
+      .chat-window { min-height: var(--xy-visual-height, 100vh); }
+      .chat-window__hero { height: 92px; }
+      .chat-window__hero__info { display: none; }
+      .chat-messages { padding: 14px 12px calc(154px + env(safe-area-inset-bottom)); }
+      .chat-input { bottom: var(--xy-chat-input-bottom); }
+      .quick-replies { bottom: var(--xy-chat-quick-bottom); }
+      .generation-status { bottom: var(--xy-chat-generation-bottom); }
+      .memory-panel, .advanced-render-panel { top: calc(var(--xy-chat-topbar-height) + 10px); }
+    }
   </style>
-  <script type="module" src="/app/assets/js/chat.js?v=20260710-tavo-plugin"></script>
+  <script type="module" src="/app/assets/js/chat.js?v=20260710-web-reliability"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
   <div class="xy-stars-bg"></div>
 
-  <div class="app-shell" x-data="chatPage()" x-init="init()" x-cloak>
+  <div class="app-shell chat-shell" x-data="chatPage()" x-cloak @keydown.escape.window="listOpen=false; rightMenuOpen=false; memoryOpen=false; advancedRenderOpen=false">
 
-    <aside class="app-sidebar" data-app-sidebar></aside>
+    <div class="chat-menu-backdrop" x-show="listOpen" x-transition.opacity @click="listOpen=false"></div>
+    <div class="chat-menu-backdrop" x-show="rightMenuOpen" x-transition.opacity @click="rightMenuOpen=false"></div>
 
-    <main class="app-main flex">
+    <main class="app-main flex immersive-chat-main">
       <!-- 左侧对话列表 -->
       <aside class="chat-list" :class="{ 'is-open': listOpen }">
         <div class="chat-list__header flex items-center justify-between">
           <span x-text="chatText('conversation_list_title', '我的对话')"></span>
-          <a href="/app/explore.html" class="text-xs xy-link" x-text="chatText('new_role_link', '+ 新角色')"></a>
+          <button type="button" class="chat-drawer-close" @click="listOpen=false" aria-label="关闭菜单">×</button>
         </div>
+        <nav class="chat-drawer-links" aria-label="聊天快捷功能">
+          <a href="/app/explore.html">探索</a>
+          <a href="/app/me.html">我的</a>
+          <a href="/app/histories.html">历史对话</a>
+          <a href="/app/favorites.html">收藏</a>
+        </nav>
         <button class="new-chat-btn" x-show="appId" @click="newChat" :disabled="busy">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
           <span x-text="busy ? chatText('creating_label', '创建中…') : `${chatText('new_conversation_prefix', '与')} ${appName || chatText('current_role_fallback', '当前角色')} ${chatText('new_conversation_suffix', '新建对话')}`"></span>
@@ -957,6 +1177,44 @@
 
       <!-- 右侧聊天主区 -->
       <section class="chat-window">
+        <header class="chat-immersive-topbar">
+          <button type="button" class="immersive-menu-btn" :class="{ 'is-active': listOpen }" @click="listOpen=!listOpen; rightMenuOpen=false" aria-label="打开功能和历史对话菜单">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+          </button>
+          <div class="chat-topbar-title">
+            <img x-show="appIcon" class="avatar" :src="appIcon" referrerpolicy="no-referrer" onerror="this.style.display='none'">
+            <div class="avatar" x-show="!appIcon" x-text="(appName || '?').slice(0,1)"></div>
+            <div class="chat-topbar-title__text">
+              <div class="chat-topbar-title__name" x-text="appName || (conversation ? '继续对话' : 'AI星月')"></div>
+              <div class="chat-topbar-title__save" x-text="conversation?.id ? '当前存档 · ' + conversation.id.slice(0, 8) : '选择角色开始对话'"></div>
+            </div>
+          </div>
+          <button type="button" class="immersive-menu-btn" :class="{ 'is-active': rightMenuOpen }" @click="rightMenuOpen=!rightMenuOpen; listOpen=false" aria-label="打开模型和聊天设置">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15.5A3.5 3.5 0 1112 8a3.5 3.5 0 010 7.5zM19.4 15a1.7 1.7 0 00.34 1.87l.06.06-2.12 2.12-.06-.06a1.7 1.7 0 00-1.87-.34 1.7 1.7 0 00-1.03 1.56V20h-3v-.09a1.7 1.7 0 00-1.03-1.56 1.7 1.7 0 00-1.87.34l-.06.06-2.12-2.12.06-.06A1.7 1.7 0 007.04 15a1.7 1.7 0 00-1.56-1.03H5v-3h.48A1.7 1.7 0 007.04 9.94a1.7 1.7 0 00-.34-1.87l-.06-.06 2.12-2.12.06.06a1.7 1.7 0 001.87.34A1.7 1.7 0 0011.72 4.7V4h3v.7a1.7 1.7 0 001.03 1.56 1.7 1.7 0 001.87-.34l.06-.06 2.12 2.12-.06.06a1.7 1.7 0 00-.34 1.87 1.7 1.7 0 001.56 1.03H20v3h-.04A1.7 1.7 0 0019.4 15z"/></svg>
+          </button>
+        </header>
+
+        <aside class="chat-right-menu" x-show="rightMenuOpen" x-transition>
+          <label class="chat-right-menu__label">更换模型</label>
+          <select x-model="currentModelId" @change="persistModelSelection">
+            <option value="">跟随角色设置</option>
+            <template x-for="preset in modelPresets" :key="preset.id">
+              <option :value="preset.id" x-text="modelOptionLabel(preset)"></option>
+            </template>
+          </select>
+          <div class="chat-right-menu__actions">
+            <button type="button" :class="{ 'is-active': memoryOpen }" @click="toggleMemoryPanel">
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 4h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1zM9 8h6M9 12h6"/></svg><span>长期记忆</span>
+            </button>
+            <button type="button" :class="{ 'is-active': advancedRenderOpen }" @click="toggleAdvancedRenderPanel">
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.5 3.5l1.25 3.2L14 8l-3.25 1.3-1.25 3.2-1.25-3.2L5 8l3.25-1.3 1.25-3.2zM17 11l.9 2.1L20 14l-2.1.9L17 17l-.9-2.1L14 14l2.1-.9L17 11z"/></svg><span>高级渲染</span>
+            </button>
+            <button type="button" :class="{ 'is-active': appFavorited }" @click="toggleFavoriteCurrentApp" :disabled="favoriteBusy">
+              <svg :fill="appFavorited ? 'currentColor' : 'none'" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 21s-7-4.2-9.1-8C1.3 10.1 2.2 6.8 5 5.5c1.7-.8 3.8-.4 5.1 1L12 8.3l1.9-1.8c1.3-1.4 3.4-1.8 5.1-1 2.8 1.3 3.7 4.6 2.1 7.5C19 16.8 12 21 12 21z"/></svg><span x-text="appFavorited ? '已收藏' : '收藏'"></span>
+            </button>
+          </div>
+        </aside>
+
         <!-- 角色头图 -->
         <div class="chat-window__hero" :style="appHero ? `background-image: url('${appHero}')` : 'background: linear-gradient(135deg, #1a1230, #2d1b69 60%, #4c1d95);'">
           <div class="chat-tools" x-show="appId || conversation">
@@ -1092,6 +1350,12 @@
                 </template>
                 <!-- 重新生成（仅 assistant 末条） -->
                 <template x-if="m.role === 'assistant' && isLastAssistant(m)">
+                  <button class="msg-act continue-msg-act" @click="continueMessage(m)" :disabled="replying" title="从这条回复结尾继续写，不复述已有内容">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h12m-4-4l4 4-4 4M5 5v14"/></svg>
+                    <span>AI续写</span>
+                  </button>
+                </template>
+                <template x-if="m.role === 'assistant' && isLastAssistant(m)">
                   <button class="msg-act" @click="regenerate(m)" :disabled="replying" :title="chatText('regenerate_text', '重新生成')">
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h5M20 20v-5h-5M4 9a8 8 0 0114-3M20 15a8 8 0 01-14 3"/></svg>
                     <span x-text="chatText('regenerate_text', '重新生成')"></span>
@@ -1149,7 +1413,6 @@
         </div>
       </section>
     </main>
-    <nav class="app-bottom-nav" data-app-bottom-nav></nav>
   </div>
 </body>
 </html>

@@ -474,3 +474,18 @@
   Cause: 线上 Ubuntu 环境未安装 `sqlite3` 命令行工具，但 Python 3 自带 `sqlite3` 模块可用。
   Fix: 远程 DB 只读探测改用 `python3 -c "import sqlite3; ..."`，或上传临时 Python 验证脚本执行。
   Verify: 2026-07-10 `output\verify_tavo_plugin_remote.py` 使用远程 Python 读取管理员 id 后，线上 `.tpg` 插件导入、启用、runtime fragment 验证和删除清理全部通过。
+
+- Symptom: 点击“AI续写”报错，或只复述上一条角色回复。
+  Cause: 旧入口复用了 regenerate/swipe，会排除上一条 assistant 并重新发送之前的 user 内容；只有开场白时甚至会产生空 user 输入。
+  Fix: 2026-07-10 新增 `/console/api/web/chat/continue/stream`，把包含上一条 assistant 的完整历史和隐藏续写指令发给模型，并追加新的 assistant 消息。
+  Verify: `output/verify_backend_mobile_reliability_local.py` 验证无新增 user 气泡、续写追加、扣费和重复回复保护；线上端点已部署。
+
+- Symptom: 流式回复截断、切后台或切会话后，页面显示上一轮内容或旧会话内容。
+  Cause: 前端 SSE 未要求 `message_end`，没有 AbortController/generation id；生成中 visibility 刷新会替换消息数组；流完成后消息 ID 变化还可能让 Alpine DOM 保留旧临时对象。聊天页同时使用 Alpine 自动 `init()` 与 `x-init`，初始化请求执行两遍。
+  Fix: 2026-07-10 增加流结束完整性检查、请求取消和 generation/conversation token，生成中延迟对账，最终 `message_end.reply` 强制覆盖，使用稳定 `_localKey` 刷新消息，并移除 chat/explore 的重复 `x-init`。后端在截流时清理本轮消息/空会话且不扣费。
+  Verify: 本地 RST 测试确认 user/assistant 不落库且积分不变；430x932 与桌面 Playwright 模拟缺少 `message_end` 时显示“连接提前中断”，无旧回复回写和浏览器错误。
+
+- Symptom: 邮箱验证码提交慢、探索随机页像卡住不换内容。
+  Cause: 验证码每次同步走 SMTP 建连/STARTTLS/登录；探索旧请求可覆盖新 seed，且首页曾双发无 seed/带 seed 请求。
+  Fix: 2026-07-10 Resend 配置优先走 HTTPS API、失败回退 SMTP、最终失败删除验证码；探索使用同一 seed、AbortController + epoch，并提供“换一批”。
+  Verify: 线上日志出现 `accepted verification email ... via Resend HTTPS`；线上 Playwright 连续换批卡片集合变化，`CONTENT_MODE=local_only` 保持不变。

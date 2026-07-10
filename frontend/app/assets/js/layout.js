@@ -1,5 +1,5 @@
 const NAV_ITEMS = [
-  { key: 'home', label: '首页', href: '/app/', icon: 'M3 12l9-9 9 9M5 10v10h14V10' },
+  { key: 'explore', label: '探索', href: '/app/explore.html', icon: 'M3 12l9-9 9 9M5 10v10h14V10' },
   { key: 'workshop', label: '创作工坊', href: '/app/workshop.html', icon: 'M12 5v14m7-7H5' },
   { key: 'histories', label: '历史会话', href: '/app/histories.html', icon: 'M12 8v4l3 3M21 12a9 9 0 11-18 0 9 9 0 0118 0z' },
   { key: 'group', label: '群聊', href: '/app/group-chat.html', icon: 'M17 20h5v-2a4 4 0 00-4-4h-1M9 20H4v-2a4 4 0 014-4h1m0-4a4 4 0 118 0 4 4 0 01-8 0zm8 2a3 3 0 100-6' },
@@ -12,7 +12,7 @@ const NAV_ITEMS = [
 ];
 
 const MOBILE_ITEMS = [
-  { key: 'home', label: '首页', href: '/app/', icon: NAV_ITEMS[0].icon },
+  { key: 'explore', label: '探索', href: '/app/explore.html', icon: NAV_ITEMS[0].icon },
   { key: 'group', label: '群聊', href: '/app/group-chat.html', icon: NAV_ITEMS[3].icon },
   { key: 'workshop', label: '创作', href: '/app/workshop.html', icon: NAV_ITEMS[1].icon },
   { key: 'histories', label: '历史对话', href: '/app/histories.html', icon: NAV_ITEMS[2].icon },

@@ -1,5 +1,5 @@
 import { api, requireAuth, getCachedUser, setCachedUser, formatDateTime, ApiError } from '/app/assets/js/app-core.js';
-import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-channels-closed';
+import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260710-resume-chat';
 
 const FIELD_LABELS = {
   name: '姓名',
@@ -170,7 +170,7 @@ function characterPage() {
     userTagSaving: false,
 
     async init() {
-      injectLayout('home');
+      injectLayout('explore');
       this.siteSettings = await loadPublicSiteSettings().catch(() => null);
       if (!requireAuth()) return;
       const cached = getCachedUser();
@@ -219,7 +219,7 @@ function characterPage() {
         history.back();
         return;
       }
-      location.href = '/app/';
+      location.href = '/app/explore.html';
     },
 
     likeLabel() {

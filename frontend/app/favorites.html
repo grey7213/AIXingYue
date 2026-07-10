@@ -26,7 +26,7 @@
       <div x-show="!loading && cards.length === 0" class="app-page-pad text-center text-violet-200/70">
         <img src="/assets/img/apk/empty_view.webp?v=20260627-logo" class="w-32 mx-auto opacity-60 mb-4" alt="">
         <p x-text="emptyText('favorites_empty_title', '还没有收藏角色')">还没有收藏角色</p>
-        <a href="/app/" class="xy-btn xy-btn-primary mt-4 inline-flex" x-text="emptyText('favorites_cta_text', '去首页浏览')">去首页浏览</a>
+        <a href="/app/explore.html" class="xy-btn xy-btn-primary mt-4 inline-flex" x-text="emptyText('favorites_cta_text', '去探索浏览')">去探索浏览</a>
       </div>
       <div class="char-grid">
         <template x-for="card in cards" :key="card.id">
