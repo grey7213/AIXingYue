@@ -11,7 +11,7 @@ Updated: 2026-07-11
 | RCA5 | 备份并回填线上标签和能力标注 | Done | 6351 标签实际变化；8778 annotation；逐卡错位 0 |
 | RCA6 | 优化 Explore 和角色详情 UI | Done | 375/1440 截图；overflow 0；console error 0 |
 | RCA7 | 部署 Web/后端并验证线上状态 | Done | service/nginx active；health OK；CONTENT_MODE=local_only |
-| RCA8 | 更新项目记录、提交并推送 | In Progress | 聚焦提交推送 origin/main |
+| RCA8 | 更新项目记录、提交并推送 | Done | `21b9c27` 已推送 origin/main；本记录随后补齐 |
 
 ## 已确认审计数据
 
