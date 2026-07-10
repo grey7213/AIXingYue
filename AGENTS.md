@@ -489,3 +489,13 @@
   Cause: 验证码每次同步走 SMTP 建连/STARTTLS/登录；探索旧请求可覆盖新 seed，且首页曾双发无 seed/带 seed 请求。
   Fix: 2026-07-10 Resend 配置优先走 HTTPS API、失败回退 SMTP、最终失败删除验证码；探索使用同一 seed、AbortController + epoch，并提供“换一批”。
   Verify: 线上日志出现 `accepted verification email ... via Resend HTTPS`；线上 Playwright 连续换批卡片集合变化，`CONTENT_MODE=local_only` 保持不变。
+
+- Symptom: PowerShell 5.1 执行由 UTF-8 no BOM 保存、且脚本内含中文绝对路径的 `.ps1` 后，把 `E:\酒馆开发\output` 解析成乱码目录并在错误位置写文件。
+  Cause: Windows PowerShell 5.1 会按旧 ANSI 规则读取无 BOM 脚本；`apply_patch` 写出的 UTF-8 no BOM 中文字符串被误解码。
+  Fix: 临时/自动化 PowerShell 脚本中的工作路径和输出文件名使用 ASCII，完成后再用当前 PowerShell 命令的 `-LiteralPath` 改成中文交付名；或明确使用能正确读取 UTF-8 no BOM 的 `pwsh`。
+  Verify: 2026-07-10 角色卡导出并行下载的 24 个分段合并为 394936716-byte ZIP，SHA-256 与服务器 `f4336a98...ee1ac` 完全一致；乱码临时目录经绝对路径、文件数和总字节数检查后已清理。
+
+- Symptom: 需要把全部官方角色卡交给第三方重做标签，但直接重新导入角色卡会重复建卡或覆盖非标签内容。
+  Cause: `/admin/api/apps/import` 会生成新角色 ID，且角色名/display_id 不是业务关联主键；完整卡还包含世界书、Regex、Prompt、封面等不应随标签回填变更的字段。
+  Fix: 使用 `tools/export_role_cards_for_tagging.py` 导出公开已发布 admin 卡；Manifest 将 `display_id` 映射到 `local_apps.id`。回传时先备份 DB 和 dry-run，只按 internal ID 完整替换 `local_apps.tags`。
+  Verify: 2026-07-10 导出 8778 张公开官方卡，internal/display ID 均唯一；完整包与轻量标签包通过 ZIP CRC、Manifest、CSV、抽样 JSON 和 SHA-256 校验，用户卡和私有卡未导出。
