@@ -8,7 +8,7 @@ Updated: 2026-07-11
 | WCT2 | 加入全局 cloak、运营文案换行归一化 | Done | 15 页统一 CSS；双转义 0；字面 `\\n` 0 |
 | WCT3 | 移除重复 x-init，增加 Hub ready 骨架 | Done | 相关 API 每页各 1 次；骨架后一次性展示 |
 | WCT4 | 统一工坊/信息中心主题和统计口径 | Done | 公开官方角色 8778；桌面/移动无溢出 |
-| WCT5 | 部署、线上回归、记录并推送 | In Progress | health、CONTENT_MODE、browser、git |
+| WCT5 | 部署、线上回归、记录并推送 | Done | `79ee4f5` 已推送 origin/main；本记录随后补齐 |
 
 ## 验证结果
 
