@@ -40,7 +40,7 @@ function explorePage() {
     activeCategory: 'all',
     activeSort: 'random',
     activeRank: 'daily',
-    activeZone: 'clean',
+    activeZone: 'all',
     randomSeed: INITIAL_RANDOM_SEED,
     pictureless: false,
     siteSettings: null,
@@ -50,7 +50,7 @@ function explorePage() {
       category: 'all',
       sort: 'random',
       rank: 'daily',
-      zone: 'clean',
+      zone: 'all',
       pictureless: false,
       pageSize: DEFAULT_PAGE_SIZE,
     },
@@ -77,10 +77,7 @@ function explorePage() {
       { key: 'latest', label: '最新' },
       { key: 'updated', label: '更新' },
     ],
-    zoneOptions: [
-      { key: 'clean', label: '纯净区' },
-      { key: 'all', label: '全库' },
-    ],
+    zoneOptions: [{ key: 'all', label: '全库' }],
     _browsePageshowBound: false,
     _listEpoch: 0,
     _listAbortController: null,
@@ -133,7 +130,7 @@ function explorePage() {
     setCategory(k) { this.activeCategory = k; this.syncAdvancedForm(); this.loadList(true); },
     setSort(k) { this.activeSort = k; this.syncAdvancedForm(); this.loadList(true); },
     setRank(k) { this.activeRank = k; this.syncAdvancedForm(); this.loadList(true); },
-    setZone(k) { this.activeZone = k === 'all' ? 'all' : 'clean'; this.syncAdvancedForm(); this.loadList(true); },
+    setZone() { this.activeZone = 'all'; this.syncAdvancedForm(); this.loadList(true); },
     togglePictureless() { this.pictureless = !this.pictureless; this.syncAdvancedForm(); this.loadList(true); },
     shuffleRandom() {
       try {
@@ -151,7 +148,7 @@ function explorePage() {
         category: this.activeCategory || 'all',
         sort: this.activeSort || 'random',
         rank: this.activeRank || 'daily',
-        zone: this.activeZone || 'clean',
+        zone: 'all',
         pictureless: !!this.pictureless,
         pageSize: Number(this.pageSize) || DEFAULT_PAGE_SIZE,
       };
@@ -167,7 +164,7 @@ function explorePage() {
       this.activeCategory = this.advancedForm.category || 'all';
       this.activeSort = this.advancedForm.sort || 'random';
       this.activeRank = this.advancedForm.rank || 'daily';
-      this.activeZone = this.advancedForm.zone === 'all' ? 'all' : 'clean';
+      this.activeZone = 'all';
       this.pictureless = !!this.advancedForm.pictureless;
       this.pageSize = Number(this.advancedForm.pageSize) || DEFAULT_PAGE_SIZE;
       await this.searchOrJump(true);
@@ -194,7 +191,7 @@ function explorePage() {
         category: 'all',
         sort: 'random',
         rank: 'daily',
-        zone: 'clean',
+        zone: 'all',
         pictureless: false,
         pageSize: DEFAULT_PAGE_SIZE,
       };
@@ -263,8 +260,7 @@ function explorePage() {
         if (this.activeSort === 'random') params.seed = this.randomSeed;
         if (this.activeCategory !== 'all') params.tag = this.activeCategory;
         if (this.searchKeyword) params.q = this.searchKeyword;
-        if (this.activeZone === 'all') params.zone = 'all';
-        else if (!this.searchKeyword) params.zone = 'clean';
+        params.zone = 'all';
         if (this.pictureless) params.pictureless = 'true';
         const r = await fetchExplorePage(params, requestController.signal);
         if (requestEpoch !== this._listEpoch) return;
@@ -376,7 +372,7 @@ function explorePage() {
         this.activeCategory = state.activeCategory || 'all';
         this.activeSort = state.activeSort || 'random';
         this.activeRank = state.activeRank || 'daily';
-        this.activeZone = state.activeZone === 'all' ? 'all' : 'clean';
+        this.activeZone = 'all';
         this.randomSeed = Number(state.randomSeed) || this.randomSeed;
         this.pictureless = !!state.pictureless;
         this.cards = Array.isArray(state.cards) ? state.cards : [];
