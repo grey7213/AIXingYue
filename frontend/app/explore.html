@@ -11,7 +11,7 @@
   <link rel="modulepreload" href="/app/assets/js/app-core.js?v=20260710-web-reliability">
   <link rel="modulepreload" href="/app/assets/js/layout.js?v=20260710-resume-chat">
   <link rel="stylesheet" href="/app/assets/css/app.css?v=20260711-cloak-theme">
-  <script type="module" src="/app/assets/js/explore.js?v=20260712-full-library-default"></script>
+  <script type="module" src="/app/assets/js/explore.js?v=20260712-zone-controls-restored"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
@@ -75,6 +75,12 @@
             </select>
           </label>
           <label class="advanced-search-field">
+            <span x-text="appHomeText('advanced_zone_label', '内容区')">内容区</span>
+            <select class="xy-input" x-model="advancedForm.zone">
+              <template x-for="zone in zoneOptions" :key="zone.key"><option :value="zone.key" x-text="zone.label"></option></template>
+            </select>
+          </label>
+          <label class="advanced-search-field">
             <span x-text="appHomeText('advanced_page_size_label', '每页数量')">每页数量</span>
             <select class="xy-input" x-model.number="advancedForm.pageSize">
               <option :value="12">12</option>
@@ -94,6 +100,9 @@
       </div>
 
       <div class="toolbar-line">
+        <div class="segmented">
+          <template x-for="zone in zoneOptions" :key="zone.key"><button :class="{ 'is-active': activeZone === zone.key }" @click="setZone(zone.key)" x-text="zone.label"></button></template>
+        </div>
         <div class="segmented">
           <template x-for="rank in rankOptions" :key="rank.key">
             <button :class="{ 'is-active': activeRank === rank.key }" @click="setRank(rank.key)" x-text="rank.label"></button>
