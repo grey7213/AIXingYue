@@ -7,7 +7,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
   <link rel="icon" href="/favicon.ico">
   <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260711-cloak-theme">
+  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260712-model-center">
   <style>
     :root {
       --xy-visual-height: 100vh;
@@ -1465,7 +1465,7 @@
       .generation-status__dot { animation: none !important; transition: none !important; }
     }
   </style>
-  <script type="module" src="/app/assets/js/chat.js?v=20260711-reference-ui"></script>
+  <script type="module" src="/app/assets/js/chat.js?v=20260712-model-center"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
@@ -1536,13 +1536,13 @@
         </header>
 
         <aside class="chat-right-menu" x-show="rightMenuOpen" x-transition>
-          <label class="chat-right-menu__label">更换模型</label>
-          <select x-model="currentModelId" @change="persistModelSelection">
-            <option value="">跟随角色设置</option>
-            <template x-for="preset in modelPresets" :key="preset.id">
-              <option :value="preset.id" x-text="modelOptionLabel(preset)"></option>
-            </template>
-          </select>
+          <label class="chat-right-menu__label">当前模型</label>
+          <button type="button" class="model-picker-trigger" @click="openModelPicker">
+            <span class="model-picker-trigger__dot"></span>
+            <span class="model-picker-trigger__name" x-text="currentModelLabel()"></span>
+            <span class="model-picker-trigger__status">可用</span>
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 18l6-6-6-6"/></svg>
+          </button>
           <div class="chat-right-menu__actions">
             <button type="button" :class="{ 'is-active': memoryOpen }" @click="toggleMemoryPanel">
               <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 4h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1zM9 8h6M9 12h6"/></svg><span>长期记忆</span>
@@ -1735,15 +1735,10 @@
           <span class="generation-status__pill"><span class="generation-status__dot"></span><span x-text="generationStatusLabel()"></span></span>
         </div>
         <div class="chat-input" x-show="appId || conversation">
-          <div class="chat-model" x-show="modelPresets.length">
-            <span x-text="chatText('current_model_label', '当前模型')"></span>
-            <select x-model="currentModelId" @change="persistModelSelection" :title="chatText('model_select_title', '选择当前会话使用的站点模型')">
-              <option value="" x-text="chatText('model_follow_role', '跟随角色设置')"></option>
-              <template x-for="preset in modelPresets" :key="preset.id">
-                <option :value="preset.id" x-text="modelOptionLabel(preset)"></option>
-              </template>
-            </select>
-          </div>
+          <button type="button" class="chat-model model-picker-compact" x-show="modelPresets.length" @click="openModelPicker">
+            <span class="model-picker-trigger__dot"></span><span x-text="currentModelLabel()"></span>
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+          </button>
           <textarea x-model="draft" @keydown.enter.prevent="sendMessage" rows="1" :placeholder="chatText('send_placeholder', '说点什么...')"></textarea>
           <button @click="startSpeechInput" :class="{ 'opacity-70': listening }" :disabled="replying" :title="listening ? chatText('speech_listening_title', '正在听写') : chatText('speech_input_title', '语音输入')" :aria-label="chatText('speech_input_title', '语音输入')">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3a3 3 0 00-3 3v6a3 3 0 006 0V6a3 3 0 00-3-3zM5 11a7 7 0 0014 0M12 18v3m-4 0h8"/></svg>
@@ -1754,6 +1749,42 @@
         </div>
       </section>
     </main>
+
+    <div class="model-picker-mask" x-show="modelPickerOpen" x-transition.opacity @click="closeModelPicker"></div>
+    <section class="model-picker-sheet" :class="{ 'is-open': modelPickerOpen }" aria-label="选择模型">
+      <div class="model-picker-sheet__handle"></div>
+      <header class="model-picker-sheet__head">
+        <div><strong>选择模型</strong><span>当前：<b x-text="currentModelLabel()"></b></span></div>
+        <button type="button" @click="closeModelPicker" aria-label="关闭"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </header>
+      <div class="model-picker-status" aria-label="模型状态说明"><span class="is-smooth">可用：站点已启用</span><span class="is-unknown">实时负载暂未测速</span></div>
+      <nav class="model-picker-tabs">
+        <button type="button" :class="{ 'is-active': modelCategory === 'all' }" @click="modelCategory='all'">全部</button>
+        <button type="button" :class="{ 'is-active': modelCategory === 'gemini' }" @click="modelCategory='gemini'">Gemini</button>
+        <button type="button" :class="{ 'is-active': modelCategory === 'deepseek' }" @click="modelCategory='deepseek'">DeepSeek</button>
+        <button type="button" :class="{ 'is-active': modelCategory === 'claude' }" @click="modelCategory='claude'">Claude</button>
+        <button type="button" :class="{ 'is-active': modelCategory === 'openai' }" @click="modelCategory='openai'">OpenAI</button>
+      </nav>
+      <label class="model-picker-search"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" stroke-width="2"/><path stroke-linecap="round" stroke-width="2" d="M20 20l-4-4"/></svg><input x-model="modelSearch" placeholder="搜索模型"></label>
+      <div class="model-picker-list">
+        <button type="button" class="model-picker-follow" :class="{ 'is-current': !currentModelId }" @click="selectModel('')">
+          <span><strong>跟随角色设置</strong><small>使用角色卡配置的默认模型</small></span><i></i>
+        </button>
+        <template x-for="group in filteredModelGroups()" :key="group.key">
+          <section class="model-provider-group">
+            <h3 x-text="group.label"></h3>
+            <template x-for="preset in group.list" :key="preset.id">
+              <button type="button" class="model-picker-item" :class="{ 'is-current': currentModelId === preset.id }" @click="selectModel(preset.id)">
+                <span class="model-picker-item__main"><b class="model-picker-item__status"></b><span><strong x-text="preset.model || preset.name"></strong><small x-text="preset.name !== preset.model ? preset.name : modelProviderLabel(group.key)"></small><em x-show="preset.is_default">推荐模型</em><em class="is-current-label" x-show="currentModelId === preset.id">当前模型</em></span></span>
+                <span class="model-picker-item__side"><small>可用</small><i></i></span>
+              </button>
+            </template>
+          </section>
+        </template>
+        <div class="model-picker-empty" x-show="filteredModelGroups().length === 0">没有找到匹配的模型</div>
+      </div>
+      <footer class="model-picker-sheet__foot"><span>绿色表示站点已启用；不代表实时延迟</span><button type="button" @click="closeModelPicker">完成</button></footer>
+    </section>
   </div>
 </body>
 </html>

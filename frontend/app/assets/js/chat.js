@@ -1037,6 +1037,9 @@ function chatPage() {
     savingSummary: false,
     modelPresets: [],
     currentModelId: '',
+    modelPickerOpen: false,
+    modelSearch: '',
+    modelCategory: 'all',
     messageLimit: MESSAGE_LOAD_LIMIT,
     messageTotal: 0,
     hasOlderMessages: false,
@@ -1423,6 +1426,61 @@ function chatPage() {
       const name = preset?.name || preset?.model || preset?.id || '';
       const model = preset?.model || '';
       return model && model !== name ? `${name} · ${model}` : name;
+    },
+
+    currentModelPreset() {
+      return this.modelPresets.find(p => p.id === this.currentModelId) || null;
+    },
+
+    currentModelLabel() {
+      const preset = this.currentModelPreset();
+      return preset ? this.modelOptionLabel(preset) : this.chatText('model_follow_role', '跟随角色设置');
+    },
+
+    modelProvider(preset) {
+      const text = `${preset?.name || ''} ${preset?.model || ''}`.toLowerCase();
+      if (text.includes('gemini') || text.includes('google')) return 'gemini';
+      if (text.includes('deepseek')) return 'deepseek';
+      if (text.includes('claude') || text.includes('anthropic')) return 'claude';
+      if (text.includes('gpt') || text.includes('openai')) return 'openai';
+      return 'other';
+    },
+
+    modelProviderLabel(key) {
+      return ({ gemini: 'Gemini', deepseek: 'DeepSeek', claude: 'Claude', openai: 'OpenAI', other: '其他模型' })[key] || '其他模型';
+    },
+
+    filteredModelGroups() {
+      const query = this.modelSearch.trim().toLowerCase();
+      const list = this.modelPresets.filter(preset => {
+        const provider = this.modelProvider(preset);
+        if (this.modelCategory !== 'all' && provider !== this.modelCategory) return false;
+        return !query || `${preset.name || ''} ${preset.model || ''}`.toLowerCase().includes(query);
+      });
+      const groups = [];
+      list.forEach(preset => {
+        const key = preset.preset_id || preset.id;
+        let group = groups.find(item => item.key === key);
+        if (!group) {
+          group = { key, label: preset.name || this.modelProviderLabel(this.modelProvider(preset)), list: [] };
+          groups.push(group);
+        }
+        group.list.push(preset);
+      });
+      return groups;
+    },
+
+    openModelPicker() {
+      this.modelPickerOpen = true;
+      this.rightMenuOpen = false;
+    },
+
+    closeModelPicker() { this.modelPickerOpen = false; },
+
+    selectModel(modelId) {
+      this.currentModelId = modelId || '';
+      this.persistModelSelection();
+      this.modelPickerOpen = false;
     },
 
     updatePointsFromPayload(payload) {
