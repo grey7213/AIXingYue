@@ -60,6 +60,11 @@
 
 ## Reusable Pitfalls
 
+- Symptom: 注册验证码偶发“发送失败”、收不到，且角色卡批量导入时集中出现 `database is locked`。
+  Cause: 验证码原先与约 1.3GB 角色内容共用主 SQLite；长写事务会在邮件提交前锁死验证码创建，重复发送还会生成新码导致迟到邮件的旧码失效。
+  Fix: 2026-07-11 将验证码和投递状态迁移到独立 `verification_mail.sqlite3`（WAL + busy timeout），10 分钟内复用活动验证码并设置 60 秒投递冷却，验证时兼容旧主库验证码。
+  Verify: 本地主库 `BEGIN IMMEDIATE` 锁定期间独立库仍完成创建/复用/核销；线上服务和 Nginx active，内外 `/health` 为 OK，注册邮件接口返回 `status=accepted` 与 `retry_after=60`。
+
 - Symptom: JADX command fails with `UnsupportedClassVersionError ... class file version 55.0`.
   Cause: PATH resolves to `C:\Program Files\Java\jdk1.8.0_112\bin\java.exe`, but JADX 1.5.5 needs Java 11+.
   Fix: Run JADX with `E:\Android\AndroidStudio\jbr\bin` first on PATH or set `JAVA_HOME=E:\Android\AndroidStudio\jbr` before invoking `tools\jadx\bin\jadx.bat`.

@@ -500,7 +500,7 @@ def _send_verification_email_resend(to_email: str, sender: str, subject: str, bo
     return str(data.get("id") or "").strip() if isinstance(data, dict) else ""
 
 
-def send_verification_email(to_email: str, code: str, lang: str = "zh-Hans", purpose: str = "register") -> None:
+def send_verification_email(to_email: str, code: str, lang: str = "zh-Hans", purpose: str = "register") -> str:
     host = os.environ.get("SMTP_HOST")
     sender = os.environ.get("SMTP_FROM") or f"noreply@patcher.villainy.top"
     reset_purpose = (purpose or "").strip().lower() in ("password_reset", "reset_password", "reset")
@@ -521,7 +521,7 @@ def send_verification_email(to_email: str, code: str, lang: str = "zh-Hans", pur
             message_id = _send_verification_email_resend(to_email, sender, subject, body)
             suffix = f" id={message_id}" if message_id else ""
             log(f"accepted verification email for {to_email} via Resend HTTPS{suffix}")
-            return
+            return message_id
         except Exception as exc:
             log(f"Resend HTTPS email failed for {to_email}; falling back to SMTP: {type(exc).__name__}: {exc}")
     if not host:
@@ -529,7 +529,7 @@ def send_verification_email(to_email: str, code: str, lang: str = "zh-Hans", pur
         if Path(sendmail_path).exists():
             subprocess.run([sendmail_path, "-t", "-oi"], input=msg.as_bytes(), check=True)
             log(f"sent verification email for {to_email} through sendmail")
-            return
+            return ""
         raise RuntimeError("SMTP/sendmail is not configured")
     port = int(os.environ.get("SMTP_PORT", "587"))
     user = os.environ.get("SMTP_USER", "")
@@ -549,6 +549,7 @@ def send_verification_email(to_email: str, code: str, lang: str = "zh-Hans", pur
                 smtp.login(user, password)
             smtp.send_message(msg)
     log(f"sent verification email for {to_email} via SMTP {host}:{port} (from {sender})")
+    return ""
 
 
 def allow_email_send_failure() -> bool:
@@ -10842,6 +10843,10 @@ class Handler(BaseHTTPRequestHandler):
     def store(self) -> Store:
         return self.server.store
 
+    @property
+    def verification_store(self) -> "VerificationStore":
+        return self.server.verification_store
+
     def authenticated_user(self) -> sqlite3.Row:
         auth = self.headers.get("Authorization") or self.headers.get("authorization")
         user_id = user_id_from_token(auth)
@@ -11393,19 +11398,15 @@ class Handler(BaseHTTPRequestHandler):
                 self.store.ensure_beta_registration_available(email_value)
             except ValueError as exc:
                 return error_response(str(exc), 403)
-            code = ""
             try:
-                code = self.store.create_email_code(email_value, self.client_ip())
-                send_verification_email(email_value, code, str(lang))
-                return ok_response("sent")
+                item = self.verification_store.create_or_reuse(email_value, self.client_ip())
+                if item["send"]:
+                    provider_id = send_verification_email(email_value, item["code"], str(lang))
+                    self.verification_store.record(item["id"], email_value, "register", "accepted", provider_id)
+                return ok_response({"status": "accepted", "retry_after": item["retry_after"], "reused": item["reused"]})
             except ValueError as exc:
                 return error_response(str(exc), 429 if "too many" in str(exc) else 400)
             except Exception as exc:
-                if code:
-                    try:
-                        self.store.delete_email_code(email_value, code, "register")
-                    except Exception as cleanup_exc:
-                        log(f"registration email code cleanup failed for {email_value}: {cleanup_exc}")
                 log(f"email send failed for {email_value}: {exc}")
                 if allow_email_send_failure():
                     return ok_response("sent")
@@ -11418,19 +11419,15 @@ class Handler(BaseHTTPRequestHandler):
                 return error_response("invalid email")
             if not self.store.get_user_by_email(email_value):
                 return ok_response("sent")
-            code = ""
             try:
-                code = self.store.create_email_code(email_value, self.client_ip(), purpose="password_reset")
-                send_verification_email(email_value, code, str(lang), purpose="password_reset")
-                return ok_response("sent")
+                item = self.verification_store.create_or_reuse(email_value, self.client_ip(), "password_reset")
+                if item["send"]:
+                    provider_id = send_verification_email(email_value, item["code"], str(lang), purpose="password_reset")
+                    self.verification_store.record(item["id"], email_value, "password_reset", "accepted", provider_id)
+                return ok_response({"status": "accepted", "retry_after": item["retry_after"], "reused": item["reused"]})
             except ValueError as exc:
                 return error_response(str(exc), 429 if "too many" in str(exc) else 400)
             except Exception as exc:
-                if code:
-                    try:
-                        self.store.delete_email_code(email_value, code, "password_reset")
-                    except Exception as cleanup_exc:
-                        log(f"password reset email code cleanup failed for {email_value}: {cleanup_exc}")
                 log(f"password reset email send failed for {email_value}: {exc}")
                 if allow_email_send_failure():
                     return ok_response("sent")
@@ -11457,7 +11454,7 @@ class Handler(BaseHTTPRequestHandler):
             remote_ip = self.client_ip()
             if remote_ip and self.store.recent_register_success_count(remote_ip, now_ms() - 24 * 60 * 60 * 1000) >= REGISTER_IP_DAILY_FREE_ACCOUNT_LIMIT:
                 return error_response("too many free accounts from this network, try later", 429)
-            if not self.store.verify_email_code(email, str(code)) and not (allow_any_register_code() and str(code).strip()):
+            if not (self.verification_store.verify(email, str(code)) or self.store.verify_email_code(email, str(code))) and not (allow_any_register_code() and str(code).strip()):
                 return error_response("invalid verification code", 401)
             try:
                 user = self.store.create_registered_user(str(email), str(name), str(password), remote_ip)
@@ -11492,7 +11489,7 @@ class Handler(BaseHTTPRequestHandler):
                 return error_response("password must be at least 6 characters")
             if not self.store.get_user_by_email(email):
                 return error_response("invalid verification code", 401)
-            if not self.store.verify_email_code(email, str(code), purpose="password_reset"):
+            if not (self.verification_store.verify(email, str(code), "password_reset") or self.store.verify_email_code(email, str(code), purpose="password_reset")):
                 return error_response("invalid verification code", 401)
             try:
                 updated = self.store.reset_user_password(str(email), str(password), self.client_ip())
@@ -13161,10 +13158,66 @@ class Handler(BaseHTTPRequestHandler):
         })
 
 
+class VerificationStore:
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.connect() as conn:
+            conn.executescript("""
+                create table if not exists email_codes(
+                    id integer primary key, email text not null, code text not null,
+                    purpose text not null, created_at integer not null, expires_at integer not null,
+                    consumed_at integer, remote_addr text default '', send_count integer default 0,
+                    last_sent_at integer default 0
+                );
+                create index if not exists idx_mail_codes_active on email_codes(email,purpose,expires_at);
+                create table if not exists email_delivery_attempts(
+                    id text primary key, email_code_id integer, purpose text, email_domain text,
+                    provider text, status text, provider_message_id text, error_class text,
+                    created_at integer, accepted_at integer, updated_at integer
+                );
+            """)
+
+    def connect(self):
+        conn = sqlite3.connect(str(self.path), timeout=5)
+        conn.row_factory = sqlite3.Row
+        conn.execute("pragma journal_mode=WAL")
+        conn.execute("pragma busy_timeout=5000")
+        return conn
+
+    def create_or_reuse(self, email: str, remote_addr: str, purpose: str = "register") -> dict:
+        ts = int(time.time())
+        value = normalize_email(email)
+        with self.connect() as conn:
+            row = conn.execute("select * from email_codes where email=? and purpose=? and consumed_at is null and expires_at>=? order by id desc limit 1", (value, purpose, ts)).fetchone()
+            if row and ts - int(row["last_sent_at"] or 0) < 60:
+                return {"code": row["code"], "id": row["id"], "retry_after": 60 - (ts - int(row["last_sent_at"] or 0)), "send": False, "reused": True}
+            if row:
+                conn.execute("update email_codes set send_count=send_count+1,last_sent_at=? where id=?", (ts, row["id"]))
+                return {"code": row["code"], "id": row["id"], "retry_after": 60, "send": True, "reused": True}
+            code = f"{random.SystemRandom().randint(0, 999999):06d}"
+            cur = conn.execute("insert into email_codes(email,code,purpose,created_at,expires_at,remote_addr,send_count,last_sent_at) values(?,?,?,?,?,?,1,?)", (value, code, purpose, ts, ts + CODE_TTL_SECONDS, remote_addr or "", ts))
+            return {"code": code, "id": cur.lastrowid, "retry_after": 60, "send": True, "reused": False}
+
+    def verify(self, email: str, code: str, purpose: str = "register") -> bool:
+        ts = int(time.time())
+        with self.connect() as conn:
+            row = conn.execute("select id,code from email_codes where email=? and purpose=? and consumed_at is null and expires_at>=? order by id desc limit 1", (normalize_email(email), purpose, ts)).fetchone()
+            if not row or row["code"] != str(code or "").strip(): return False
+            conn.execute("update email_codes set consumed_at=? where email=? and purpose=? and consumed_at is null", (ts, normalize_email(email), purpose))
+            return True
+
+    def record(self, code_id: int, email: str, purpose: str, status: str, provider_id: str = "", error: str = ""):
+        ts = int(time.time()); attempt_id = uuid.uuid4().hex
+        with self.connect() as conn:
+            conn.execute("insert into email_delivery_attempts values(?,?,?,?,?,?,?,?,?,?,?)", (attempt_id, code_id, purpose, email.rsplit('@',1)[-1], "resend", status, provider_id, error[:80], ts, ts if status == 'accepted' else None, ts))
+
+
 class LocalServer(ThreadingHTTPServer):
-    def __init__(self, address: tuple[str, int], handler_class, store: Store):
+    def __init__(self, address: tuple[str, int], handler_class, store: Store, verification_store: VerificationStore):
         super().__init__(address, handler_class)
         self.store = store
+        self.verification_store = verification_store
 
 
 def main() -> int:
@@ -13181,9 +13234,12 @@ def main() -> int:
     (MEDIA_DIR / "cover").mkdir(parents=True, exist_ok=True)
     (MEDIA_DIR / "profile").mkdir(parents=True, exist_ok=True)
     (MEDIA_DIR / "generated").mkdir(parents=True, exist_ok=True)
-    server = LocalServer((args.host, args.port), Handler, store)
+    mail_db = Path(os.environ.get("MAIL_DB_PATH") or (args.db.resolve().parent / "verification_mail.sqlite3"))
+    verification_store = VerificationStore(mail_db)
+    server = LocalServer((args.host, args.port), Handler, store, verification_store)
     log(f"listening on http://{args.host}:{args.port}/")
     log(f"sqlite db: {args.db}")
+    log(f"verification sqlite db: {mail_db}")
     log(f"content mode: {CONTENT_MODE}")
     log("emulator APK server-url should be: http://10.0.2.2:8000/")
     try:

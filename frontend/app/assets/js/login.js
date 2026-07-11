@@ -114,9 +114,10 @@ function loginPage() {
       }
       this.sendingCode = true;
       try {
-        await api.sendEmailCode(email);
-        this.showToast(this.authText('code_sent_text', '验证码已发送，请查收邮件'), 'success');
-        this.codeCountdown = 60;
+        const response = await api.sendEmailCode(email);
+        const retryAfter = Number(response?.data?.retry_after || 60);
+        this.showToast(this.authText('code_sent_text', '验证码请求已提交，通常 10–60 秒到达；若未看到，请检查垃圾邮件、广告邮件或 QQ 邮箱拦截。重复发送仍使用同一个验证码。'), 'success');
+        this.codeCountdown = retryAfter;
         this.countdownTimer = setInterval(() => {
           this.codeCountdown--;
           if (this.codeCountdown <= 0) clearInterval(this.countdownTimer);
@@ -134,9 +135,9 @@ function loginPage() {
       }
       this.sendingResetCode = true;
       try {
-        await sendPasswordResetCode(email);
-        this.showToast(this.authText('reset_code_sent_text', '密码重置验证码已发送，请查收邮件'), 'success');
-        this.resetCodeCountdown = 60;
+        const response = await sendPasswordResetCode(email);
+        this.showToast(this.authText('reset_code_sent_text', '重置验证码请求已提交，通常 10–60 秒到达；若未看到，请检查垃圾邮件或邮箱拦截。'), 'success');
+        this.resetCodeCountdown = Number(response?.data?.retry_after || 60);
         if (this.resetCountdownTimer) clearInterval(this.resetCountdownTimer);
         this.resetCountdownTimer = setInterval(() => {
           this.resetCodeCountdown--;
