@@ -2,6 +2,8 @@
 
 @import url('/assets/css/custom.css?v=20260703-fengyue-home3');
 
+[x-cloak] { display: none !important; }
+
 :root {
   --xy-app-sidebar: 256px;
   --xy-app-bg: #0a0420;
@@ -1312,6 +1314,231 @@ html, body { font-size: 16px; line-height: 1.5; color: var(--xy-app-text); }
   .editor-form { padding: 12px 14px 96px; gap: 16px; }
   .editor-row-2 { grid-template-columns: 1fr; gap: 12px; }
   .editor-dropzone { min-height: 180px; padding: 20px 12px; }
+}
+
+/* ===========================================================
+   Hub pages: warm creator / information surfaces
+   =========================================================== */
+.hub-page .app-hero__panel {
+  min-height: 190px;
+  padding: 30px 34px;
+  border: 1px solid rgba(255, 224, 194, .18);
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at 92% 6%, rgba(238, 155, 104, .24), transparent 36%),
+    radial-gradient(circle at 12% 100%, rgba(200, 146, 50, .12), transparent 36%),
+    linear-gradient(135deg, #2b211b 0%, #4a3025 56%, #7a432b 100%);
+  box-shadow: 0 18px 44px rgba(83, 49, 29, .18);
+  animation: none;
+}
+
+.hub-page .app-hero__panel::before {
+  display: block !important;
+  opacity: .16;
+  background-image: repeating-linear-gradient(115deg, rgba(255, 247, 236, .18) 0 1px, transparent 1px 5px);
+  animation: none;
+}
+
+.hub-page .app-hero__eyebrow {
+  color: #f4a261 !important;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.hub-page .app-hero__eyebrow::before {
+  color: #f4a261;
+  animation: none;
+}
+
+.hub-page .app-hero__title {
+  max-width: 760px;
+  margin-top: 12px;
+  color: #fff8ef !important;
+  -webkit-text-fill-color: #fff8ef !important;
+  font-size: clamp(28px, 3.3vw, 42px);
+  font-weight: 850;
+  line-height: 1.15;
+  letter-spacing: -.035em;
+  text-shadow: 0 2px 16px rgba(0, 0, 0, .2) !important;
+}
+
+.hub-page .app-hero__copy {
+  max-width: 760px;
+  margin-top: 14px;
+  color: #ead9ca !important;
+  font-size: 14px;
+  line-height: 1.8;
+}
+
+.hub-page--workshop .quick-grid {
+  gap: 14px;
+}
+
+.hub-page--workshop .quick-tile {
+  position: relative;
+  min-height: 96px;
+  padding: 22px 20px 18px;
+  overflow: hidden;
+  border-radius: 16px !important;
+  background: var(--fy-panel) !important;
+}
+
+.hub-page--workshop .quick-tile::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  background: var(--fy-accent-2);
+}
+
+.hub-page--workshop .quick-tile:nth-child(2)::before { background: #c89232; }
+.hub-page--workshop .quick-tile:nth-child(3)::before { background: #a76570; }
+.hub-page--workshop .quick-tile:nth-child(4)::before { background: #9a7047; }
+
+.hub-page--workshop .quick-tile strong {
+  color: var(--fy-text);
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.hub-page--workshop .quick-tile span {
+  margin-top: 8px;
+  color: var(--fy-text-soft) !important;
+  font-size: 13px;
+}
+
+.hub-page--workshop .creator-contest-panel {
+  background:
+    radial-gradient(circle at 100% 0%, rgba(231, 125, 69, .10), transparent 34%),
+    var(--fy-panel-2) !important;
+}
+
+.hub-page--workshop .creator-leaderboard-panel {
+  background: var(--fy-panel) !important;
+}
+
+.hub-page--workshop .creator-leaderboard-row {
+  padding-block: 12px;
+}
+
+.hub-page--workshop .workshop-role-list {
+  border-radius: 18px !important;
+}
+
+.hub-empty-state {
+  margin: 14px;
+  padding: 34px 20px;
+  border: 1px dashed color-mix(in srgb, var(--fy-accent) 55%, var(--fy-border));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--fy-panel-2) 82%, transparent);
+  color: var(--fy-text-soft);
+  text-align: center;
+  font-size: 14px;
+}
+
+.hub-page--info .stat-grid {
+  gap: 14px;
+}
+
+.hub-page--info .stat-card {
+  min-height: 108px;
+  padding: 21px 22px;
+  border-radius: 16px !important;
+  border-top: 3px solid var(--fy-accent-2) !important;
+  background: var(--fy-panel) !important;
+}
+
+.hub-page--info .stat-card::before {
+  top: -36px;
+  right: -30px;
+  width: 110px;
+  height: 110px;
+  background: radial-gradient(circle, rgba(231, 125, 69, .13), transparent 70%);
+}
+
+.hub-page--info .stat-card--user { border-top-color: #c89232 !important; }
+.hub-page--info .stat-card--favorite { border-top-color: #a76570 !important; }
+.hub-page--info .stat-card--conversation { border-top-color: #9a7047 !important; }
+
+.hub-page--info .stat-card .num {
+  color: var(--fy-text) !important;
+  -webkit-text-fill-color: var(--fy-text) !important;
+  font-size: 32px;
+  font-weight: 850;
+}
+
+.hub-page--info .stat-card .label {
+  margin-top: 7px;
+  color: var(--fy-text-soft) !important;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.hub-loading-skeleton {
+  display: grid;
+  gap: 18px;
+}
+
+.hub-skeleton,
+.hub-skeleton-grid i {
+  display: block;
+  border: 1px solid var(--fy-border);
+  border-radius: 18px;
+  background:
+    linear-gradient(100deg, transparent 30%, rgba(255,255,255,.55) 46%, transparent 62%),
+    var(--fy-panel-2);
+  background-size: 220% 100%;
+  animation: hub-skeleton-shimmer 1.25s ease-in-out infinite;
+}
+
+[data-theme="dark"] .hub-skeleton,
+[data-theme="dark"] .hub-skeleton-grid i {
+  background:
+    linear-gradient(100deg, transparent 30%, rgba(255,255,255,.055) 46%, transparent 62%),
+    var(--fy-panel-2);
+  background-size: 220% 100%;
+}
+
+.hub-skeleton--hero { min-height: 190px; }
+.hub-skeleton-grid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 14px; }
+.hub-skeleton-grid i { min-height: 96px; }
+.hub-skeleton-grid--wide { grid-template-columns: repeat(2, minmax(0,1fr)); }
+.hub-skeleton-grid--wide i { min-height: 190px; }
+.hub-skeleton-grid--stats { grid-template-columns: repeat(2, minmax(0,1fr)); }
+.hub-skeleton-grid--stats i { min-height: 108px; }
+
+@keyframes hub-skeleton-shimmer {
+  from { background-position: 130% 0; }
+  to { background-position: -90% 0; }
+}
+
+@media (max-width: 768px) {
+  .hub-page .app-hero__panel {
+    min-height: 168px;
+    padding: 22px 20px;
+    border-radius: 18px;
+  }
+  .hub-page .app-hero__title {
+    font-size: clamp(25px, 8vw, 32px);
+  }
+  .hub-page--workshop .quick-grid,
+  .hub-skeleton-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .hub-page--info .stat-grid,
+  .hub-skeleton-grid--stats {
+    grid-template-columns: 1fr;
+  }
+  .hub-page--info .stat-card {
+    min-height: 92px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hub-skeleton,
+  .hub-skeleton-grid i {
+    animation: none !important;
+  }
 }
 
 /* ===========================================================

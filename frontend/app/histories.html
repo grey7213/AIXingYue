@@ -7,14 +7,14 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
   <link rel="icon" href="/favicon.ico">
   <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260707-clean-chat-ux2">
+  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260711-cloak-theme">
   <script type="module" src="/app/assets/js/hub-pages.js?v=20260707-clean-chat-ux2"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
   <div class="xy-stars-bg"></div>
 
-  <div class="app-shell" x-data="historiesPage()" x-init="init()" x-cloak>
+  <div class="app-shell" x-data="historiesPage()" x-cloak>
     <aside class="app-sidebar" data-app-sidebar></aside>
     <main class="app-main">
       <header class="app-topbar"><h1 x-text="appNavText('histories', '历史会话')">历史会话</h1><div class="grow"></div><a href="/app/explore.html" class="xy-btn xy-btn-primary text-sm" x-text="emptyText('histories_cta_text', '＋ 新对话')">＋ 新对话</a></header>

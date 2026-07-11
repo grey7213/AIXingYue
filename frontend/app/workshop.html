@@ -7,15 +7,15 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
   <link rel="icon" href="/favicon.ico">
   <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260707-clean-chat-ux2">
-  <script type="module" src="/app/assets/js/hub-pages.js?v=20260707-clean-chat-ux2"></script>
+  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260711-cloak-theme">
+  <script type="module" src="/app/assets/js/hub-pages.js?v=20260711-cloak-theme"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
-<body class="min-h-screen">
+<body class="min-h-screen hub-page hub-page--workshop">
   <div class="xy-stars-bg"></div>
   <div class="xy-meteor"></div>
 
-  <div class="app-shell" x-data="workshopPage()" x-init="init()" x-cloak>
+  <div class="app-shell" x-data="workshopPage()" x-cloak>
     <aside class="app-sidebar" data-app-sidebar></aside>
     <main class="app-main">
       <header class="app-topbar">
@@ -23,10 +23,15 @@
         <div class="grow"></div>
         <a href="/app/create.html" class="xy-btn xy-btn-primary text-sm" x-text="myText('new_role_text', '＋ 新建角色')">＋ 新建角色</a>
       </header>
-      <section class="app-page-pad max-w-6xl mx-auto space-y-5">
+      <div class="hub-loading-skeleton app-page-pad max-w-6xl mx-auto" x-show="!ready" aria-label="正在加载创作工坊">
+        <div class="hub-skeleton hub-skeleton--hero"></div>
+        <div class="hub-skeleton-grid"><i></i><i></i><i></i><i></i></div>
+        <div class="hub-skeleton-grid hub-skeleton-grid--wide"><i></i><i></i></div>
+      </div>
+      <section class="app-page-pad max-w-6xl mx-auto space-y-5" x-show="ready" x-transition.opacity>
         <div class="app-hero__panel">
           <div class="app-hero__eyebrow" x-text="emptyText('workshop_eyebrow', '创作者工具')">创作者工具</div>
-          <h2 class="app-hero__title whitespace-pre-line" x-text="emptyText('workshop_title', '把你的角色卡\\n送进 AI星月同库。')">把你的角色卡
+          <h2 class="app-hero__title whitespace-pre-line" x-text="emptyText('workshop_title', '把你的角色卡\n送进 AI星月同库。')">把你的角色卡
 送进 AI星月同库。</h2>
           <p class="app-hero__copy" x-text="emptyText('workshop_copy', '普通用户只需要填写设定、开场白和封面；模型 API 由站点后台统一配置，不必操心额度和 Key。')">普通用户只需要填写设定、开场白和封面；模型 API 由站点后台统一配置，不必操心额度和 Key。</p>
         </div>
@@ -67,8 +72,8 @@
             </template>
           </section>
         </div>
-        <div class="list-panel">
-          <template x-if="myApps.length === 0"><div class="p-8 text-center text-violet-200/70" x-text="emptyText('workshop_empty_title', '你还没有创建过角色，点击右上角去新建吧')">你还没有创建过角色，点击右上角去新建吧</div></template>
+        <div class="list-panel workshop-role-list">
+          <template x-if="myApps.length === 0"><div class="hub-empty-state" x-text="emptyText('workshop_empty_title', '你还没有创建过角色，点击右上角去新建吧')">你还没有创建过角色，点击右上角去新建吧</div></template>
           <template x-for="app in myApps" :key="app.id">
             <a class="list-row text-inherit no-underline" :href="`/app/my-apps.html`">
               <img :src="app.cover || '/assets/img/apk/avatar.webp'" alt="">

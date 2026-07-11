@@ -504,3 +504,8 @@
   Cause: 文件名是给人核对的展开视图；无损标准标签在 `tag-overrides.filled.csv` 的 `new_tags_json`，三位标记依次是主开场白、顶层世界书、顶层正则，属于独立能力维度。
   Fix: 使用 `tools/import_role_card_annotations.py` 校验 ZIP/Manifest/卡 SHA/CSV/ID，按 filled CSV 覆盖 `local_apps.tags`；能力写入 `role_card_annotations`，且不更新 `local_apps.updated_at`，避免全库探索排序漂移。
   Verify: 2026-07-11 线上 dry-run 8778/8778、冲突 0；备份和 live DB `quick_check=ok`；6351 行标签实际变化、8778 标注写入，逐卡标签/标注 mismatch 均为 0；Explore/详情在 375/1440 宽度显示能力徽标且 console error 0。
+
+- Symptom: Web App 页面刷新或点击导航后，会瞬间露出 Alpine 模板、字面 `\n`、旧文案或未加载的 `0` 统计；创作工坊标题甚至会持续显示 `\n`。
+  Cause: Web 页面都有 `x-cloak`，但直接加载的 `frontend/app/assets/css/app.css` 没有 cloak 规则；工坊 fallback 又把换行写成双转义 `\\n`。页面同时使用 Alpine 自动 `init()` 与 `x-init="init()"`，会重复请求。
+  Fix: 在 app.css 顶部定义 `[x-cloak]`，所有页面统一刷新 CSS cache-buster；运营设置读取时归一化字面换行；移除重复 x-init；workshop/info 用 ready 骨架，暖黑橙金 Hero 和暖纸统计卡统一主题。
+  Verify: 2026-07-11 静态检查 15 个 cloak 页面、旧 CSS 版本 0、双转义 0、重复 x-init 0；线上 8 个页面刷新冒烟无字面 `\\n`/横向溢出/浏览器错误；工坊/信息中心 API 各请求 1 次，信息中心显示 8778 公开官方角色。

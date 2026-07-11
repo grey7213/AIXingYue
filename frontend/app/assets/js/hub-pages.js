@@ -1,5 +1,5 @@
 import { api, requireAuth, getCachedUser, setCachedUser, clearAuth, ApiError } from '/app/assets/js/app-core.js';
-import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-channels-closed';
+import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260711-cloak-theme';
 
 async function loadUser(ctx) {
   if (!requireAuth()) return false;
@@ -217,22 +217,26 @@ export function historiesPage() {
 
 export function workshopPage() {
   return {
-    user: null, points: 0, stats: null, myApps: [], siteSettings: null,
+    user: null, points: 0, stats: null, myApps: [], siteSettings: null, ready: false,
     creatorLeaderboard: [], creatorContest: null,
     async init() {
       injectLayout('workshop');
-      await loadSiteSettings(this);
-      if (!(await loadUser(this))) return;
-      const [s, m, contests, leaderboard] = await Promise.all([
-        api.homeStats().catch(() => null),
-        api.myApps({ page: 1, page_size: 6 }).catch(() => null),
-        api.creatorContests().catch(() => null),
-        api.creatorLeaderboard({ limit: 10 }).catch(() => null),
-      ]);
-      this.stats = s?.data || null;
-      this.myApps = m?.data?.list || [];
-      this.creatorContest = contests?.data?.contest || contests?.contest || null;
-      this.creatorLeaderboard = leaderboard?.data?.list || contests?.data?.leaderboard || [];
+      try {
+        await loadSiteSettings(this);
+        if (!(await loadUser(this))) return;
+        const [s, m, contests, leaderboard] = await Promise.all([
+          api.homeStats().catch(() => null),
+          api.myApps({ page: 1, page_size: 6 }).catch(() => null),
+          api.creatorContests().catch(() => null),
+          api.creatorLeaderboard({ limit: 10 }).catch(() => null),
+        ]);
+        this.stats = s?.data || null;
+        this.myApps = m?.data?.list || [];
+        this.creatorContest = contests?.data?.contest || contests?.contest || null;
+        this.creatorLeaderboard = leaderboard?.data?.list || contests?.data?.leaderboard || [];
+      } finally {
+        this.ready = true;
+      }
     },
     emptyText(key, fallback = '') { return emptyText(this, key, fallback); },
     appNavText(key, fallback = '') { return appNavText(this, key, fallback); },
@@ -429,16 +433,20 @@ export function logsPage() {
 
 export function infoPage() {
   return {
-    user: null, points: 0, stats: null, siteSettings: null,
+    user: null, points: 0, stats: null, siteSettings: null, ready: false,
     async init() {
       injectLayout('info');
-      if (!(await loadUser(this))) return;
-      const [s, settings] = await Promise.all([
-        api.homeStats().catch(() => null),
-        loadPublicSiteSettings().catch(() => null),
-      ]);
-      this.stats = s?.data || null;
-      this.siteSettings = settings || null;
+      try {
+        if (!(await loadUser(this))) return;
+        const [s, settings] = await Promise.all([
+          api.homeStats().catch(() => null),
+          loadPublicSiteSettings().catch(() => null),
+        ]);
+        this.stats = s?.data || null;
+        this.siteSettings = settings || null;
+      } finally {
+        this.ready = true;
+      }
     },
     infoValue(key, fallback = '') {
       return this.siteSettings?.app?.[key] || fallback;

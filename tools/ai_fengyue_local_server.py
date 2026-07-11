@@ -668,6 +668,7 @@ def site_settings_defaults() -> dict:
             "info_title": "网页端\n同账号 · 同积分 · 同角色库。",
             "info_copy": "当前站点保持本地库模式，角色封面走本站媒体缓存，不依赖上游可用性，国内访问也很顺畅。",
             "info_stat_upstream_label": "上游本地化角色",
+            "info_stat_official_label": "公开官方角色",
             "info_stat_user_label": "用户角色",
             "info_stat_favorites_label": "你的收藏",
             "info_stat_conversations_label": "你的会话",
@@ -4807,8 +4808,17 @@ class Store:
         with self.lock:
             up = self.conn.execute("select count(*) from local_apps where source='upstream'").fetchone()[0]
             admin = self.conn.execute("select count(*) from local_apps where source='admin'").fetchone()[0]
+            public_admin = self.conn.execute(
+                "select count(*) from local_apps where source='admin' and status='published' and is_public=1"
+            ).fetchone()[0]
             usr = self.conn.execute("select count(*) from local_apps where source='user'").fetchone()[0]
-        return {"upstream": int(up), "admin": int(admin), "user": int(usr), "total": int(up) + int(admin) + int(usr)}
+        return {
+            "upstream": int(up),
+            "admin": int(admin),
+            "public_admin": int(public_admin),
+            "user": int(usr),
+            "total": int(up) + int(admin) + int(usr),
+        }
 
     def creator_leaderboard(self, limit: int = 10) -> list[dict]:
         safe_limit = max(1, min(int(limit or 10), 50))

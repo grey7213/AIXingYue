@@ -21,6 +21,20 @@ const MOBILE_ITEMS = [
 
 let publicSiteSettingsPromise = null;
 
+function normalizeUiSettings(value) {
+  if (typeof value === 'string') {
+    return value
+      .replace(/\\r\\n/g, '\n')
+      .replace(/\\n/g, '\n')
+      .replace(/\\r/g, '\n');
+  }
+  if (Array.isArray(value)) return value.map(normalizeUiSettings);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, normalizeUiSettings(item)]));
+  }
+  return value;
+}
+
 function svg(path) {
   return `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="${path}"/></svg>`;
 }
@@ -110,7 +124,7 @@ export async function loadPublicSiteSettings() {
       headers: { Accept: 'application/json' },
     })
       .then(res => (res.ok ? res.json() : null))
-      .then(data => data?.data || data || null)
+      .then(data => normalizeUiSettings(data?.data || data || null))
       .catch(() => null);
   }
   return publicSiteSettingsPromise;

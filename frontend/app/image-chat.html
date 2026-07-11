@@ -7,14 +7,14 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
   <link rel="icon" href="/favicon.ico">
   <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260703-fengyue-home3">
+  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260711-cloak-theme">
   <script type="module" src="/app/assets/js/hub-pages.js?v=20260705-image-model"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
   <div class="xy-stars-bg"></div>
 
-  <div class="app-shell" x-data="imageChatPage()" x-init="init()" x-cloak>
+  <div class="app-shell" x-data="imageChatPage()" x-cloak>
     <aside class="app-sidebar" data-app-sidebar></aside>
     <main class="app-main">
       <header class="app-topbar"><h1 x-text="appNavText('image', '图片聊天')">图片聊天</h1><div class="grow"></div><span class="xy-badge xy-badge-purple" x-text="emptyText('image_status_badge', '图片模型')">图片模型</span></header>
