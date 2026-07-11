@@ -7,23 +7,30 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
   <link rel="icon" href="/favicon.ico">
   <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260711-cloak-theme">
-  <script type="module" src="/app/assets/js/create.js?v=20260703-channels-closed"></script>
+  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260712-creator-reference">
+  <script type="module" src="/app/assets/js/create.js?v=20260712-creator-reference"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
-<body class="min-h-screen">
+<body class="min-h-screen creator-editor-page">
   <div class="xy-stars-bg"></div>
 
-  <div class="app-shell" x-data="createPage()" x-cloak>
+  <div class="app-shell creator-editor" x-data="createPage()" x-cloak>
     <aside class="app-sidebar" data-app-sidebar></aside>
 
-    <main class="app-main">
+    <main class="app-main creator-editor__main">
       <!-- 顶部工具栏 -->
       <header class="editor-toolbar">
         <a href="/app/my-apps.html" class="editor-toolbar__btn" :title="creatorText('back_title', '返回管理')">
           <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
           <span x-text="creatorText('back_text', '返回')"></span>
         </a>
+        <div class="editor-toolbar__identity">
+          <span class="editor-toolbar__brand-mark" aria-hidden="true"></span>
+          <div>
+            <strong x-text="editingId ? creatorText('edit_page_title', '编辑角色卡') : creatorText('create_page_title', '创作角色卡')"></strong>
+            <small x-text="creatorText('page_subtitle', 'Character Card Editor')"></small>
+          </div>
+        </div>
         <button class="editor-toolbar__btn is-danger" x-show="editingId" @click="remove" :title="creatorText('delete_title', '删除角色')">
           <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m-9 0v14a2 2 0 002 2h6a2 2 0 002-2V6"/></svg>
           <span x-text="creatorText('delete_text', '删除')"></span>
@@ -42,10 +49,10 @@
           <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 14l2-2 2 2 3-4 3 5"/></svg>
           <span>PNG</span>
         </button>
-        <a class="editor-toolbar__btn" :href="editingId ? `/app/chat.html?app_id=${encodeURIComponent(editingId)}` : '#'" :class="{ 'opacity-50 cursor-not-allowed pointer-events-none': !editingId }" :title="creatorText('preview_title', '预览（保存后可用）')">
+        <button type="button" class="editor-toolbar__btn" @click="previewOpen = true" :title="creatorText('preview_title', '预览当前角色卡')">
           <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M1.5 12s4-7 10.5-7 10.5 7 10.5 7-4 7-10.5 7S1.5 12 1.5 12z"/><circle cx="12" cy="12" r="3" stroke-width="2"/></svg>
           <span x-text="creatorText('preview_text', '预览')"></span>
-        </a>
+        </button>
         <button class="editor-pill" :class="form.is_public ? 'is-public' : 'is-private'" @click="toggleVisibility" :title="form.is_public ? creatorText('public_title', '公开发布到探索页') : creatorText('private_title', '仅自己可见')">
           <template x-if="form.is_public">
             <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12h18M12 3a13 13 0 010 18M12 3a13 13 0 000 18"/></svg>
@@ -64,17 +71,28 @@
         </button>
       </header>
 
+      <nav class="creator-editor__tabs" aria-label="角色卡编辑分区">
+        <button type="button" @click="scrollToSection('creator-basic')" :class="{ 'is-active': activeSection === 'creator-basic' }">基础设置</button>
+        <button type="button" @click="scrollToSection('creator-media')" :class="{ 'is-active': activeSection === 'creator-media' }">视觉素材</button>
+        <button type="button" @click="scrollToSection('creator-prompts')" :class="{ 'is-active': activeSection === 'creator-prompts' }">角色设定</button>
+        <button type="button" @click="scrollToSection('creator-extensions')" :class="{ 'is-active': activeSection === 'creator-extensions' }">世界与扩展</button>
+        <button type="button" @click="scrollToSection('creator-settings')" :class="{ 'is-active': activeSection === 'creator-settings' }">模型设置</button>
+      </nav>
+
       <template x-if="toast">
         <div class="xy-toast" :class="`xy-toast-${toast.type}`" x-text="toast.message"></div>
       </template>
 
-      <div class="editor-tip">
-        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01"/></svg>
-        <div x-text="creatorText('tip_text', '填好标题、描述、封面就可以保存。模型由平台统一接入。')"></div>
-      </div>
+      <div class="creator-editor__content">
+        <div class="editor-tip">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01"/></svg>
+          <div x-text="creatorText('tip_text', '填好标题、描述、封面就可以保存。模型由平台统一接入。')"></div>
+        </div>
 
-      <div class="editor-form">
+        <div class="creator-editor__layout">
+          <div class="editor-form">
         <!-- 基础字段 -->
+        <div class="editor-section-title" id="creator-basic" x-text="creatorText('basic_section_title', '基础设置')"></div>
         <div class="editor-field">
           <label class="editor-field__label" x-text="creatorText('name_label', '标题')"></label>
           <input class="xy-input" x-model="form.name" maxlength="48" :placeholder="creatorText('name_placeholder', '给你的角色起个名字')">
@@ -129,7 +147,7 @@
         </div>
 
         <!-- 视觉素材 -->
-        <div class="editor-section-title" x-text="creatorText('media_section_title', '视觉素材')"></div>
+        <div class="editor-section-title" id="creator-media" x-text="creatorText('media_section_title', '视觉素材')"></div>
         <div class="editor-row-2">
           <div class="editor-field">
             <label class="editor-field__label" x-text="creatorText('cover_label', '封面图像')"></label>
@@ -184,7 +202,7 @@
         </div>
 
         <!-- 提示词 -->
-        <div class="editor-section-title" x-text="creatorText('prompt_section_title', '角色提示词')"></div>
+        <div class="editor-section-title" id="creator-prompts" x-text="creatorText('prompt_section_title', '角色提示词')"></div>
 
         <div class="editor-field">
           <label class="editor-field__label" x-text="creatorText('description_label', '角色设定')"></label>
@@ -224,6 +242,7 @@
         </div>
 
         <!-- Prompt Manager（折叠） -->
+        <div class="editor-section-title" id="creator-extensions" x-text="creatorText('extensions_section_title', '世界与扩展')"></div>
         <div class="editor-group" :class="{ 'is-open': expand.promptManager }">
           <div class="editor-group__head" @click="expand.promptManager = !expand.promptManager">
             <div class="editor-group__title">
@@ -425,6 +444,7 @@
         </div>
 
         <!-- 默认模型设置（折叠） -->
+        <div class="editor-section-title" id="creator-settings" x-text="creatorText('settings_section_title', '模型与发布设置')"></div>
         <div class="editor-group" :class="{ 'is-open': expand.sampling }">
           <div class="editor-group__head" @click="expand.sampling = !expand.sampling">
             <div class="editor-group__title">
@@ -541,6 +561,44 @@
         <div class="form-panel !p-4 text-xs text-violet-200/65 leading-relaxed flex items-start gap-3">
           <svg class="w-4 h-4 flex-shrink-0 mt-0.5 text-cyan-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01"/></svg>
           <div x-text="creatorText('bottom_note', '角色默认使用站点模型，API Key 由后台统一管理。保存后可以随时在「我的角色」里编辑或删除。')"></div>
+        </div>
+          </div>
+
+          <aside class="creator-preview" :class="{ 'is-open': previewOpen }" aria-label="角色卡实时预览">
+            <div class="creator-preview__head">
+              <div>
+                <strong>实时预览</strong>
+                <span>填写内容会即时显示</span>
+              </div>
+              <button type="button" class="creator-preview__close" @click="previewOpen = false" aria-label="关闭预览">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 6l12 12M18 6L6 18"/></svg>
+              </button>
+            </div>
+            <div class="creator-preview__cover">
+              <img x-show="form.cover_url" :src="form.cover_url" alt="角色封面预览">
+              <div class="creator-preview__placeholder" x-show="!form.cover_url">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.7" d="M4 19.5V6.8A2.8 2.8 0 016.8 4h10.4A2.8 2.8 0 0120 6.8v12.7M8 11.2a2 2 0 100-4 2 2 0 000 4zm-4 6.3l4.7-4.5a1.6 1.6 0 012.2 0l2.1 2 1.5-1.4a1.6 1.6 0 012.2 0l3.3 3.1"/></svg>
+                <span>上传封面后显示预览</span>
+              </div>
+              <span class="creator-preview__visibility" x-text="form.is_public ? '公开' : '私密'"></span>
+            </div>
+            <div class="creator-preview__body">
+              <h2 x-text="form.name || '未命名角色'"></h2>
+              <p x-text="form.summary || form.description || '在左侧填写角色简介，探索页展示效果会出现在这里。'"></p>
+              <div class="creator-preview__tags" x-show="previewTags().length">
+                <template x-for="tag in previewTags()" :key="tag">
+                  <span x-text="tag"></span>
+                </template>
+              </div>
+              <dl class="creator-preview__stats">
+                <div><dt>开场白</dt><dd x-text="form.opening_statement ? '已填写' : '待填写'"></dd></div>
+                <div><dt>世界书</dt><dd x-text="`${form.world_info.length} 条`"></dd></div>
+                <div><dt>正则</dt><dd x-text="`${form.regex_scripts.length} 条`"></dd></div>
+              </dl>
+              <a x-show="editingId" class="creator-preview__chat" :href="`/app/chat.html?app_id=${encodeURIComponent(editingId)}`">保存后进入对话预览</a>
+            </div>
+          </aside>
+          <button type="button" class="creator-preview__backdrop" :class="{ 'is-open': previewOpen }" @click="previewOpen = false" aria-label="关闭预览"></button>
         </div>
       </div>
     </main>

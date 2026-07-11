@@ -50,6 +50,8 @@ function createPage() {
     expand: { persona: false, advanced: false, promptManager: false, greetings: false, worldinfo: false, sampling: false, voice: false, share: false },
     importing: false,
     siteSettings: null,
+    previewOpen: false,
+    activeSection: 'creator-basic',
 
     async init() {
       injectLayout('workshop');
@@ -85,6 +87,21 @@ function createPage() {
         .replace(/如选择[^。]+。/g, 'API Key 由后台统一管理。')
         .replace('我的：', '')
         .replace('我的模型', '站点模型');
+    },
+
+    previewTags() {
+      return String(this.form.tagsText || '')
+        .split(/[，,\n]/)
+        .map(tag => tag.trim())
+        .filter(Boolean)
+        .slice(0, 6);
+    },
+
+    scrollToSection(id) {
+      const target = document.getElementById(id);
+      if (!target) return;
+      this.activeSection = id;
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
     },
 
     async loadExisting() {

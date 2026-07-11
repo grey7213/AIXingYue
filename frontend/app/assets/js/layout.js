@@ -69,12 +69,12 @@ function sidebarUtilityHtml(settings = null) {
       <a href="/app/favorites.html">${escapeHtml(app.shell_favorites_link || '收藏')}</a>
     </div>
     <div class="app-shell-tools" aria-label="快捷工具">
-      <a href="/app/info.html" title="${escapeHtml(app.shell_notice_title || '公告')}">📢</a>
-      <a href="/app/logs.html" title="${escapeHtml(app.shell_logs_title || '记录')}">🔔</a>
-      <a href="/app/rewards.html" title="${escapeHtml(app.shell_rewards_title || '奖励')}">🎁</a>
-      <button type="button" data-shell-action="pictureless" title="${escapeHtml(app.shell_pictureless_title || '无图模式')}">🖼</button>
-      <button type="button" data-shell-action="theme" title="${escapeHtml(app.shell_theme_title || '明暗模式')}">🌙</button>
-      <a href="/app/me.html" title="${escapeHtml(app.shell_profile_title || '我的')}">👤</a>
+      <a href="/app/info.html" title="${escapeHtml(app.shell_notice_title || '公告')}">${svg('M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z')}</a>
+      <a href="/app/logs.html" title="${escapeHtml(app.shell_logs_title || '记录')}">${svg('M7 8h10M7 12h10M7 16h6M5 4h14v16H5z')}</a>
+      <a href="/app/rewards.html" title="${escapeHtml(app.shell_rewards_title || '奖励')}">${svg('M12 8c-1.7 0-3-.9-3-2s1.3-2 3-2 3 .9 3 2-1.3 2-3 2zm0 0v12m-7-8h14')}</a>
+      <button type="button" data-shell-action="pictureless" title="${escapeHtml(app.shell_pictureless_title || '无图模式')}">${svg('M4 16l4-4 3 3 5-6 4 7M4 6h16v12H4z')}</button>
+      <button type="button" data-shell-action="theme" title="${escapeHtml(app.shell_theme_title || '明暗模式')}">${svg('M20.4 15.2A8 8 0 118.8 3.6a6.5 6.5 0 0011.6 11.6z')}</button>
+      <a href="/app/me.html" title="${escapeHtml(app.shell_profile_title || '我的')}">${svg('M16 7a4 4 0 11-8 0 4 4 0 018 0zM4 21a8 8 0 0116 0')}</a>
     </div>`;
 }
 
@@ -96,7 +96,7 @@ export function sidebarHtml(active = 'home', settings = null) {
       </div>
       <div class="meta">
         <div class="nick truncate" x-text="user?.name || ${escapeHtml(jsString(appText(settings, 'shell_guest_name', '旅人')))}"></div>
-        <div class="pts">✦ <span x-text="points || 0"></span> ${escapeHtml(appText(settings, 'shell_points_suffix', '积分'))}</div>
+        <div class="pts"><span x-text="points || 0"></span> ${escapeHtml(appText(settings, 'shell_points_suffix', '积分'))}</div>
       </div>
     </a>
     ${sidebarUtilityHtml(settings)}`;
