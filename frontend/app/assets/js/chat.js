@@ -1128,12 +1128,12 @@ function chatPage() {
       const incomingConvId = params.get('conv_id') || params.get('conversation_id');
       if (incomingConvId) {
         const c = this.conversations.find(x => x.id === incomingConvId);
-        if (c) { await this.selectConversation(c); return; }
+        if (c) { await this.selectConversation(c, { forceBottom: true }); return; }
       }
       if (incomingAppId) {
         await this.startWithApp(incomingAppId);
       } else if (this.conversations.length > 0) {
-        await this.selectConversation(this.conversations[0]);
+        await this.selectConversation(this.conversations[0], { forceBottom: true });
       }
     },
 
@@ -1348,7 +1348,7 @@ function chatPage() {
       this._scrollSaveTimer = setTimeout(() => this.persistMessageScroll(), 120);
     },
 
-    restoreMessageScroll({ defaultToBottom = true } = {}) {
+    restoreMessageScroll({ defaultToBottom = true, forceBottom = false } = {}) {
       const key = this.messageScrollKey();
       this.$nextTick(() => {
         const el = this.$refs.messageArea;
@@ -1359,11 +1359,15 @@ function chatPage() {
         } catch {
           saved = null;
         }
-        if (saved && !saved.atBottom && Number.isFinite(Number(saved.top))) {
+        if (!forceBottom && saved && !saved.atBottom && Number.isFinite(Number(saved.top))) {
           el.scrollTop = Math.max(0, Math.min(Number(saved.top), el.scrollHeight));
           return;
         }
-        if (defaultToBottom) el.scrollTop = el.scrollHeight;
+        if (defaultToBottom || forceBottom) {
+          el.scrollTop = el.scrollHeight;
+          requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
+          setTimeout(() => { el.scrollTop = el.scrollHeight; }, 120);
+        }
       });
     },
 
@@ -1627,7 +1631,7 @@ function chatPage() {
       if (idx >= 0) this.messages.splice(idx, 1, { ...msg });
     },
 
-    async selectConversation(c) {
+    async selectConversation(c, { forceBottom = false } = {}) {
       this.persistMessageScroll();
       this.cancelActiveGeneration();
       const loadSeq = ++this._conversationLoadSeq;
@@ -1666,7 +1670,7 @@ function chatPage() {
         this.messageTotal = Number.isNaN(total) ? list.length : total;
         this.hasOlderMessages = !!data.has_more || this.messages.length < this.messageTotal;
         await this.loadMemoryContext();
-        this.restoreMessageScroll({ defaultToBottom: true });
+        this.restoreMessageScroll({ defaultToBottom: true, forceBottom });
       } catch (err) {
         this.messages = [];
         this.messageTotal = 0;
