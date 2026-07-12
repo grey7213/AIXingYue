@@ -8,7 +8,7 @@
   <link rel="icon" href="/favicon.ico">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="/app/assets/css/app.css?v=20260711-cloak-theme">
-  <script type="module" src="/app/assets/js/character.js?v=20260711-role-annotations-c"></script>
+  <script type="module" src="/app/assets/js/character.js?v=20260712-no-placeholder"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
@@ -136,7 +136,8 @@
       </section>
 
       <div x-show="!loading && !card" class="py-24 text-center text-violet-200/70">
-        <p class="mb-4" x-text="characterText('not_found_text', '没有找到这个角色')"></p>
+        <p class="mb-2 text-lg font-semibold" x-text="loadError || characterText('not_found_text', '没有找到这个角色')"></p>
+        <p class="mb-4 text-sm text-slate-400">可能是旧链接、已删除角色，或标签筛选中的过期缓存。</p>
         <a href="/app/explore.html" class="xy-btn xy-btn-primary" x-text="characterText('back_to_explore_text', '回到探索')"></a>
       </div>
     </main>

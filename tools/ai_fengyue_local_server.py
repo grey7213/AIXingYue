@@ -3,6 +3,8 @@ import argparse
 import ast
 import base64
 import email.message
+import email.utils
+import html
 import hashlib
 import io
 import json
@@ -482,12 +484,14 @@ def _resend_api_key() -> str:
     return ""
 
 
-def _send_verification_email_resend(to_email: str, sender: str, subject: str, body: str) -> str:
+def _send_verification_email_resend(to_email: str, sender: str, subject: str, body: str, html_body: str = "") -> str:
     api_key = _resend_api_key()
     if not api_key:
         raise RuntimeError("Resend API key is not configured")
     endpoint = str(os.environ.get("RESEND_API_URL") or "https://api.resend.com/emails").strip()
     payload = {"from": sender, "to": [to_email], "subject": subject, "text": body}
+    if html_body:
+        payload["html"] = html_body
     request = Request(
         endpoint,
         data=json_bytes(payload),
@@ -517,23 +521,32 @@ def _send_verification_email_resend(to_email: str, sender: str, subject: str, bo
 
 def send_verification_email(to_email: str, code: str, lang: str = "zh-Hans", purpose: str = "register") -> str:
     host = os.environ.get("SMTP_HOST")
-    sender = os.environ.get("SMTP_FROM") or f"noreply@patcher.villainy.top"
+    sender_address = os.environ.get("SMTP_FROM") or f"noreply@patcher.villainy.top"
+    sender = sender_address if "<" in sender_address else email.utils.formataddr((APP_BRAND, sender_address))
     reset_purpose = (purpose or "").strip().lower() in ("password_reset", "reset_password", "reset")
     subject = f"{APP_BRAND} 密码重置验证码" if reset_purpose else f"{APP_BRAND} 注册验证码"
     action = "密码重置" if reset_purpose else "注册"
     body = f"你的 {APP_BRAND} {action}验证码是：{code}\n\n验证码 10 分钟内有效。如果不是你本人操作，请忽略这封邮件。\n"
+    html_body = (
+        '<div style="font-family:Arial,Microsoft YaHei,sans-serif;max-width:520px;margin:auto;padding:28px;color:#241b18;background:#fffaf4;border:1px solid #f0dfcf;border-radius:18px">'
+        f'<h2>{html.escape(APP_BRAND)} {html.escape(action)}验证码</h2><p>请在 10 分钟内输入下方验证码：</p>'
+        f'<div style="font-size:34px;font-weight:800;letter-spacing:8px;padding:18px;text-align:center;color:#ff2e63">{html.escape(code)}</div>'
+        '<p style="font-size:13px;color:#8a7d76">如果不是你本人操作，请忽略这封邮件。请勿将验证码转发给他人。</p></div>'
+    )
     if not (lang or "").lower().startswith("zh"):
         subject = f"{APP_BRAND} password reset code" if reset_purpose else f"{APP_BRAND} verification code"
         action = "password reset" if reset_purpose else "verification"
         body = f"Your {APP_BRAND} {action} code is: {code}\n\nThis code expires in 10 minutes.\n"
+        html_body = f'<div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;padding:28px"><h2>{html.escape(APP_BRAND)} verification code</h2><p>This code expires in 10 minutes.</p><div style="font-size:34px;font-weight:800;letter-spacing:8px;text-align:center">{html.escape(code)}</div></div>'
     msg = email.message.EmailMessage()
     msg["From"] = sender
     msg["To"] = to_email
     msg["Subject"] = subject
     msg.set_content(body)
+    msg.add_alternative(html_body, subtype="html")
     if _resend_api_key():
         try:
-            message_id = _send_verification_email_resend(to_email, sender, subject, body)
+            message_id = _send_verification_email_resend(to_email, sender, subject, body, html_body)
             suffix = f" id={message_id}" if message_id else ""
             log(f"accepted verification email for {to_email} via Resend HTTPS{suffix}")
             return message_id
@@ -4769,8 +4782,8 @@ class Store:
             where.append("(id like ? or display_id like ? or name like ? or summary like ? or description like ? or tags like ?)")
             params.extend([f"%{search}%", f"%{search}%", f"%{search}%", f"%{search}%", f"%{search}%", f"%{search}%"])
         if tag:
-            where.append("tags like ?")
-            params.append(f"%{tag}%")
+            where.append("(exists(select 1 from json_each(case when json_valid(local_apps.tags) then local_apps.tags else '[]' end) where trim(cast(value as text))=?) or (not json_valid(local_apps.tags) and tags like ?))")
+            params.extend([tag, f"%{tag}%"])
         if str(content_zone or "").strip().lower() in ("clean", "safe", "pure"):
             clean_expr = (
                 "lower(coalesce(name,'') || ' ' || coalesce(summary,'') || ' ' || "
@@ -12339,6 +12352,8 @@ class Handler(BaseHTTPRequestHandler):
                     card["user_tags"] = self.store.list_user_app_tags(user["id"] if user else None, card["id"])
                     return go_response(card) if normalized.startswith("go/") else ok_response(card)
             data = app_config_json(app_id)
+            if CONTENT_MODE == "local_only":
+                return error_response("角色不存在或已下架", 404)
             fallback = go_response(data) if normalized.startswith("go/") else data
             return proxy_json(normalized, query, fallback)
 
@@ -12509,7 +12524,9 @@ class Handler(BaseHTTPRequestHandler):
                         card["icon"] = ""
                     cards.append(card)
                 return go_response({"apps": cards, "total": total, "is_cache": True, "page": page, "page_size": page_size, "sort": sort, "tag": tag, "seed": random_seed, "pictureless": pictureless, "zone": content_zone})
-            # 本地空 → 回源上游
+            if CONTENT_MODE == "local_only":
+                return go_response({"apps": [], "total": 0, "is_cache": True, "page": page, "page_size": page_size, "sort": sort, "tag": tag, "seed": random_seed, "pictureless": pictureless, "zone": content_zone})
+            # 非本地库模式才允许回源上游
             fallback = go_response({"apps": [], "total": 0, "is_cache": False})
             explore_payload = self.store.first_nonempty_explore_payload()
             if isinstance(explore_payload, dict):

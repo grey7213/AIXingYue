@@ -186,6 +186,7 @@ function characterPage() {
     points: 0,
     loading: false,
     card: null,
+    loadError: '',
     siteSettings: null,
     comments: [],
     commentsTotal: 0,
@@ -223,6 +224,7 @@ function characterPage() {
 
     async loadCard(id) {
       this.loading = true;
+      this.loadError = '';
       try {
         const r = await api.appDetails(id);
         const card = normalizeCard(r);
@@ -231,9 +233,10 @@ function characterPage() {
           this.userTagDraft = (this.card.user_tags || []).join('，');
           await this.loadComments(false);
         }
-      } catch {
+      } catch (err) {
         this.card = null;
         this.comments = [];
+        this.loadError = err?.code === 404 ? '这个角色不存在或已经下架' : '角色加载失败，请稍后重试';
       } finally {
         this.loading = false;
       }
