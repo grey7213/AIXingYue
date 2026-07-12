@@ -7,7 +7,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
   <link rel="icon" href="/favicon.ico">
   <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260712-model-sheet-hide">
+  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260712-theme-safe">
   <style>
     :root {
       --xy-visual-height: 100vh;
@@ -1544,6 +1544,9 @@
             <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 18l6-6-6-6"/></svg>
           </button>
           <div class="chat-right-menu__actions">
+            <button type="button" data-shell-action="theme">
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.4 15.2A8 8 0 118.8 3.6a6.5 6.5 0 0011.6 11.6z"/></svg><span>明暗模式</span>
+            </button>
             <button type="button" :class="{ 'is-active': memoryOpen }" @click="toggleMemoryPanel">
               <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 4h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1zM9 8h6M9 12h6"/></svg><span>长期记忆</span>
             </button>
