@@ -428,6 +428,10 @@ function sanitizeUrlAttribute(el, attr) {
 
 function rewriteTavernHelperScript(source) {
   return String(source || '')
+    .replace(/\bwindow\.parent\.getChatMessages\b/g, 'window.__xySTTop.getChatMessages')
+    .replace(/(^|[^\w$.])parent\.getChatMessages\b/g, '$1window.__xySTTop.getChatMessages')
+    .replace(/\bwindow\.parent\.getChatMessage\b/g, 'window.__xySTTop.getChatMessage')
+    .replace(/(^|[^\w$.])parent\.getChatMessage\b/g, '$1window.__xySTTop.getChatMessage')
     .replace(/\bwindow\.parent\.SillyTavern\b/g, 'window.__xySTTop.SillyTavern')
     .replace(/\bparent\.SillyTavern\b/g, 'window.__xySTTop.SillyTavern')
     .replace(/\bwindow\.top\b/g, 'window.__xySTTop')
@@ -530,7 +534,26 @@ function buildTavoBridgeScript() {
         const raw = document.getElementById('raw-data-store');
         return raw ? raw.textContent || raw.innerText || '' : '';
       };
-      const currentMessage = () => ({ mes: rawText(), name: 'assistant', is_system: false, is_user: false });
+      const currentMessage = () => {
+        const value = rawText();
+        return { message_id: 0, id: 0, role: 'assistant', message: value, mes: value, content: value, name: 'assistant', is_system: false, is_user: false };
+      };
+      const chatMessages = () => [currentMessage()];
+      const getChatMessages = async (count, end, role) => {
+        let values = chatMessages();
+        if (typeof count === 'string' && ['user', 'assistant', 'system'].includes(count)) { role = count; count = null; }
+        if (role) values = values.filter(item => item.role === String(role));
+        if (end != null) values = values.slice(Number(count || 0), Number(end));
+        else if (count != null && Number.isFinite(Number(count))) values = values.slice(-Math.max(0, Number(count)));
+        return clone(values);
+      };
+      const getChatMessage = async id => clone(chatMessages().find(item => String(item.message_id) === String(id)) || currentMessage());
+      const matchChatMessages = async (pattern, options = {}) => {
+        let regex;
+        try { regex = new RegExp(String(pattern || ''), options.flags || 'i'); } catch (e) { return []; }
+        const values = await getChatMessages(null, null, options.role);
+        return values.filter(item => regex.test(String(item.mes || item.content || '')));
+      };
       const context = {
         get chat() { return [currentMessage()]; },
         saveChat() { return Promise.resolve(true); },
@@ -558,6 +581,11 @@ function buildTavoBridgeScript() {
           resize();
         } catch (e) {}
       };
+      topProxy.getChatMessages = getChatMessages;
+      topProxy.getChatMessage = getChatMessage;
+      topProxy.matchChatMessages = matchChatMessages;
+      topProxy.getLastMessageId = () => 0;
+      topProxy.getCurrentMessageId = () => 0;
       const emptyWorldNames = () => [];
       const emptyWorld = () => Promise.resolve([]);
       window.__xyLocalStorage = storage;
@@ -565,6 +593,11 @@ function buildTavoBridgeScript() {
       window.__xySTTop = topProxy;
       window.context = context;
       window.SillyTavern = topProxy.SillyTavern;
+      window.getChatMessages = getChatMessages;
+      window.getChatMessage = getChatMessage;
+      window.matchChatMessages = matchChatMessages;
+      window.getLastMessageId = () => 0;
+      window.getCurrentMessageId = () => 0;
       window.getCharWorldbookNames = () => ({ primary: '', additional: [] });
       window.getChatWorldbookName = () => '';
       window.getGlobalWorldbookNames = emptyWorldNames;
