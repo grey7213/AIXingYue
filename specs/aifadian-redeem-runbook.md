@@ -20,7 +20,9 @@
 ## 线上购买入口
 
 - AI星月购买按钮：`https://patcher.villainy.top/app/rewards.html`
-- 爱发电购买页：`https://ifdian.net/a/villainy`
+- 爱发电购买页：`https://ifdian.net/a/villainy?tab=home`
+- 2026-07-12 已重新开放线上充值与兑换入口：`PAYMENT_CHANNEL_ENABLED=true`，爱发电商品和卡密由站长维护。
+- 2026-07-12 已为 7 个已上架商品分别写入 20 个自动随机发货卡密，并将站内 4 个积分包和 3 个会员包分别绑定到对应 `/item/<id>` 直达链接。
 - 线上 `deposit-meta` 已配置：
   - `aifadian_url=https://ifdian.net/a/villainy`
   - `payment_available=true`

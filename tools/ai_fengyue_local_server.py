@@ -2007,6 +2007,7 @@ def sanitize_site_settings(data: dict | None) -> dict:
                 "points": points,
                 "bonus_rate": clean_int(item.get("bonus_rate"), 0, 0, 1000),
                 "label": label,
+                "purchase_url": clean_url(item.get("purchase_url"), ""),
             })
     out["deposit"]["packages"] = clean_packages or defaults["deposit"]["packages"]
     subscriptions = deposit.get("subscriptions")
@@ -2027,6 +2028,7 @@ def sanitize_site_settings(data: dict | None) -> dict:
                 "period": clean_text(item.get("period"), "月", 12) or "月",
                 "label": label,
                 "description": clean_text(item.get("description"), "", 120),
+                "purchase_url": clean_url(item.get("purchase_url"), ""),
             })
     out["deposit"]["subscriptions"] = clean_subscriptions or defaults["deposit"]["subscriptions"]
 

@@ -217,7 +217,7 @@ export function historiesPage() {
 
 export function workshopPage() {
   return {
-    user: null, points: 0, stats: null, myApps: [], siteSettings: null, ready: false,
+    user: null, points: 0, stats: null, myApps: [], myTotal: 0, siteSettings: null, ready: false,
     creatorLeaderboard: [], creatorContest: null,
     async init() {
       injectLayout('workshop');
@@ -226,17 +226,27 @@ export function workshopPage() {
         if (!(await loadUser(this))) return;
         const [s, m, contests, leaderboard] = await Promise.all([
           api.homeStats().catch(() => null),
-          api.myApps({ page: 1, page_size: 6 }).catch(() => null),
+          api.myApps({ page: 1, page_size: 8 }).catch(() => null),
           api.creatorContests().catch(() => null),
           api.creatorLeaderboard({ limit: 10 }).catch(() => null),
         ]);
         this.stats = s?.data || null;
         this.myApps = m?.data?.list || [];
+        this.myTotal = m?.data?.total ?? this.myApps.length;
         this.creatorContest = contests?.data?.contest || contests?.contest || null;
         this.creatorLeaderboard = leaderboard?.data?.list || contests?.data?.leaderboard || [];
       } finally {
         this.ready = true;
       }
+    },
+    get publicCount() {
+      return this.myApps.filter((a) => a?.is_public !== false).length;
+    },
+    get libraryTotal() {
+      return (this.stats?.apps?.total || 0).toLocaleString('zh-CN');
+    },
+    medalClass(index) {
+      return index === 0 ? 'is-gold' : index === 1 ? 'is-silver' : index === 2 ? 'is-bronze' : '';
     },
     emptyText(key, fallback = '') { return emptyText(this, key, fallback); },
     appNavText(key, fallback = '') { return appNavText(this, key, fallback); },
@@ -336,8 +346,8 @@ export function rewardsPage() {
       const r = await api.redemptions({ page: 1, page_size: 20 }).catch(() => null);
       this.redemptions = r?.data?.list || [];
     },
-    openAifadian() {
-      const url = this.deposit?.aifadian_url;
+    openAifadian(item = null) {
+      const url = item?.purchase_url || this.deposit?.aifadian_url;
       if (this.paymentAvailable() && url) {
         window.open(url, '_blank', 'noopener,noreferrer');
       } else {

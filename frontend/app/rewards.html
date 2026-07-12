@@ -88,7 +88,7 @@
             </div>
             <div class="grid md:grid-cols-2 gap-3">
               <template x-for="pkg in (deposit?.packages || [])" :key="pkg.id">
-                <button class="quick-tile text-left !p-4" @click="openAifadian">
+                <button class="quick-tile text-left !p-4" @click="openAifadian(pkg)">
                   <div class="flex items-start justify-between gap-3">
                     <strong x-text="pkg.label"></strong>
                     <span class="xy-badge xy-badge-purple" x-text="`¥${pkg.price_cny}`"></span>
@@ -110,7 +110,7 @@
             </div>
             <div class="grid md:grid-cols-3 gap-3">
               <template x-for="sub in (deposit?.subscriptions || [])" :key="sub.id">
-                <button class="quick-tile text-left !p-4" @click="openAifadian">
+                <button class="quick-tile text-left !p-4" @click="openAifadian(sub)">
                   <div class="flex items-start justify-between gap-3">
                     <strong x-text="sub.label"></strong>
                     <span class="xy-badge xy-badge-green" x-text="`¥${sub.price_cny}/${sub.period || '月'}`"></span>
