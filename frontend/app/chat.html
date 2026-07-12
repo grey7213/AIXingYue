@@ -1465,7 +1465,7 @@
       .generation-status__dot { animation: none !important; transition: none !important; }
     }
   </style>
-  <script type="module" src="/app/assets/js/chat.js?v=20260712-tavo-compat"></script>
+  <script type="module" src="/app/assets/js/chat.js?v=20260712-edge-tts"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
@@ -1543,6 +1543,10 @@
             <span class="model-picker-trigger__status">可用</span>
             <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 18l6-6-6-6"/></svg>
           </button>
+          <label class="chat-right-menu__label" x-show="ttsVoices.length">角色语音</label>
+          <select x-show="ttsVoices.length" x-model="currentTtsVoice" @change="persistTtsVoice">
+            <template x-for="voice in ttsVoices" :key="voice.id"><option :value="voice.id" x-text="`${voice.name} · ${voice.gender} · ${voice.style}`"></option></template>
+          </select>
           <div class="chat-right-menu__actions">
             <button type="button" data-shell-action="theme">
               <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.4 15.2A8 8 0 118.8 3.6a6.5 6.5 0 0011.6 11.6z"/></svg><span>明暗模式</span>
@@ -1710,9 +1714,9 @@
                   <span x-text="chatText('edit_text', '编辑')"></span>
                 </button>
                 <template x-if="m.role === 'assistant'">
-                  <button class="msg-act" @click="speakMessage(m)" :title="chatText('speak_text', '朗读')">
+                  <button class="msg-act" @click="speakMessage(m)" :disabled="ttsLoadingId === m.id" :title="ttsPlayingId === m.id ? '停止播放' : chatText('speak_text', '朗读')">
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5L6 9H3v6h3l5 4V5zm5 4a5 5 0 010 6m3-9a9 9 0 010 12"/></svg>
-                    <span x-text="chatText('speak_text', '朗读')"></span>
+                    <span x-text="ttsLoadingId === m.id ? '生成语音…' : (ttsPlayingId === m.id ? '停止' : chatText('speak_text', '朗读'))"></span>
                   </button>
                 </template>
                 <button class="msg-act" @click="rollbackMessage(m)" :title="chatText('rollback_text', '回溯')">

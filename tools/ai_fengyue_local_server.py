@@ -42,6 +42,21 @@ def env_bool(name: str, default: bool = False) -> bool:
 
 CODE_TTL_SECONDS = 10 * 60
 CHAT_MESSAGE_COST = int(os.environ.get("CHAT_MESSAGE_COST", "50") or "50")
+TTS_MAX_CHARS = 1200
+TTS_VOICES = [
+    {"id":"zh-CN-XiaoxiaoNeural","name":"晓晓","gender":"女声","style":"温柔自然"},
+    {"id":"zh-CN-XiaoyiNeural","name":"晓伊","gender":"女声","style":"活泼甜美"},
+    {"id":"zh-CN-liaoning-XiaobeiNeural","name":"晓北","gender":"女声","style":"东北亲切"},
+    {"id":"zh-CN-shaanxi-XiaoniNeural","name":"晓妮","gender":"女声","style":"陕西方言"},
+    {"id":"zh-CN-YunxiNeural","name":"云希","gender":"男声","style":"年轻清朗"},
+    {"id":"zh-CN-YunjianNeural","name":"云健","gender":"男声","style":"沉稳有力"},
+    {"id":"zh-CN-YunyangNeural","name":"云扬","gender":"男声","style":"专业自然"},
+    {"id":"zh-CN-YunxiaNeural","name":"云夏","gender":"男声","style":"少年感"},
+    {"id":"zh-HK-HiuMaanNeural","name":"晓曼","gender":"粤语女声","style":"自然"},
+    {"id":"zh-HK-WanLungNeural","name":"云龙","gender":"粤语男声","style":"自然"},
+    {"id":"zh-TW-HsiaoChenNeural","name":"晓臻","gender":"台湾女声","style":"自然"},
+    {"id":"zh-TW-YunJheNeural","name":"云哲","gender":"台湾男声","style":"自然"},
+]
 NEW_USER_INITIAL_POINTS = int(os.environ.get("NEW_USER_INITIAL_POINTS", str(CHAT_MESSAGE_COST * 50)) or str(CHAT_MESSAGE_COST * 50))
 NEW_USER_INITIAL_CHAT_TIMES = max(0, NEW_USER_INITIAL_POINTS // max(1, CHAT_MESSAGE_COST))
 REGISTER_CODE_EMAIL_HOURLY_LIMIT = int(os.environ.get("REGISTER_CODE_EMAIL_HOURLY_LIMIT", "3") or "3")
@@ -10830,6 +10845,45 @@ def normalize_data_array_response(value: object) -> object:
     return value
 
 
+def clean_tts_text(value: object) -> str:
+    text = str(value or "")
+    text = re.sub(r"<script[\s\S]*?</script>|<style[\s\S]*?</style>", " ", text, flags=re.I)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"```[\s\S]*?```", " ", text)
+    text = re.sub(r"\[[^\]]+\]\([^\)]+\)", " ", text)
+    text = re.sub(r"[*_#>`~]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()[:TTS_MAX_CHARS]
+
+
+def synthesize_edge_tts(text: str, voice_id: str, rate: str = "+0%", pitch: str = "+0Hz") -> tuple[str, bool]:
+    if MEDIA_DIR is None:
+        raise RuntimeError("media dir not ready")
+    allowed = {item["id"] for item in TTS_VOICES}
+    voice = voice_id if voice_id in allowed else TTS_VOICES[0]["id"]
+    rate = rate if re.fullmatch(r"[+-]\d{1,2}%", str(rate or "")) else "+0%"
+    pitch = pitch if re.fullmatch(r"[+-]\d{1,2}Hz", str(pitch or "")) else "+0Hz"
+    key = hashlib.sha256(f"edge|{voice}|{rate}|{pitch}|{text}".encode("utf-8")).hexdigest()
+    dest_dir = MEDIA_DIR / "tts"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / f"{key}.mp3"
+    cached = dest.exists() and dest.stat().st_size > 512
+    if not cached:
+        tmp = dest.with_suffix(".tmp.mp3")
+        cmd = [
+            shutil.which("edge-tts") or "edge-tts", "--voice", voice,
+            f"--rate={rate}", f"--pitch={pitch}", "--text", text, "--write-media", str(tmp),
+        ]
+        try:
+            subprocess.run(cmd, check=True, timeout=45, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            if not tmp.exists() or tmp.stat().st_size <= 512:
+                raise RuntimeError("TTS returned empty audio")
+            tmp.replace(dest)
+        finally:
+            if tmp.exists():
+                tmp.unlink(missing_ok=True)
+    return public_url(f"/media-cache/tts/{dest.name}"), cached
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "AIFengyueLocal/1.0"
     protocol_version = "HTTP/1.0"
@@ -11018,7 +11072,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         ext = fpath.suffix.lower()
         ctype = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-                 ".webp": "image/webp", ".avif": "image/avif", ".gif": "image/gif"}.get(ext, "image/jpeg")
+                 ".webp": "image/webp", ".avif": "image/avif", ".gif": "image/gif",
+                 ".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg"}.get(ext, "application/octet-stream")
         self.send_file(200, fpath, ctype)
 
     def handle_image_proxy(self, query: str) -> None:
@@ -11436,6 +11491,32 @@ class Handler(BaseHTTPRequestHandler):
             return ok_response(public_site_settings_json(self.store.site_settings()))
 
         user = self.authenticated_user()
+
+        if normalized == "console/api/web/tts/voices":
+            if not self.authenticated_token_user():
+                return error_response("unauthorized", 401)
+            return ok_response({"provider": "edge-tts", "default_voice": TTS_VOICES[0]["id"], "list": TTS_VOICES})
+
+        if normalized == "console/api/web/tts/synthesize":
+            token_user = self.authenticated_token_user()
+            if not token_user:
+                return error_response("unauthorized", 401)
+            if not isinstance(body, dict):
+                return error_response("invalid body")
+            message_id = str(body.get("message_id") or "").strip()
+            message = self.store.get_message(message_id, token_user["id"]) if message_id else None
+            if not message or str(message.get("role") or "") != "assistant":
+                return error_response("assistant message not found", 404)
+            text = clean_tts_text(message.get("content"))
+            if not text:
+                return error_response("message has no speakable text", 400)
+            try:
+                url, cached = synthesize_edge_tts(text, str(body.get("voice_id") or ""), str(body.get("rate") or "+0%"), str(body.get("pitch") or "+0Hz"))
+                self.store.log_event(token_user["id"], "tts", "生成角色语音", {"message_id": message_id, "voice_id": str(body.get("voice_id") or ""), "cached": cached})
+                return ok_response({"url": url, "cached": cached, "provider": "edge-tts"})
+            except Exception as exc:
+                log(f"TTS synthesis failed for {message_id}: {type(exc).__name__}: {exc}")
+                return error_response("语音生成失败，请稍后重试", 502)
 
         if normalized == "console/api/register/email":
             email_value = normalize_email(body.get("email") if isinstance(body, dict) else "")

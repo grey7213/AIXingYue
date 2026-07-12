@@ -1070,6 +1070,10 @@ function chatPage() {
     savingSummary: false,
     modelPresets: [],
     currentModelId: '',
+    ttsVoices: [],
+    currentTtsVoice: localStorage.getItem('ai_xingyue_tts_voice') || 'zh-CN-XiaoxiaoNeural',
+    ttsLoadingId: '',
+    ttsPlayingId: '',
     modelPickerOpen: false,
     modelSearch: '',
     modelCategory: 'all',
@@ -1087,6 +1091,7 @@ function chatPage() {
     _lifecycleBound: false,
     _generationSeq: 0,
     _activeAbortController: null,
+    _ttsAudio: null,
     _conversationLoadSeq: 0,
     _refreshAfterGeneration: false,
     siteSettings: null,
@@ -1107,6 +1112,7 @@ function chatPage() {
         const p = await api.points();
         this.points = parseInt(p.points || p.data?.points || 0, 10);
         await this.loadModelPresets();
+        await this.loadTtsVoices();
         await this.loadTavoPluginRuntimeContributions();
       } catch (err) {
         if (err instanceof ApiError && err.code === 401) {
@@ -1461,6 +1467,17 @@ function chatPage() {
       return model && model !== name ? `${name} · ${model}` : name;
     },
 
+    async loadTtsVoices() {
+      try {
+        const r = await api.ttsVoices();
+        const data = r?.data || r || {};
+        this.ttsVoices = Array.isArray(data.list) ? data.list : [];
+        if (!this.ttsVoices.some(v => v.id === this.currentTtsVoice)) this.currentTtsVoice = data.default_voice || this.ttsVoices[0]?.id || '';
+      } catch { this.ttsVoices = []; }
+    },
+
+    persistTtsVoice() { localStorage.setItem('ai_xingyue_tts_voice', this.currentTtsVoice || ''); },
+
     currentModelPreset() {
       return this.modelPresets.find(p => p.id === this.currentModelId) || null;
     },
@@ -1796,18 +1813,24 @@ function chatPage() {
       }
     },
 
-    speakMessage(m) {
-      const text = (m?.content || '').trim();
-      if (!text) return;
-      if (!('speechSynthesis' in window)) {
-        alert(this.chatText('unsupported_speak_text', '当前浏览器不支持朗读'));
-        return;
+    async speakMessage(m) {
+      if (!m?.id || m.role !== 'assistant') return;
+      if (this._ttsAudio) { this._ttsAudio.pause(); this._ttsAudio = null; }
+      if (this.ttsPlayingId === m.id) { this.ttsPlayingId = ''; return; }
+      this.ttsLoadingId = m.id;
+      try {
+        const r = await api.synthesizeTts({ message_id: m.id, voice_id: this.currentTtsVoice });
+        const data = r?.data || r || {};
+        if (!data.url) throw new Error('语音地址为空');
+        const audio = new Audio(data.url);
+        this._ttsAudio = audio;
+        audio.onplay = () => { this.ttsPlayingId = m.id; this.ttsLoadingId = ''; };
+        audio.onended = audio.onerror = () => { this.ttsPlayingId = ''; this.ttsLoadingId = ''; this._ttsAudio = null; };
+        await audio.play();
+      } catch (err) {
+        this.ttsLoadingId = ''; this.ttsPlayingId = '';
+        alert(err.message || '语音生成失败，请稍后重试');
       }
-      window.speechSynthesis.cancel();
-      const utter = new SpeechSynthesisUtterance(text);
-      utter.lang = 'zh-CN';
-      utter.rate = 1;
-      window.speechSynthesis.speak(utter);
     },
 
     startSpeechInput() {

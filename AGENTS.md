@@ -60,6 +60,11 @@
 
 ## Reusable Pitfalls
 
+- Symptom: Web 聊天角色朗读依赖浏览器默认语音，不同设备音色、可用性和效果不一致。
+  Cause: Web Speech API 的语音库由设备和浏览器提供，站点无法稳定控制音色，也无法保证移动端可用。
+  Fix: 2026-07-12 改用服务端 `edge-tts`，前端通过鉴权接口合成自己会话中的 assistant 消息并播放 MP3；提供 12 种普通话、粤语和台湾音色，并按文本、音色、语速、音调缓存结果。
+  Verify: 线上接口返回 12 种音色和 `audio/mpeg`；同一消息首次合成 `cached=false`、音频 655920 bytes，第二次 `cached=true`。
+
 - Symptom: Tavo Lorebook JSON 导入后世界书为空，或“反扒卡”可被投稿者编辑删除。
   Cause: Tavo v2 文件的 `entries` 可能是对象字典而非数组；旧规范化仅接受列表，且角色世界书原本完全由卡片自身控制。
   Fix: 2026-07-12 增加站点必需世界书 `tavo-anti-scrape-v2`，从 `/opt/ai-fengyue-backend/data/tavo_anti_scrape_worldbook.json` 加载对象字典，创建/导入/编辑/运行时均强制去重并置于 `world_info[0]`，priority=10000、order=-10000；生成时完整放在系统提示最前。

@@ -143,6 +143,8 @@ export const api = {
   },
   myAppsCount: () => rawRequest('/console/api/web/my-apps-count'),
   modelPresets: () => rawRequest('/console/api/web/model-presets'),
+  ttsVoices: () => rawRequest('/console/api/web/tts/voices'),
+  synthesizeTts: (payload) => rawRequest('/console/api/web/tts/synthesize', { method: 'POST', body: payload }),
   providerTemplates: () => rawRequest('/console/api/web/provider-templates'),
   tavoPluginRuntimeContributions: () => rawRequest('/console/api/web/tavo-plugins/runtime-contributions'),
   userModelPresets: () => rawRequest('/console/api/web/user-model-presets'),
