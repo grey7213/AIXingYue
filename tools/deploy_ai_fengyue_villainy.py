@@ -10,6 +10,7 @@ import paramiko
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BACKEND = ROOT / "tools" / "ai_fengyue_local_server.py"
+DEFAULT_REQUIRED_WORLD_BOOK = ROOT / "tools" / "data" / "tavo_anti_scrape_worldbook.json"
 DEFAULT_FRONTEND = ROOT / "frontend"
 DEFAULT_APK = ROOT / "output" / "zip-1-repack" / "ai-xingyue-patcher-signed.apk"
 DEFAULT_KEY = Path.home() / ".ssh" / "villainy_backup_ed25519"
@@ -310,6 +311,10 @@ def main() -> int:
         remote_backend = posixpath.join(args.deploy_dir, "ai_fengyue_local_server.py")
         log(f"uploading backend to {remote_backend}")
         put_file(sftp, args.backend, remote_backend)
+        if DEFAULT_REQUIRED_WORLD_BOOK.exists():
+            remote_worldbook = posixpath.join(args.deploy_dir, "data", "tavo_anti_scrape_worldbook.json")
+            log(f"uploading required world book to {remote_worldbook}")
+            put_file(sftp, DEFAULT_REQUIRED_WORLD_BOOK, remote_worldbook)
 
         env_path = posixpath.join(args.deploy_dir, "ai-fengyue.env")
         if remote_exists(sftp, env_path):

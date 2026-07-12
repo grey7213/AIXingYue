@@ -60,6 +60,11 @@
 
 ## Reusable Pitfalls
 
+- Symptom: Tavo Lorebook JSON 导入后世界书为空，或“反扒卡”可被投稿者编辑删除。
+  Cause: Tavo v2 文件的 `entries` 可能是对象字典而非数组；旧规范化仅接受列表，且角色世界书原本完全由卡片自身控制。
+  Fix: 2026-07-12 增加站点必需世界书 `tavo-anti-scrape-v2`，从 `/opt/ai-fengyue-backend/data/tavo_anti_scrape_worldbook.json` 加载对象字典，创建/导入/编辑/运行时均强制去重并置于 `world_info[0]`，priority=10000、order=-10000；生成时完整放在系统提示最前。
+  Verify: 线上迁移报告 `total=8791, first_entry=8791, duplicates=0`；运行时验证 `future_first=tavo-anti-scrape-v2`、`prompt_first=true`、完整尾标存在。
+
 - Symptom: 注册验证码偶发“发送失败”、收不到，且角色卡批量导入时集中出现 `database is locked`。
   Cause: 验证码原先与约 1.3GB 角色内容共用主 SQLite；长写事务会在邮件提交前锁死验证码创建，重复发送还会生成新码导致迟到邮件的旧码失效。
   Fix: 2026-07-11 将验证码和投递状态迁移到独立 `verification_mail.sqlite3`（WAL + busy timeout），10 分钟内复用活动验证码并设置 60 秒投递冷却，验证时兼容旧主库验证码。

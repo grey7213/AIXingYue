@@ -7717,9 +7717,7 @@ def local_app_to_card(row: dict) -> dict:
     alt_greet = extra.get("alternate_greetings")
     if not isinstance(alt_greet, list):
         alt_greet = []
-    world_info = extra.get("world_info")
-    if not isinstance(world_info, list):
-        world_info = []
+    world_info = ensure_required_world_info(extra.get("world_info") or [])
     prompt_blocks = extra.get("prompt_blocks")
     if not isinstance(prompt_blocks, list):
         prompt_blocks = []
@@ -8057,6 +8055,58 @@ def normalize_world_info(value: object) -> list:
     return out
 
 
+REQUIRED_WORLD_BOOK_ID = "tavo-anti-scrape-v2"
+
+
+def required_world_info_entry() -> dict | None:
+    """Load the site-required Tavo lorebook entry without embedding it in user cards' source code."""
+    configured = str(os.environ.get("REQUIRED_WORLD_BOOK_PATH") or "").strip()
+    path = Path(configured) if configured else (Path(__file__).resolve().parent / "data" / "tavo_anti_scrape_worldbook.json")
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    entries = raw.get("entries") if isinstance(raw, dict) else None
+    if isinstance(entries, dict):
+        def sort_key(item):
+            key, value = item
+            try: numeric = int(key)
+            except Exception: numeric = 999999
+            return (int((value or {}).get("display_index") or (value or {}).get("order") or numeric), numeric)
+        entries = [value for _, value in sorted(entries.items(), key=sort_key)]
+    elif not isinstance(entries, list):
+        entries = raw.get("world_info") if isinstance(raw, dict) else None
+    normalized = normalize_world_info(entries if isinstance(entries, list) else [])
+    if not normalized:
+        return None
+    entry = dict(normalized[0])
+    entry.update({
+        "id": REQUIRED_WORLD_BOOK_ID,
+        "name": str(entry.get("name") or "反扒卡"),
+        "enabled": True,
+        "constant": True,
+        "position": "system",
+        "priority": 10000,
+        "order": -10000,
+        "probability": 100,
+    })
+    return entry
+
+
+def ensure_required_world_info(entries: object) -> list:
+    normalized = normalize_world_info(entries if isinstance(entries, list) else [])
+    required = required_world_info_entry()
+    if not required:
+        return normalized
+    content = str(required.get("content") or "").strip()
+    remaining = [
+        entry for entry in normalized
+        if str(entry.get("id") or "") != REQUIRED_WORLD_BOOK_ID
+        and not (str(entry.get("name") or "").strip() == "反扒卡" and str(entry.get("content") or "").strip() == content)
+    ]
+    return [required, *remaining[:199]]
+
+
 def normalize_prompt_blocks(value: object) -> list:
     """规整 Prompt Manager 块列表。"""
     if not isinstance(value, list):
@@ -8391,8 +8441,7 @@ def normalize_user_app_extras(data: dict) -> dict:
                 if s:
                     greetings.append(s[:8000])
         extras["alternate_greetings"] = greetings
-    if "world_info" in data:
-        extras["world_info"] = normalize_world_info(data.get("world_info"))
+    extras["world_info"] = ensure_required_world_info(data.get("world_info") if "world_info" in data else [])
     if "prompt_blocks" in data:
         extras["prompt_blocks"] = normalize_prompt_blocks(data.get("prompt_blocks"))
     if "quick_replies" in data:
@@ -9041,17 +9090,20 @@ def build_system_prompt(app: dict, persona: dict | None, recent_text: str, *, te
     user_name = str(persona.get("name") or "").strip() or "你"
     persona_desc = str(persona.get("description") or "").strip()
 
-    extras = app.get("extra_settings")
-    if isinstance(extras, str) and extras.strip():
-        try: extras = json.loads(extras)
-        except Exception: extras = None
-    if not isinstance(extras, dict):
-        extras = {}
+    extras = app_extras(app)
 
     def _m(v):
         return render_tavern_template(str(v or "").strip(), char_name, user_name, template_context=template_context, phase="generate")
 
     parts: list[str] = []
+    required_world = next((entry for entry in extras.get("world_info") or [] if entry.get("id") == REQUIRED_WORLD_BOOK_ID), None)
+    if required_world:
+        required_text = render_tavern_template(
+            str(required_world.get("content") or ""), char_name, user_name,
+            template_context=template_context_with_world(template_context, required_world), phase="generate",
+        )
+        if required_text:
+            parts.append(f"【{required_world.get('name') or '反扒卡'}】\n{required_text}")
     parts.extend(prompt_block_texts(extras, "system_before", char_name=char_name, user_name=user_name, template_context=template_context))
     pre = _m(app.get("pre_prompt"))
     if pre:
@@ -9076,7 +9128,8 @@ def build_system_prompt(app: dict, persona: dict | None, recent_text: str, *, te
         parts.append(f"【场景】\n{scenario}")
     if persona_desc:
         parts.append(f"【关于对话者（{user_name}）】\n{render_tavern_template(persona_desc, char_name, user_name, template_context=template_context, phase='generate')}")
-    world = select_world_info(extras.get("world_info") or [], recent_text, char_name=char_name, user_name=user_name, template_context=template_context)
+    regular_world = [entry for entry in extras.get("world_info") or [] if entry.get("id") != REQUIRED_WORLD_BOOK_ID]
+    world = select_world_info(regular_world, recent_text, char_name=char_name, user_name=user_name, template_context=template_context)
     if world:
         parts.append(world)
     example = _m(extras.get("mes_example"))
@@ -9124,7 +9177,10 @@ def app_extras(app: dict) -> dict:
             extras = json.loads(extras)
         except Exception:
             extras = None
-    return extras if isinstance(extras, dict) else {}
+    extras = extras if isinstance(extras, dict) else {}
+    extras = dict(extras)
+    extras["world_info"] = ensure_required_world_info(extras.get("world_info") or [])
+    return extras
 
 
 def enabled_regex_scripts(app: dict) -> list[dict]:
@@ -9611,12 +9667,7 @@ def build_user_llm_request(app: dict, content: str, messages: list[dict] | None 
     except (TypeError, ValueError):
         temperature = USER_LLM_TEMPERATURE
     # Per-character sampling overrides (set via the editor)
-    extras = app.get("extra_settings")
-    if isinstance(extras, str) and extras.strip():
-        try: extras = json.loads(extras)
-        except Exception: extras = None
-    if not isinstance(extras, dict):
-        extras = {}
+    extras = app_extras(app)
     sampling = extras.get("sampling") if isinstance(extras.get("sampling"), dict) else {}
     if "temperature" in sampling and sampling["temperature"] is not None:
         try: temperature = float(sampling["temperature"])
@@ -9691,10 +9742,7 @@ def build_user_llm_request(app: dict, content: str, messages: list[dict] | None 
         user_name=user_name,
         template_context=template_context,
     ))
-    extras_for_phi = app.get("extra_settings")
-    if isinstance(extras_for_phi, str) and extras_for_phi.strip():
-        try: extras_for_phi = json.loads(extras_for_phi)
-        except Exception: extras_for_phi = None
+    extras_for_phi = app_extras(app)
     if isinstance(extras_for_phi, dict):
         depth_entries = select_world_info(
             extras_for_phi.get("world_info") or [],
