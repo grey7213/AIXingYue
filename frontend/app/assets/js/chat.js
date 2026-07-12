@@ -1567,6 +1567,7 @@ function chatPage() {
         this.appHero = data?.bg_url || data?.cover || data?.cover_url || data?.banner || data?.background || '';
         this.appFavorited = !!data?.favorited;
         this.quickReplies = Array.isArray(data?.quick_replies) ? data.quick_replies.filter(q => q.enabled !== false && q.message) : [];
+        if (data?.tts_voice_id && this.ttsVoices.some(v => v.id === data.tts_voice_id)) this.currentTtsVoice = data.tts_voice_id;
         this.restoreModelSelection();
       } catch {
         this.appName = this.chatText('new_role_name', '新角色');
@@ -1656,6 +1657,7 @@ function chatPage() {
         if (!this.appIcon) this.appIcon = data?.icon || data?.cover || '';
         this.appFavorited = !!data?.favorited;
         this.quickReplies = Array.isArray(data?.quick_replies) ? data.quick_replies.filter(q => q.enabled !== false && q.message) : [];
+        if (data?.tts_voice_id && this.ttsVoices.some(v => v.id === data.tts_voice_id)) this.currentTtsVoice = data.tts_voice_id;
       } catch {
         if (loadSeq !== this._conversationLoadSeq || this.conversation?.id !== c.id) return;
         this.appHero = ''; this.quickReplies = []; this.appFavorited = false;

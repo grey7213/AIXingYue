@@ -7788,6 +7788,7 @@ def local_app_to_card(row: dict) -> dict:
         "account_name": "原创作者" if row.get("source") == "user" else "惑梦（Homer）",
         "api_base_url": row.get("api_base_url") or "",
         "bg_url": str(extra.get("bg_url") or ""),
+        "tts_voice_id": str(extra.get("tts_voice_id") or ""),
         "nsfw": bool(extra.get("nsfw")),
         "protected_prompt": bool(extra.get("protected_prompt") or extra.get("protected")),
         "anonymous": bool(extra.get("anonymous")),
@@ -8442,6 +8443,10 @@ def normalize_user_app_extras(data: dict) -> dict:
     extras: dict = {}
     if "bg_url" in data:
         extras["bg_url"] = str(data.get("bg_url") or "").strip()
+    if "tts_voice_id" in data:
+        voice_id = str(data.get("tts_voice_id") or "").strip()
+        allowed_voices = {str(item.get("id") or "") for item in TTS_VOICES}
+        extras["tts_voice_id"] = voice_id if voice_id in allowed_voices else TTS_VOICES[0]["id"]
     for key in ("nsfw", "anonymous"):
         if key in data:
             extras[key] = bool(data.get(key))

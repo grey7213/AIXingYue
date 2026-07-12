@@ -16,6 +16,7 @@ const emptyForm = () => ({
   regex_scripts: [],
   alternate_greetings: [],
   world_info: [],
+  tts_voice_id: 'zh-CN-XiaoxiaoNeural',
   tagsText: '',
   llm_model: '',
   is_public: true,
@@ -44,6 +45,7 @@ function createPage() {
     toast: null,
     toastTimer: null,
     modelPresets: [],
+    ttsVoices: [],
     defaultModelPresetId: '',
     form: emptyForm(),
     editingId: '',  // empty = create, set = edit existing app
@@ -69,6 +71,7 @@ function createPage() {
         const p = await api.points();
         this.points = parseInt(p.points || p.data?.points || 0, 10);
         await this.loadModelPresets();
+        await this.loadTtsVoices();
         if (this.editingId) await this.loadExisting();
       } catch (err) {
         if (err instanceof ApiError && err.code === 401) {
@@ -87,6 +90,10 @@ function createPage() {
         .replace(/如选择[^。]+。/g, 'API Key 由后台统一管理。')
         .replace('我的：', '')
         .replace('我的模型', '站点模型');
+    },
+
+    async loadTtsVoices() {
+      try { const r = await api.ttsVoices(); const d = r?.data || r || {}; this.ttsVoices = Array.isArray(d.list) ? d.list : []; if (!this.form.tts_voice_id) this.form.tts_voice_id = d.default_voice || this.ttsVoices[0]?.id || ''; } catch { this.ttsVoices = []; }
     },
 
     previewTags() {
@@ -118,6 +125,7 @@ function createPage() {
         this.form.scenario = app.scenario || '';
         this.form.mes_example = app.mes_example || '';
         this.form.post_history_instructions = app.post_history_instructions || '';
+        this.form.tts_voice_id = app.tts_voice_id || this.form.tts_voice_id;
         this.form.prompt_blocks = Array.isArray(app.prompt_blocks)
           ? app.prompt_blocks.map((b, idx) => ({
               id: b.id || ('prompt-' + (idx + 1)),
@@ -336,6 +344,7 @@ function createPage() {
             delay: Number.isFinite(Number(e.delay)) ? Number(e.delay) : 0,
           }))
           .filter(e => e.content),
+        tts_voice_id: this.form.tts_voice_id || '',
         tags: this.form.tagsText.split(/[，,\n]/).map(s => s.trim()).filter(Boolean),
         llm_model: this.form.llm_model.trim(),
         cover_url: this.form.cover_url.trim(),

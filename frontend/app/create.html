@@ -9,7 +9,7 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="/app/assets/css/app.css?v=20260712-preview-fix">
   <link rel="stylesheet" href="/app/assets/css/worldbook-editor.css?v=20260713">
-  <script type="module" src="/app/assets/js/create.js?v=20260713-tavo-worldbook"></script>
+  <script type="module" src="/app/assets/js/create.js?v=20260713-role-voice"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen creator-editor-page">
@@ -362,7 +362,7 @@
                     <input class="xy-input text-sm mt-1" type="number" min="0" max="100" x-model.number="form.world_info[i].probability">
                   </label>
                 </div>
-                <div class="flex items-center gap-4">
+                <div class="world-entry-flags">
                   <label class="editor-checkbox" style="padding:4px 0;border:none;background:none">
                     <input type="checkbox" x-model="form.world_info[i].enabled">
                     <div class="editor-checkbox__text"><div class="editor-checkbox__title text-sm" x-text="creatorText('world_enabled_title', '启用')"></div></div>
@@ -522,7 +522,7 @@
           </div>
         </div>
 
-        <!-- 角色语音（折叠占位） -->
+        <!-- 角色语音 -->
         <div class="editor-group" :class="{ 'is-open': expand.voice }">
           <div class="editor-group__head" @click="expand.voice = !expand.voice">
             <div class="editor-group__title">
@@ -533,10 +533,8 @@
           </div>
           <div class="editor-group__body" x-show="expand.voice">
             <div class="editor-group__hint" x-text="creatorText('voice_hint', '为对话中的文本转语音分配角色语音。')"></div>
-            <button class="xy-btn xy-btn-ghost w-full justify-center" disabled>
-              <span x-text="creatorText('voice_assign_text', '＋ 为角色分配语音（敬请期待）')"></span>
-            </button>
-            <p class="text-xs text-slate-500" x-text="creatorText('voice_note', '站点 TTS 服务接入中。这里上线后会有男声/女声/萌音等多种音色可选。')"></p>
+            <label class="editor-field"><span class="editor-field__label">默认角色音色</span><select class="xy-input" x-model="form.tts_voice_id"><template x-for="v in ttsVoices" :key="v.id"><option :value="v.id" x-text="`${v.name} · ${v.gender} · ${v.style}`"></option></template></select></label>
+            <p class="text-xs text-slate-500">使用服务端多音色合成，不依赖设备自带浏览器语音。用户仍可在聊天设置中临时切换音色。</p>
           </div>
         </div>
 
