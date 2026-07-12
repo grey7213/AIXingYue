@@ -1547,7 +1547,7 @@
             <button type="button" data-shell-action="theme">
               <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.4 15.2A8 8 0 118.8 3.6a6.5 6.5 0 0011.6 11.6z"/></svg><span>明暗模式</span>
             </button>
-            <button type="button" :class="{ 'is-active': memoryOpen }" @click="toggleMemoryPanel">
+            <button type="button" :class="{ 'is-active': memoryOpen }" @click.stop="toggleMemoryPanel">
               <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 4h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1zM9 8h6M9 12h6"/></svg><span>长期记忆</span>
             </button>
             <button type="button" :class="{ 'is-active': advancedRenderOpen }" @click.stop="toggleAdvancedRenderPanel">
@@ -1562,7 +1562,7 @@
         <!-- 角色头图 -->
         <div class="chat-window__hero" :style="appHero ? `background-image: url('${appHero}')` : 'background: linear-gradient(135deg, #1a1230, #2d1b69 60%, #4c1d95);'">
           <div class="chat-tools" x-show="appId || conversation">
-            <button class="tool-btn" :class="{ 'is-active': memoryOpen }" @click="toggleMemoryPanel" :title="chatText('memory_tool_title', '记忆')">
+            <button class="tool-btn" :class="{ 'is-active': memoryOpen }" @click.stop="toggleMemoryPanel" :title="chatText('memory_tool_title', '记忆')">
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v12m6-6H6M5 4h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1z"/></svg>
             </button>
             <button class="tool-btn" :class="{ 'is-active': advancedRenderOpen }" @click.stop="toggleAdvancedRenderPanel" title="高级渲染">
@@ -1582,7 +1582,7 @@
           </div>
         </div>
 
-        <aside class="memory-panel" x-show="memoryOpen" @click.outside="memoryOpen=false" x-transition>
+        <aside class="memory-panel" x-show="memoryOpen" @click.stop @click.outside="memoryOpen=false" x-transition>
           <h3 x-text="chatText('memory_title', '记忆')"></h3>
           <div class="memory-item__tags" x-show="conversation?.id" x-text="conversation?.id ? '当前存档：' + conversation.id.slice(0, 8) + '，新增记忆会随这个存档保存' : ''"></div>
           <label x-text="chatText('summary_label', '会话摘要')"></label>

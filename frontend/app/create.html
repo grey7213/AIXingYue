@@ -152,7 +152,7 @@
           <div class="editor-field">
             <label class="editor-field__label" x-text="creatorText('cover_label', '封面图像')"></label>
             <label class="editor-dropzone">
-              <input type="file" accept="image/*" @change="onCoverChange">
+              <input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" @change="onCoverChange">
               <template x-if="form.cover_url && !uploading">
                 <img class="editor-dropzone__preview" :src="form.cover_url" alt="封面">
               </template>
@@ -167,7 +167,7 @@
                 </div>
               </template>
               <div class="editor-dropzone__title" x-show="!form.cover_url || uploading" x-text="creatorText('cover_upload_title', '上传封面图像')"></div>
-              <div class="editor-dropzone__hint" x-show="!form.cover_url || uploading" style="white-space:pre-line" x-text="creatorText('cover_upload_hint', '拖放到此处，或点击浏览\n最大大小：5MB')"></div>
+              <div class="editor-dropzone__hint" x-show="!form.cover_url || uploading" style="white-space:pre-line" x-text="creatorText('cover_upload_hint', '支持 PNG、JPG、GIF、动态 WebP\n建议大小不超过 5MB')"></div>
               <div class="editor-dropzone__overlay">
                 <span class="editor-dropzone__overlay-text" x-text="creatorText('cover_overlay_text', '点击替换')"></span>
               </div>
