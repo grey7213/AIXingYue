@@ -1206,11 +1206,11 @@ def site_settings_defaults() -> dict:
             "daily_points": 10,
             "daily_title": "每日奖励",
             "daily_description": "免费额度自动归入总余额。",
-            "page_title": "Credits",
-            "credits_eyebrow": "AI Xingyue Credits",
+            "page_title": "积分充值",
+            "credits_eyebrow": "当前余额",
             "balance_suffix": "余额，网页与 APK 共用。",
             "balance_unit_suffix": "额度",
-            "packages_title": "推荐套餐",
+            "packages_title": "充值套餐",
             "purchase_button_fallback": "购买",
             "bonus_prefix": "含奖励 +",
             "daily_claimed_text": "今日已领取",
@@ -1265,8 +1265,8 @@ def site_settings_defaults() -> dict:
             "image_send_button": "发送图片对话",
             "image_empty_text": "输入提示词后，这里会显示图片模型返回的图像。",
             "image_reply_title": "图片回复",
-            "workshop_eyebrow": "创作者工具",
-            "workshop_title": "把你的角色卡\n送进 惑梦（Homer）同库。",
+            "workshop_eyebrow": "创作者工作台",
+            "workshop_title": "把设定交给你，其余交给站点。",
             "workshop_copy": "普通用户只需要填写设定、开场白和封面；模型 API 由站点后台统一配置，不必操心额度和 Key。",
             "workshop_create_title": "新建角色",
             "workshop_create_copy": "从零捏一张角色卡",
@@ -8081,6 +8081,13 @@ def normalize_world_info(value: object) -> list:
             "probability": _int(raw.get("probability"), 100, 0, 100),
             "recursive": bool(raw.get("recursive", False)),
             "case_sensitive": bool(raw.get("case_sensitive", False)),
+            "match_whole_words": bool(raw.get("match_whole_words", raw.get("match_whole_word", False))),
+            "selective_logic": str(raw.get("selective_logic") or raw.get("secondary_logic") or "and_any")[:20],
+            "role": str(raw.get("role") or "system")[:20],
+            "scan_depth": _int(raw.get("scan_depth"), 2, 0, 100),
+            "sticky": _int(raw.get("sticky"), 0, 0, 9999),
+            "cooldown": _int(raw.get("cooldown"), 0, 0, 9999),
+            "delay": _int(raw.get("delay"), 0, 0, 9999),
         })
     return out
 
@@ -8949,7 +8956,7 @@ def select_world_info(entries: list, recent_text: str, *, char_name: str = "", u
         return [] if return_entries else ""
     candidates.sort(key=lambda e: (-int(e.get("priority") or 0), int(e.get("order") or 0)))
 
-    def _has_any(keys: list, text: str, case_sensitive: bool) -> bool:
+    def _has_any(keys: list, text: str, case_sensitive: bool, whole_words: bool = False) -> bool:
         if not keys:
             return False
         target = text if case_sensitive else text.lower()
@@ -8958,7 +8965,7 @@ def select_world_info(entries: list, recent_text: str, *, char_name: str = "", u
             if not key:
                 continue
             needle = key if case_sensitive else key.lower()
-            if needle in target:
+            if (re.search(rf"(?<!\\w){re.escape(needle)}(?!\\w)", target) if whole_words else needle in target):
                 return True
         return False
 
@@ -8968,11 +8975,13 @@ def select_world_info(entries: list, recent_text: str, *, char_name: str = "", u
         keys = entry.get("keys") if isinstance(entry.get("keys"), list) else []
         secondary = entry.get("secondary_keys") if isinstance(entry.get("secondary_keys"), list) else []
         case_sensitive = bool(entry.get("case_sensitive", False))
-        primary_hit = _has_any(keys, text, case_sensitive)
+        whole_words = bool(entry.get("match_whole_words", False))
+        primary_hit = _has_any(keys, text, case_sensitive, whole_words)
         if not primary_hit:
             return False
         if entry.get("selective") or secondary:
-            return _has_any(secondary, text, case_sensitive)
+            hits = [_has_any([key], text, case_sensitive, whole_words) for key in secondary]
+            return all(hits) if entry.get("selective_logic") == "and_all" else any(hits)
         return True
 
     picked_entries: list[dict] = []

@@ -8,7 +8,8 @@
   <link rel="icon" href="/favicon.ico">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="/app/assets/css/app.css?v=20260712-preview-fix">
-  <script type="module" src="/app/assets/js/create.js?v=20260712-creator-reference"></script>
+  <link rel="stylesheet" href="/app/assets/css/worldbook-editor.css?v=20260713">
+  <script type="module" src="/app/assets/js/create.js?v=20260713-tavo-worldbook"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen creator-editor-page">
@@ -327,12 +328,15 @@
           </div>
           <div class="editor-group__body" x-show="expand.worldinfo">
             <div class="editor-group__hint" x-text="creatorText('world_hint', '设定条目支持关键词、常驻、模板变量和全局注入标记，如 [GENERATE:BEFORE]、[GENERATE:AFTER]、@@if、@INJECT。')"></div>
-            <template x-for="(e, i) in form.world_info" :key="i">
-              <div class="form-panel !p-3" style="display:flex;flex-direction:column;gap:8px">
+            <template x-for="(e, i) in form.world_info" :key="e.id || i">
+              <details class="world-entry-card" :open="i === 0">
+                <summary class="world-entry-card__summary"><button type="button" class="world-entry-switch" :class="{ 'is-on': e.enabled }" @click.prevent.stop="e.enabled=!e.enabled"><i></i></button><span class="world-entry-card__main"><strong x-text="e.name || `世界书条目 ${i+1}`"></strong><small x-text="(e.keysText || (e.constant ? '常驻条目' : '未配置关键词')) + ' · ' + (e.position === 'depth' ? '@Depth' : (e.position === 'post_history' ? '历史后' : '↑ Char'))"></small></span><span class="world-entry-card__prob" x-text="`${e.probability ?? 100}%`"></span><span class="world-entry-card__chevron">›</span></summary>
+              <div class="world-entry-card__body">
                 <div class="flex items-center justify-between">
                   <span class="text-xs text-violet-200/70"><span x-text="creatorText('world_entry_prefix', '条目 #')"></span><span x-text="i + 1"></span></span>
-                  <button type="button" class="editor-toolbar__btn is-danger" @click="removeWorldEntry(i)" x-text="creatorText('world_delete_text', '删除')"></button>
+                  <div class="flex gap-2"><button type="button" class="editor-toolbar__btn" @click="duplicateWorldEntry(i)">复制</button><button type="button" class="editor-toolbar__btn is-danger" @click="removeWorldEntry(i)" x-text="creatorText('world_delete_text', '删除')"></button></div>
                 </div>
+                <div class="world-entry-properties"><label><span>二级关键词匹配</span><select class="xy-input text-sm" x-model="form.world_info[i].selective_logic"><option value="and_any">AND_ANY</option><option value="and_all">AND_ALL</option></select></label><label><span>注入角色</span><select class="xy-input text-sm" x-model="form.world_info[i].role"><option value="system">System</option><option value="user">User</option><option value="assistant">Assistant</option></select></label><label><span>扫描深度</span><input class="xy-input text-sm" type="number" min="0" max="100" x-model.number="form.world_info[i].scan_depth"></label><label><span>粘性</span><input class="xy-input text-sm" type="number" min="0" max="9999" x-model.number="form.world_info[i].sticky"></label><label><span>冷却</span><input class="xy-input text-sm" type="number" min="0" max="9999" x-model.number="form.world_info[i].cooldown"></label><label><span>延迟</span><input class="xy-input text-sm" type="number" min="0" max="9999" x-model.number="form.world_info[i].delay"></label></div>
                 <div class="grid md:grid-cols-2 gap-2">
                   <input class="xy-input text-sm" x-model="form.world_info[i].name" :placeholder="creatorText('world_name_placeholder', '条目名称')">
                   <select class="xy-input text-sm" x-model="form.world_info[i].position">
@@ -375,8 +379,10 @@
                     <input type="checkbox" x-model="form.world_info[i].recursive">
                     <div class="editor-checkbox__text"><div class="editor-checkbox__title text-sm" x-text="creatorText('world_recursive_title', '递归扫描')"></div></div>
                   </label>
+                  <label class="editor-checkbox" style="padding:4px 0;border:none;background:none"><input type="checkbox" x-model="form.world_info[i].case_sensitive"><div class="editor-checkbox__text"><div class="editor-checkbox__title text-sm">区分大小写</div></div></label><label class="editor-checkbox" style="padding:4px 0;border:none;background:none"><input type="checkbox" x-model="form.world_info[i].match_whole_words"><div class="editor-checkbox__text"><div class="editor-checkbox__title text-sm">全词匹配</div></div></label>
                 </div>
               </div>
+              </details>
             </template>
             <button type="button" class="xy-btn xy-btn-ghost w-full justify-center" @click="addWorldEntry" x-text="creatorText('add_world_text', '＋ 添加世界书条目')"></button>
           </div>

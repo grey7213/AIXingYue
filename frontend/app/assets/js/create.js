@@ -166,6 +166,13 @@ function createPage() {
               probability: typeof e.probability === 'number' ? e.probability : 100,
               recursive: !!e.recursive,
               case_sensitive: !!e.case_sensitive,
+              match_whole_words: !!e.match_whole_words,
+              selective_logic: e.selective_logic || 'and_any',
+              role: e.role || 'system',
+              scan_depth: typeof e.scan_depth === 'number' ? e.scan_depth : 2,
+              sticky: typeof e.sticky === 'number' ? e.sticky : 0,
+              cooldown: typeof e.cooldown === 'number' ? e.cooldown : 0,
+              delay: typeof e.delay === 'number' ? e.delay : 0,
             }))
           : [];
         this.form.tagsText = Array.isArray(app.tags) ? app.tags.join('，') : (app.tags || '');
@@ -320,6 +327,13 @@ function createPage() {
             probability: Number.isFinite(Number(e.probability)) ? Number(e.probability) : 100,
             recursive: !!e.recursive,
             case_sensitive: !!e.case_sensitive,
+            match_whole_words: !!e.match_whole_words,
+            selective_logic: e.selective_logic || 'and_any',
+            role: e.role || 'system',
+            scan_depth: Number.isFinite(Number(e.scan_depth)) ? Number(e.scan_depth) : 2,
+            sticky: Number.isFinite(Number(e.sticky)) ? Number(e.sticky) : 0,
+            cooldown: Number.isFinite(Number(e.cooldown)) ? Number(e.cooldown) : 0,
+            delay: Number.isFinite(Number(e.delay)) ? Number(e.delay) : 0,
           }))
           .filter(e => e.content),
         tags: this.form.tagsText.split(/[，,\n]/).map(s => s.trim()).filter(Boolean),
@@ -359,10 +373,22 @@ function createPage() {
         probability: 100,
         recursive: false,
         case_sensitive: false,
+        match_whole_words: false,
+        selective_logic: 'and_any',
+        role: 'system',
+        scan_depth: 2,
+        sticky: 0,
+        cooldown: 0,
+        delay: 0,
       });
       this.expand.worldinfo = true;
     },
     removeWorldEntry(i) { this.form.world_info.splice(i, 1); },
+    duplicateWorldEntry(i) {
+      const source = this.form.world_info[i];
+      if (!source) return;
+      this.form.world_info.splice(i + 1, 0, { ...JSON.parse(JSON.stringify(source)), id: 'world-' + Date.now(), name: `${source.name || '世界书条目'} 副本`, order: i + 2 });
+    },
 
     // ---- Prompt Manager ----
     addPromptBlock(position = 'system_after') {
