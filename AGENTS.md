@@ -62,6 +62,11 @@
 
 ## Reusable Pitfalls
 
+- Symptom: 标签优化 ZIP 的 `tag-overrides.filled.csv` 仍是上一轮结果，直接运行旧回填工具会漏掉文件名中新增的 1767 张标签，并把 318 张 `CLEAR` 卡继续保留。
+  Cause: 第三方本轮主要通过 `cards/<display_id>__<标签表达式>[√/✗].json` 改名，未同步更新 filled CSV；同时角色表没有外键，直接删除 CLEAR 卡会让历史会话失联。
+  Fix: 2026-07-13 使用 `tools/sync_role_card_filename_tags.py` 校验 Manifest/卡 SHA 后从文件名解析优化标签；CLEAR 卡先审计引用，306 张无功能引用卡物理删除，12 张关联会话的卡保留原 ID 并设为私有隐藏。
+  Verify: 8318 张标签更新；公开官方空标签为 0；conversations/messages/favorites 等业务表行数前后不变；live/backup `quick_check=ok`，backend/Nginx active，内外 `/health` OK。
+
 - Symptom: `aifadian_redeem_ops.py generate --count 500` 输出却只有每套餐 200 个。
   Cause: 卡密生成接口/工具将单批数量限制为 200。
   Fix: 大批量补货按多批生成，例如 500 使用 `200 + 200 + 100`，上传前合并并校验行数与唯一数。
