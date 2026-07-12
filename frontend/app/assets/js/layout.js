@@ -86,7 +86,7 @@ export function sidebarHtml(active = 'home', settings = null) {
   return `
     <a href="/app/" class="app-sidebar__brand">
       <img src="/assets/img/logo-256.png?v=20260627-logo" alt="">
-      <span class="name">AI星月</span>
+      <span class="name">惑梦（Homer）</span>
     </a>
     <nav class="app-nav">${nav}</nav>
     <a class="app-sidebar__user" href="/app/me.html" x-show="user" title="${escapeHtml(appText(settings, 'shell_profile_title', '进入我的'))}">

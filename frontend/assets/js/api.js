@@ -1,4 +1,4 @@
-// AI星月 共享 API 工具
+// 惑梦（Homer） 共享 API 工具
 // 同源请求，由 Nginx 反向代理到后端 Python 服务
 const API_BASE = '';
 const TOKEN_KEY = 'ai_xingyue_token';

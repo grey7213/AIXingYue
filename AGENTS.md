@@ -2,6 +2,8 @@
 
 ## Scope
 
+- Web 平台当前正式品牌为“惑梦（Homer）”；积分展示名为“惑梦币”。历史文件名、服务名、数据库名、接口路径和 APK 标识仍保留旧技术命名以保证兼容，除非用户另行要求迁移。
+
 - Current workspace contains Android APK reverse engineering artifacts for a CTF sandbox target.
 - Primary APKs:
   - `base.apk`: `com.flai.flai`, Flutter app protected by `com.stub.StubApp` and `libjiagu*.so`.

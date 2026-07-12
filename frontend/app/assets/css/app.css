@@ -1,4 +1,4 @@
-/* AI星月 Web App · 角色卡编辑器参考设计系统 */
+/* 惑梦（Homer） Web App · 角色卡编辑器参考设计系统 */
 
 @import url('/assets/css/custom.css?v=20260703-fengyue-home3');
 
@@ -1770,7 +1770,7 @@ html, body { font-size: 16px; line-height: 1.5; color: var(--xy-app-text); }
 }
 
 /* ===========================================================
-   AI星月 editor-inspired UI skin - neutral canvas / compact cards
+   惑梦（Homer） editor-inspired UI skin - neutral canvas / compact cards
    =========================================================== */
 :root {
   --fy-bg: #f5f5f7;

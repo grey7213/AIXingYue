@@ -1,4 +1,4 @@
-/* AI星月 自定义样式 - 深色星空主题 */
+/* 惑梦（Homer） 自定义样式 - 深色星空主题 */
 
 :root {
   --xy-primary: #8b5cf6;
@@ -1076,7 +1076,7 @@ pre {
   text-shadow: none !important;
 }
 
-img[alt="AI星月"] {
+img[alt="惑梦（Homer）"] {
   filter: none !important;
 }
 

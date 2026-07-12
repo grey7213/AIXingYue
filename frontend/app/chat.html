@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>聊天 · AI星月</title>
+  <title>聊天 · 惑梦（Homer）</title>
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
   <link rel="icon" href="/favicon.ico">
   <script src="https://cdn.tailwindcss.com"></script>
@@ -1526,7 +1526,7 @@
             <img x-show="appIcon" class="avatar" :src="appIcon" referrerpolicy="no-referrer" onerror="this.style.display='none'">
             <div class="avatar" x-show="!appIcon" x-text="(appName || '?').slice(0,1)"></div>
             <div class="chat-topbar-title__text">
-              <div class="chat-topbar-title__name" x-text="appName || (conversation ? '继续对话' : 'AI星月')"></div>
+              <div class="chat-topbar-title__name" x-text="appName || (conversation ? '继续对话' : '惑梦（Homer）')"></div>
               <div class="chat-topbar-title__save" x-text="conversation?.id ? '当前存档 · ' + conversation.id.slice(0, 8) : '选择角色开始对话'"></div>
             </div>
           </div>

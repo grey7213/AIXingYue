@@ -66,7 +66,7 @@ BETA_MAX_REGISTERED_USERS = int(os.environ.get("BETA_MAX_REGISTERED_USERS", "250
 GENERATION_GLOBAL_CONCURRENCY = int(os.environ.get("GENERATION_GLOBAL_CONCURRENCY", "20") or "20")
 GENERATION_USER_CONCURRENCY = int(os.environ.get("GENERATION_USER_CONCURRENCY", "2") or "2")
 GENERATION_IP_CONCURRENCY = int(os.environ.get("GENERATION_IP_CONCURRENCY", "5") or "5")
-APP_BRAND = os.environ.get("APP_BRAND", "AI星月")
+APP_BRAND = os.environ.get("APP_BRAND", "惑梦（Homer）")
 ADMIN_EMAILS = set(filter(None, os.environ.get("ADMIN_EMAILS", "local@ctf.test").split(",")))
 UPSTREAM_CONTENT_BASE = os.environ.get("UPSTREAM_CONTENT_BASE", "https://aifun.wiki/").rstrip("/") + "/"
 CONTENT_MODE = os.environ.get("CONTENT_MODE", "cache_first").strip().lower()
@@ -343,7 +343,7 @@ def rebrand_text(value: str) -> str:
     replacements = {
         "AI风月": APP_BRAND,
         "风月AI": "星月AI",
-        "风月币": "星月币",
+        "风月币": "惑梦币",
         "风月": "星月",
         "aifun.wiki": "patcher.villainy.top",
         "https://aifun.wiki": "https://patcher.villainy.top",
@@ -680,7 +680,7 @@ def site_settings_defaults() -> dict:
             "shell_points_suffix": "积分",
             "info_topbar_title": "信息中心",
             "info_download_button_text": "打开 Web App",
-            "info_eyebrow": "AI星月 Web 同步状态",
+            "info_eyebrow": "惑梦（Homer） Web 同步状态",
             "info_title": "网页端\n同账号 · 同积分 · 同角色库。",
             "info_copy": "当前站点保持本地库模式，角色封面走本站媒体缓存，不依赖上游可用性，国内访问也很顺畅。",
             "info_stat_upstream_label": "上游本地化角色",
@@ -744,7 +744,7 @@ def site_settings_defaults() -> dict:
             "login_tab_label": "登录",
             "register_tab_label": "注册",
             "reset_tab_label": "重置密码",
-            "login_button_text": "进入 AI星月",
+            "login_button_text": "进入 惑梦（Homer）",
             "login_hint": "用 APP 注册过的账号也可以直接登录",
             "forgot_password_text": "忘记密码？",
             "reset_title": "重置密码",
@@ -754,7 +754,7 @@ def site_settings_defaults() -> dict:
             "register_button_text": "完成注册",
             "send_code_button_text": "发送",
             "home_link_text": "返回首页",
-            "dashboard_title": "欢迎使用 AI星月",
+            "dashboard_title": "欢迎使用 惑梦（Homer）",
             "dashboard_subtitle": "登录或注册以管理你的账号和积分",
             "dashboard_login_title": "账号登录",
             "dashboard_register_title": "创建账号",
@@ -781,7 +781,7 @@ def site_settings_defaults() -> dict:
             "login_failed_text": "登录失败",
             "reset_success_text": "密码已重置",
             "reset_failed_text": "密码重置失败",
-            "register_success_text": "注册成功，欢迎来到 AI星月",
+            "register_success_text": "注册成功，欢迎来到 惑梦（Homer）",
             "register_failed_text": "注册失败",
             "login_invalid_response_text": "登录响应无效",
             "register_invalid_response_text": "注册响应无效",
@@ -808,17 +808,17 @@ def site_settings_defaults() -> dict:
             "api_endpoint_label": "API 端点",
             "app_endpoint_label": "服务地址",
             "user_id_label": "用户 ID",
-            "api_note": "如果你在使用 AI星月 APP 时遇到节点不可用问题，请检查 APP 的服务器配置是否指向 patcher.villainy.top。",
+            "api_note": "如果你在使用 惑梦（Homer） APP 时遇到节点不可用问题，请检查 APP 的服务器配置是否指向 patcher.villainy.top。",
             "unnamed_user": "未命名用户",
             "purchase_section_label": "购买与兑换",
             "daily_points_template": "+{points} 积分",
             "points_failed_text": "获取积分失败",
             "redeem_empty_text": "请输入兑换码",
-            "redeem_success_template": "兑换成功 +{points} 星月币",
-            "redeem_success_detail_template": "兑换成功，到账 {points} 星月币",
+            "redeem_success_template": "兑换成功 +{points} 惑梦币",
+            "redeem_success_detail_template": "兑换成功，到账 {points} 惑梦币",
             "redeem_failed_text": "兑换失败",
             "checkin_success_template": "签到成功 +{points} 积分",
-            "checkin_reward_success_template": "今日奖励已领取，到账 {points} 星月币",
+            "checkin_reward_success_template": "今日奖励已领取，到账 {points} 惑梦币",
             "checkin_repeat_text": "今日已经签到过了",
             "checkin_failed_text": "签到失败",
             "claim_failed_text": "领取失败",
@@ -1214,8 +1214,8 @@ def site_settings_defaults() -> dict:
         "deposit": {
             "aifadian_url": AIFADIAN_URL if PAYMENT_CHANNEL_ENABLED else "",
             "currency": "CNY",
-            "credits_name": "星月币",
-            "rate_label": "1 CNY = 1000 星月币，50 星月币约等于 1 次角色回复",
+            "credits_name": "惑梦币",
+            "rate_label": "1 CNY = 1000 惑梦币，50 惑梦币约等于 1 次角色回复",
             "title": payment_title,
             "description": payment_description,
             "button_text": payment_button,
@@ -1227,7 +1227,7 @@ def site_settings_defaults() -> dict:
             "steps": [
                 "在爱发电购买对应套餐",
                 "从订单说明或站长发放信息中复制兑换码",
-                "回到 AI星月输入兑换码，额度立即到账",
+                "回到 惑梦（Homer）输入兑换码，额度立即到账",
             ] if PAYMENT_CHANNEL_ENABLED else ["充值通道维护中，暂不开放购买和兑换。"],
             "packages": deposit_packages,
             "subscriptions_title": "月度订阅",
@@ -1253,7 +1253,7 @@ def site_settings_defaults() -> dict:
             "image_empty_text": "输入提示词后，这里会显示图片模型返回的图像。",
             "image_reply_title": "图片回复",
             "workshop_eyebrow": "创作者工具",
-            "workshop_title": "把你的角色卡\n送进 AI星月同库。",
+            "workshop_title": "把你的角色卡\n送进 惑梦（Homer）同库。",
             "workshop_copy": "普通用户只需要填写设定、开场白和封面；模型 API 由站点后台统一配置，不必操心额度和 Key。",
             "workshop_create_title": "新建角色",
             "workshop_create_copy": "从零捏一张角色卡",
@@ -1973,7 +1973,7 @@ def sanitize_site_settings(data: dict | None) -> dict:
 
     out["deposit"]["aifadian_url"] = clean_url(deposit.get("aifadian_url"), defaults["deposit"]["aifadian_url"])
     out["deposit"]["currency"] = clean_text(deposit.get("currency"), defaults["deposit"]["currency"], 12) or "CNY"
-    out["deposit"]["credits_name"] = clean_text(deposit.get("credits_name"), defaults["deposit"]["credits_name"], 20) or "星月币"
+    out["deposit"]["credits_name"] = clean_text(deposit.get("credits_name"), defaults["deposit"]["credits_name"], 20) or "惑梦币"
     out["deposit"]["rate_label"] = clean_text(deposit.get("rate_label"), defaults["deposit"]["rate_label"], 120)
     out["deposit"]["title"] = clean_text(deposit.get("title"), defaults["deposit"]["title"], 60)
     out["deposit"]["description"] = clean_text(deposit.get("description"), defaults["deposit"]["description"], 180)
@@ -4843,7 +4843,7 @@ class Store:
                 """
                 select
                   u.id as user_id,
-                  coalesce(u.name, '星月创作者') as user_name,
+                  coalesce(u.name, '惑梦创作者') as user_name,
                   count(distinct a.id) as role_count,
                   coalesce(sum(coalesce(a.like_count, 0)), 0) as like_count,
                   count(distinct f.user_id || ':' || f.app_id) as favorite_count,
@@ -4875,7 +4875,7 @@ class Store:
             out.append({
                 "rank": idx,
                 "user_id": str(row["user_id"] or ""),
-                "user_name": str(row["user_name"] or "星月创作者"),
+                "user_name": str(row["user_name"] or "惑梦创作者"),
                 "role_count": role_count,
                 "like_count": like_count,
                 "favorite_count": favorite_count,
@@ -7770,7 +7770,7 @@ def local_app_to_card(row: dict) -> dict:
         "is_public": bool(row.get("is_public", 1)),
         "sort_weight": row.get("sort_weight") or 0,
         "is_original": (row.get("source") in ("user", "admin")),
-        "account_name": "原创作者" if row.get("source") == "user" else "AI星月",
+        "account_name": "原创作者" if row.get("source") == "user" else "惑梦（Homer）",
         "api_base_url": row.get("api_base_url") or "",
         "bg_url": str(extra.get("bg_url") or ""),
         "nsfw": bool(extra.get("nsfw")),
@@ -7855,7 +7855,7 @@ def local_app_to_list_card(row: dict) -> dict:
         "is_public": bool(row.get("is_public", 1)),
         "sort_weight": row.get("sort_weight") or 0,
         "is_original": source in ("user", "admin"),
-        "account_name": "原创作者" if source == "user" else "AI星月",
+        "account_name": "原创作者" if source == "user" else "惑梦（Homer）",
         "created_at": row.get("created_at") or 0,
         "updated_at": row.get("updated_at") or 0,
     }
@@ -10335,7 +10335,7 @@ def app_name_from_cache(store: Store, app_id: str) -> str:
             app = None
         if isinstance(app, dict) and str(app.get("name") or "").strip():
             return str(app["name"]).strip()
-    return "AI星月角色"
+    return "惑梦（Homer）角色"
 
 
 def chat_message_payload(message: sqlite3.Row, conv_id: str, app_id: str, query: str, answer: str) -> dict:
@@ -10594,7 +10594,7 @@ def deposit_meta_json(user: sqlite3.Row | None = None) -> dict:
             "payment_available": False,
             "redeem_available": False,
             "currency": deposit.get("currency") or "CNY",
-            "credits_name": deposit.get("credits_name") or "星月币",
+            "credits_name": deposit.get("credits_name") or "惑梦币",
             "rate_label": "充值通道暂时关闭",
             "title": "充值通道维护中",
             "description": "充值和兑换入口暂时关闭，已有余额、每日奖励和聊天功能不受影响。",
@@ -10618,8 +10618,8 @@ def deposit_meta_json(user: sqlite3.Row | None = None) -> dict:
         "payment_available": bool(aifadian_url),
         "redeem_available": True,
         "currency": deposit.get("currency") or "CNY",
-        "credits_name": deposit.get("credits_name") or "星月币",
-        "rate_label": deposit.get("rate_label") or "1 CNY = 1000 星月币，50 星月币约等于 1 次角色回复",
+        "credits_name": deposit.get("credits_name") or "惑梦币",
+        "rate_label": deposit.get("rate_label") or "1 CNY = 1000 惑梦币，50 惑梦币约等于 1 次角色回复",
         "title": deposit.get("title") or "爱发电购买兑换码",
         "description": deposit.get("description") or "付款后把兑换码输入到这里，额度立即到账并同步到 APK。",
         "button_text": deposit.get("button_text") or "去爱发电购买",
@@ -10662,7 +10662,7 @@ def public_site_settings_json(settings: dict) -> dict:
                 if "忘记密码" in question or "密码" in question:
                     item["a"] = "在登录页点击「忘记密码」，输入注册邮箱获取验证码后即可设置新密码。验证码 10 分钟内有效。"
         app["info_download_button_text"] = "打开 Web App"
-        app["info_eyebrow"] = "AI星月 Web 同步状态"
+        app["info_eyebrow"] = "惑梦（Homer） Web 同步状态"
         app["info_title"] = "网页端\n同账号 · 同积分 · 同角色库。"
         dashboard["download_title"] = "打开 Web App"
         dashboard["download_subtitle"] = "客户端渠道维护中"
@@ -10701,7 +10701,7 @@ def workspace_json() -> dict:
     return {
         "id": "local-workspace",
         "android_apk_versions": None,
-        "name": "AI星月 本地服务器",
+        "name": "惑梦（Homer） 本地服务器",
         "plan": "local",
         "status": "active",
         "created_at": now_ms(),
@@ -10709,7 +10709,7 @@ def workspace_json() -> dict:
         "in_trial": "false",
         "trial_end_reason": "",
         "custom_config": "{}",
-        "app_title": "AI星月",
+        "app_title": "惑梦（Homer）",
         "android_apk": None,
         "win_installer": "",
         "app_icon": "",
@@ -12255,7 +12255,7 @@ class Handler(BaseHTTPRequestHandler):
                     **generated,
                 }
             else:
-                reply = "图片聊天已接入 AI星月本地工作台。当前站点会保存你的图片聊天请求；配置图片模型后会在这里返回真实图像。"
+                reply = "图片聊天已接入 惑梦（Homer）本地工作台。当前站点会保存你的图片聊天请求；配置图片模型后会在这里返回真实图像。"
                 payload = {"reply": reply, "prompt": prompt, "image_name": image_name, "created_at": now_ms(), "mode": "local_placeholder"}
             self.store.log_event(
                 user["id"],
@@ -13350,7 +13350,7 @@ class LocalServer(ThreadingHTTPServer):
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Local backend for AI星月 CTF APK server binding.")
+    parser = argparse.ArgumentParser(description="Local backend for 惑梦（Homer） CTF APK server binding.")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--db", type=Path, default=DEFAULT_DB)

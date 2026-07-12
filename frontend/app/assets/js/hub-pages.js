@@ -247,7 +247,7 @@ export function workshopPage() {
       return `${prefix} ${this.stats?.apps?.total || 0} ${suffix}`;
     },
     creatorName(row) {
-      return row?.user_name || '星月创作者';
+      return row?.user_name || '惑梦创作者';
     },
     creatorScore(row) {
       return Number(row?.score || 0).toLocaleString('zh-CN');
@@ -368,7 +368,7 @@ export function rewardsPage() {
         this.points = this.balance.points;
         this.redeemInput = '';
         this.setMessage(
-          formatTemplate(this.dashboardText('redeem_success_detail_template', '兑换成功，到账 {points} 星月币'), { points: data.points_added || 0 }),
+          formatTemplate(this.dashboardText('redeem_success_detail_template', '兑换成功，到账 {points} 惑梦币'), { points: data.points_added || 0 }),
           'success',
         );
         await Promise.all([this.loadRewards(), this.loadRedemptions()]);
@@ -403,7 +403,7 @@ export function rewardsPage() {
         const added = parseInt(r?.data?.points_added || 0, 10);
         this.setMessage(
           added > 0
-            ? formatTemplate(this.dashboardText('checkin_reward_success_template', '今日奖励已领取，到账 {points} 星月币'), { points: added })
+            ? formatTemplate(this.dashboardText('checkin_reward_success_template', '今日奖励已领取，到账 {points} 惑梦币'), { points: added })
             : this.dashboardText('checkin_repeat_text', '今日已经签到过了'),
           added > 0 ? 'success' : 'info',
         );

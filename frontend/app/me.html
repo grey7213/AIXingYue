@@ -27,7 +27,7 @@
           </label>
           <div class="profile-identity-main">
             <h2 x-text="user?.name || dashboardText('unnamed_user', '未命名用户')"></h2>
-            <p x-text="user?.email || 'AI星月用户'"></p>
+            <p x-text="user?.email || '惑梦（Homer）用户'"></p>
             <small>ID：<span x-text="profileDisplayId() || user?.id?.slice(0, 12) || '-' "></span></small>
           </div>
           <a href="#profile-settings" class="profile-edit-link" @click.prevent="$refs.settingsPanel.open=true; $nextTick(() => $refs.settingsPanel.scrollIntoView({behavior:'smooth',block:'start'}))">编辑资料</a>

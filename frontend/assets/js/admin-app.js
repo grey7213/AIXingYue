@@ -1,4 +1,4 @@
-// AI星月 管理后台 Alpine.js 应用
+// 惑梦（Homer） 管理后台 Alpine.js 应用
 import { api, isLoggedIn, formatDateTime, ApiError } from '/assets/js/api.js';
 
 function adminPanel() {

@@ -243,7 +243,7 @@ function mePage() {
         this.balance = this.normalizeBalance(data.balance || {});
         this.points = this.balance.points;
         this.redeemCode = '';
-        this.showToast(this.formatTemplate(this.dashboardText('redeem_success_template', '兑换成功 +{points} 星月币'), { points: data.points_added || 0 }), 'success');
+        this.showToast(this.formatTemplate(this.dashboardText('redeem_success_template', '兑换成功 +{points} 惑梦币'), { points: data.points_added || 0 }), 'success');
       } catch (err) {
         this.showToast(err.message || this.dashboardText('redeem_failed_text', '兑换失败'), 'error');
       } finally { this.loading = false; }

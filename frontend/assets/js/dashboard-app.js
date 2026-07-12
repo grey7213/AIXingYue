@@ -1,4 +1,4 @@
-// AI星月 用户面板 Alpine.js 应用
+// 惑梦（Homer） 用户面板 Alpine.js 应用
 import { api, getToken, setToken, clearAuth, getCachedUser, setCachedUser, formatDateTime, ApiError } from '/assets/js/api.js';
 
 function dashboard() {
@@ -222,7 +222,7 @@ function dashboard() {
         const token = result.data || result;
         if (typeof token !== 'string') throw new Error(this.authText('register_invalid_response_text', '注册响应无效'));
         setToken(token);
-        this.showToast(this.authText('register_success_text', '注册成功，欢迎来到 AI星月'), 'success');
+        this.showToast(this.authText('register_success_text', '注册成功，欢迎来到 惑梦（Homer）'), 'success');
         await this.loadProfile();
       } catch (err) {
         this.showToast(err.message || this.authText('register_failed_text', '注册失败'), 'error');
@@ -260,7 +260,7 @@ function dashboard() {
         this.points = this.balance.points;
         this.redeemCode = '';
         this.lastRefreshed = Date.now();
-        this.showToast(this.formatTemplate(this.dashboardText('redeem_success_template', '兑换成功 +{points} 星月币'), { points: data.points_added || 0 }), 'success');
+        this.showToast(this.formatTemplate(this.dashboardText('redeem_success_template', '兑换成功 +{points} 惑梦币'), { points: data.points_added || 0 }), 'success');
       } catch (err) {
         this.showToast(err.message || this.dashboardText('redeem_failed_text', '兑换失败'), 'error');
       } finally {

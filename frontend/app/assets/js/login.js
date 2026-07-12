@@ -160,7 +160,7 @@ function loginPage() {
         const token = r && (r.data || r);
         if (typeof token !== 'string') throw new Error(this.authText('register_invalid_response_text', '注册响应无效'));
         setToken(token);
-        this.showToast(this.authText('register_success_text', '注册成功，欢迎来到 AI星月'), 'success');
+        this.showToast(this.authText('register_success_text', '注册成功，欢迎来到 惑梦（Homer）'), 'success');
         setTimeout(() => this.goNext(), 700);
       } catch (err) {
         this.showToast(err.message || this.authText('register_failed_text', '注册失败'), 'error');

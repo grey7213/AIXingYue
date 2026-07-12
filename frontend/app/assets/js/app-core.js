@@ -1,4 +1,4 @@
-// AI星月 Web App 共享核心 - 在所有 /app/*.html 顶部加载
+// 惑梦（Homer） Web App 共享核心 - 在所有 /app/*.html 顶部加载
 import { api as baseApi, getToken, setToken, clearAuth, getCachedUser, setCachedUser, formatDateTime, ApiError } from '/assets/js/api.js';
 
 // 扩展共享 api 实例（增加 chat / explore / conversation 方法）

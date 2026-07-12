@@ -638,7 +638,7 @@ function buildTavoBridgeScript() {
           try { parent.postMessage({ type: 'xy-tavo-confirm-request', action: String(action || '').slice(0, 120) }, '*'); } catch (e) {}
           return false;
         },
-        request() { return Promise.reject(new Error('Network access is disabled in AI星月 Tavo sandbox')); },
+        request() { return Promise.reject(new Error('Network access is disabled in 惑梦（Homer） Tavo sandbox')); },
       };
       Object.defineProperty(window, 'TavoJS', { value: api, configurable: false, writable: false });
       window.tavo = api;

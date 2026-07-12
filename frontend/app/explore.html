@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>探索 · AI星月</title>
+  <title>探索 · 惑梦（Homer）</title>
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
   <link rel="icon" href="/favicon.ico">
   <link rel="preload" as="script" href="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1">
@@ -149,7 +149,7 @@
                   </div>
                   <code class="card-id-chip" x-text="`ID: ${card.displayId || card.id}`"></code>
                   <div class="feature-card__meta">
-                    <span x-text="card.author || appHomeText('official_author', 'AI星月官方')"></span>
+                    <span x-text="card.author || appHomeText('official_author', '惑梦（Homer）官方')"></span>
                     <span class="feature-card__stats" x-show="card.likeCount || card.playersCount">
                       <span x-show="card.likeCount" x-text="`♥ ${card.likeCount}`"></span>
                       <span x-show="card.playersCount" x-text="`对话 ${card.playersCount}`"></span>
@@ -180,7 +180,7 @@
                 </div>
               </div>
               <div class="char-card__body">
-                <div class="char-card__author" x-text="card.author || 'AI星月官方'"></div>
+                <div class="char-card__author" x-text="card.author || '惑梦（Homer）官方'"></div>
                 <code class="card-id-chip card-id-chip--compact" x-text="`ID: ${card.displayId || card.id}`"></code>
                 <div class="char-card__name" x-text="card.name"></div>
                 <div class="char-card__desc" x-text="card.description || '点击查看角色设定'"></div>
