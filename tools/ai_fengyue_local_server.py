@@ -682,7 +682,7 @@ def site_settings_defaults() -> dict:
             "info_download_button_text": "打开 Web App",
             "info_eyebrow": "惑梦（Homer） Web 同步状态",
             "info_title": "网页端\n同账号 · 同积分 · 同角色库。",
-            "info_copy": "当前站点保持本地库模式，角色封面走本站媒体缓存，不依赖上游可用性，国内访问也很顺畅。",
+            "info_copy": "",
             "info_stat_upstream_label": "上游本地化角色",
             "info_stat_official_label": "公开官方角色",
             "info_stat_user_label": "用户角色",
