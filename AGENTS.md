@@ -546,3 +546,8 @@
   Cause: 旧逻辑把“支付页面可用”与“CTF 测试直充可用”共用一个开关，且历史兼容路径存在直接入账能力。
   Fix: 新增独立 `CTF_DIRECT_RECHARGE_ENABLED`，默认 `false`；两个旧 CTF 直充路径默认返回 403。即使显式开启，也必须验证 bearer token，并且入账用户只能取自 token，不能信任请求体用户标识。
   Verify: 2026-07-13 本地与线上在 ZPAY 已启用时，旧 CTF 直充仍返回 403；线上环境明确为 `CTF_DIRECT_RECHARGE_ENABLED=false`。
+
+- Symptom: 开启 ZPAY 后爱发电购买入口消失，或自定义金额可通过科学计数/客户端伪造积分绕过计价。
+  Cause: `deposit_meta_json()` 曾在 ZPAY 可用时强制清空 `aifadian_url`；Python `Decimal` 默认接受 `1e2`，且若直接信任请求体 `points/plan_name` 会破坏服务端计价边界。
+  Fix: 同时公开 `payment_providers=[zpay,aifadian]` 与爱发电 URL；自定义金额只接受普通十进制字符串、范围 1.00–5000.00 且最多两位小数，金额转整数分后由服务端按 `PAYMENT_POINTS_PER_CNY` 生成 `custom` 订单；忽略客户端 points/name。
+  Verify: 2026-07-13 本地 E2E 验证 12.34→12340、1e2/越界/三位小数被拒、伪造积分无效；线上固定 ¥10 和自定义 ¥12.34 均进入官方收银台、余额不变；桌面/390px 同时显示爱发电和在线支付宝且无溢出/console error。

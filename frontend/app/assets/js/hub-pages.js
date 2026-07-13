@@ -308,6 +308,9 @@ export function rewardsPage() {
     messageType: 'info',
     busy: false,
     selectedPlan: null,
+    paymentMode: 'plan',
+    customAmountInput: '',
+    customAmountError: '',
     payType: '',
     currentOrder: null,
     orderPollingTimer: null,
@@ -336,6 +339,23 @@ export function rewardsPage() {
     paymentAvailable() {
       return !!(this.deposit?.payment_available && this.deposit?.mode !== 'closed');
     },
+    onlinePaymentAvailable() {
+      return !!(this.paymentAvailable() && this.deposit?.payment_create_url && this.availablePayTypes().some(item => item.id === 'alipay'));
+    },
+    safeAifadianUrl() {
+      try {
+        const url = new URL(String(this.deposit?.aifadian_url || ''));
+        const host = url.hostname.toLowerCase();
+        const allowed = host === 'ifdian.net' || host.endsWith('.ifdian.net') || host === 'afdian.com' || host.endsWith('.afdian.com');
+        if (url.protocol !== 'https:' || !allowed || (url.port && url.port !== '443')) return '';
+        return url.href;
+      } catch {
+        return '';
+      }
+    },
+    aifadianAvailable() {
+      return !!this.safeAifadianUrl();
+    },
     normalizeBalance(data) {
       const b = data?.balance || data || {};
       return {
@@ -360,21 +380,90 @@ export function rewardsPage() {
     },
     focusPayment() {
       const firstPlan = (this.deposit?.packages || [])[0] || (this.deposit?.subscriptions || [])[0] || null;
-      if (firstPlan && !this.selectedPlan) this.selectedPlan = firstPlan;
+      if (firstPlan && !this.selectedPlan && (this.paymentMode !== 'custom' || this.customAmountCny() === null)) {
+        this.paymentMode = 'plan';
+        this.selectedPlan = firstPlan;
+      }
       this.$nextTick(() => document.getElementById('payment-checkout')?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
     },
     selectPlan(item) {
-      if (!this.paymentAvailable()) {
+      if (!this.onlinePaymentAvailable()) {
         this.setMessage(this.paymentNote(), 'error');
         return;
       }
+      this.paymentMode = 'plan';
       this.selectedPlan = item || null;
+      this.customAmountError = '';
       this.focusPayment();
     },
-    paymentNote() {
-      if (this.paymentAvailable()) {
-        return this.deposit?.payment_note_available || '选择套餐和支付方式后在线付款，支付成功会自动到账。';
+    customAmountLimits() {
+      const min = Number(this.deposit?.custom_amount_min_cny || 1);
+      const max = Number(this.deposit?.custom_amount_max_cny || 5000);
+      const safeMin = Number.isFinite(min) && min > 0 ? min : 1;
+      return {
+        min: safeMin,
+        max: Number.isFinite(max) && max >= safeMin ? max : 5000,
+      };
+    },
+    customAmountErrorText() {
+      const { min, max } = this.customAmountLimits();
+      return `请输入 ¥${min.toFixed(2)}～¥${max.toFixed(2)}，最多两位小数`;
+    },
+    customAmountRangeText() {
+      const { min, max } = this.customAmountLimits();
+      return `¥${min.toFixed(2)}～¥${max.toFixed(2)} · 最多两位小数`;
+    },
+    customAmountCny() {
+      const raw = String(this.customAmountInput || '').trim();
+      if (!/^\d+(?:\.\d{1,2})?$/.test(raw)) return null;
+      const amount = Number(raw);
+      const { min, max } = this.customAmountLimits();
+      if (!Number.isFinite(amount) || amount < min || amount > max) return null;
+      return Number(amount.toFixed(2));
+    },
+    customPointsEstimate() {
+      const amount = this.customAmountCny();
+      const rate = Number(this.deposit?.points_per_cny || 1000);
+      return amount === null ? 0 : Math.round(amount * (Number.isFinite(rate) && rate > 0 ? rate : 1000));
+    },
+    onCustomAmountInput() {
+      this.paymentMode = 'custom';
+      this.selectedPlan = null;
+      const raw = String(this.customAmountInput || '').trim();
+      this.customAmountError = raw && this.customAmountCny() === null ? this.customAmountErrorText() : '';
+    },
+    selectCustomAmount(scroll = true) {
+      this.paymentMode = 'custom';
+      this.selectedPlan = null;
+      const amount = this.customAmountCny();
+      if (amount === null) {
+        this.customAmountError = this.customAmountErrorText();
+        return false;
       }
+      this.customAmountError = '';
+      if (scroll) this.focusPayment();
+      return true;
+    },
+    paymentSelectionReady() {
+      return this.paymentMode === 'custom' ? this.customAmountCny() !== null : !!this.selectedPlan?.id;
+    },
+    paymentSelectionLabel() {
+      if (this.paymentMode === 'custom') {
+        const amount = this.customAmountCny();
+        return amount === null ? '' : `自定义充值 · ¥${amount.toFixed(2)}`;
+      }
+      return this.selectedPlan ? `${this.selectedPlan.label || this.selectedPlan.id} · ¥${this.selectedPlan.price_cny}` : '';
+    },
+    openAifadian() {
+      const url = this.safeAifadianUrl();
+      if (url) window.open(url, '_blank', 'noopener,noreferrer');
+      else this.setMessage('爱发电购买链接暂不可用', 'error');
+    },
+    paymentNote() {
+      if (this.onlinePaymentAvailable()) {
+        return this.deposit?.payment_note_available || '在线支付宝支付成功后自动到账；爱发电卡密仍可在本页兑换。';
+      }
+      if (this.aifadianAvailable()) return '可前往爱发电购买卡密，并在本页兑换到账。';
       return this.deposit?.payment_note_unavailable || '充值通道暂时关闭，恢复后会重新开放购买和兑换。';
     },
     availablePayTypes() {
@@ -428,8 +517,16 @@ export function rewardsPage() {
       try { localStorage.removeItem(pendingOrderKey); } catch {}
     },
     async createPayment() {
-      if (!this.paymentAvailable() || !this.selectedPlan?.id || this.busy) {
-        if (!this.selectedPlan?.id) this.setMessage('请先选择一个充值套餐', 'error');
+      if (!this.onlinePaymentAvailable() || this.busy) return;
+      const isCustom = this.paymentMode === 'custom';
+      const amountCny = isCustom ? this.customAmountCny() : null;
+      if (isCustom && amountCny === null) {
+        this.selectCustomAmount(false);
+        this.setMessage(this.customAmountError, 'error');
+        return;
+      }
+      if (!isCustom && !this.selectedPlan?.id) {
+        this.setMessage('请先选择一个充值套餐', 'error');
         return;
       }
       if (!this.availablePayTypes().some(item => item.id === this.payType)) {
@@ -438,7 +535,7 @@ export function rewardsPage() {
       }
       this.busy = true;
       try {
-        const response = await api.createPaymentOrder(this.selectedPlan.id, this.payType);
+        const response = await api.createPaymentOrder(isCustom ? '' : this.selectedPlan.id, this.payType, amountCny);
         const order = this.normalizeOrder(response?.data || response || {});
         if (!order.order_no) throw new Error('支付订单创建失败：缺少订单号');
         if (!order.pay_url) throw new Error('支付地址校验失败，请稍后重试');

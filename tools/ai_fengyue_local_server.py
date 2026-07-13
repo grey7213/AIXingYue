@@ -44,6 +44,16 @@ def env_bool(name: str, default: bool = False) -> bool:
     return str(value).strip().lower() in ("1", "true", "yes", "on")
 
 
+def env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(str(os.environ.get(name, default)).strip())
+    except (TypeError, ValueError):
+        return int(default)
+    if value < int(minimum) or value > int(maximum):
+        return int(default)
+    return value
+
+
 CODE_TTL_SECONDS = 10 * 60
 CHAT_MESSAGE_COST = int(os.environ.get("CHAT_MESSAGE_COST", "50") or "50")
 TTS_MAX_CHARS = 1200
@@ -108,6 +118,12 @@ ZPAY_ALLOWED_TYPES = {
     for item in os.environ.get("ZPAY_ALLOWED_TYPES", ZPAY_PAYMENT_TYPE).split(",")
     if item.strip()
 }
+PAYMENT_POINTS_PER_CNY = env_int("PAYMENT_POINTS_PER_CNY", 1000, 1, 1000000)
+CUSTOM_PAYMENT_MIN_CENTS = env_int("CUSTOM_PAYMENT_MIN_CENTS", 100, 1, 100000000)
+CUSTOM_PAYMENT_MAX_CENTS = max(
+    CUSTOM_PAYMENT_MIN_CENTS,
+    env_int("CUSTOM_PAYMENT_MAX_CENTS", 500000, 1, 100000000),
+)
 SITE_SETTINGS_KEY = "site_settings"
 GLOBAL_PROMPT_PRESET_KEY = "global_prompt_preset"
 IMAGE_MODEL_SETTINGS_KEY = "image_model_settings"
@@ -420,6 +436,28 @@ def money_to_cents(value: object) -> int:
 
 def cents_to_money(cents: int) -> str:
     return f"{max(0, int(cents or 0)) / 100:.2f}"
+
+
+def custom_amount_to_cents(value: object) -> int:
+    text = str(value).strip()
+    if not re.fullmatch(r"\d+(?:\.\d{1,2})?", text):
+        raise ValueError("custom amount must be a plain decimal with at most two decimal places")
+    try:
+        amount = Decimal(text)
+    except (InvalidOperation, TypeError, ValueError):
+        raise ValueError("invalid custom amount")
+    if not amount.is_finite():
+        raise ValueError("invalid custom amount")
+    cents_value = amount * 100
+    if cents_value != cents_value.to_integral_value():
+        raise ValueError("custom amount supports at most two decimal places")
+    cents = int(cents_value)
+    if cents < CUSTOM_PAYMENT_MIN_CENTS or cents > CUSTOM_PAYMENT_MAX_CENTS:
+        raise ValueError(
+            f"custom amount must be between {cents_to_money(CUSTOM_PAYMENT_MIN_CENTS)} "
+            f"and {cents_to_money(CUSTOM_PAYMENT_MAX_CENTS)} CNY"
+        )
+    return cents
 
 
 def zpay_is_configured() -> bool:
@@ -3325,6 +3363,19 @@ class Store:
                     "points": points,
                 }
         return None
+
+    def custom_payment_plan(self, amount_cny: object) -> dict:
+        money_cents = custom_amount_to_cents(amount_cny)
+        points = money_cents * PAYMENT_POINTS_PER_CNY // 100
+        amount_label = cents_to_money(money_cents)
+        return {
+            "id": "custom",
+            "kind": "custom",
+            "label": f"自定义充值 ¥{amount_label}",
+            "product_name": f"自定义充值 ¥{amount_label} · {points} 惑梦币",
+            "money_cents": money_cents,
+            "points": points,
+        }
 
     def create_payment_order(
         self,
@@ -10924,6 +10975,7 @@ def payment_order_json(item: sqlite3.Row | dict, user: sqlite3.Row | dict | None
         "provider": str(item["provider"] or "zpay"),
         "plan_id": str(item["plan_id"]),
         "plan_kind": str(item["plan_kind"]),
+        "plan_name": str(item["product_name"]),
         "product_name": str(item["product_name"]),
         "pay_type": str(item["pay_type"]),
         "money": cents_to_money(int(item["money_cents"] or 0)),
@@ -10989,14 +11041,25 @@ def deposit_meta_json(user: sqlite3.Row | None = None) -> dict:
             "balance": credit_balance_json(user) if user is not None else None,
         }
     zpay_available = zpay_is_configured()
+    payment_providers = []
+    if zpay_available:
+        payment_providers.append("zpay")
+    if aifadian_url:
+        payment_providers.append("aifadian")
     return {
         "mode": "zpay_direct" if zpay_available else "aifadian_redeem_code",
         "channel_enabled": True,
         "payment_provider": "zpay" if zpay_available else "aifadian",
+        "payment_providers": payment_providers,
         "payment_create_url": "/console/api/web/payments/orders" if zpay_available else "",
         "pay_types": sorted(ZPAY_ALLOWED_TYPES) if zpay_available else [],
-        "aifadian_url": "" if zpay_available else aifadian_url,
+        "aifadian_url": aifadian_url,
+        "aifadian_available": bool(aifadian_url),
         "payment_available": zpay_available or bool(aifadian_url),
+        "custom_amount_enabled": zpay_available,
+        "custom_amount_min_cny": cents_to_money(CUSTOM_PAYMENT_MIN_CENTS),
+        "custom_amount_max_cny": cents_to_money(CUSTOM_PAYMENT_MAX_CENTS),
+        "points_per_cny": PAYMENT_POINTS_PER_CNY,
         "redeem_available": True,
         "currency": deposit.get("currency") or "CNY",
         "credits_name": deposit.get("credits_name") or "惑梦币",
@@ -12488,9 +12551,15 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(body, dict):
                 return error_response("invalid body", 400)
             plan_id = str(body.get("plan_id") or "").strip()
-            plan = self.store.payment_plan(plan_id)
-            if not plan:
-                return error_response("invalid payment plan", 400)
+            if plan_id == "custom" or (not plan_id and body.get("amount_cny") not in (None, "")):
+                try:
+                    plan = self.store.custom_payment_plan(body.get("amount_cny"))
+                except ValueError as exc:
+                    return error_response(str(exc), 400)
+            else:
+                plan = self.store.payment_plan(plan_id)
+                if not plan:
+                    return error_response("invalid payment plan", 400)
             pay_type = str(body.get("pay_type") or ZPAY_PAYMENT_TYPE).strip().lower()
             if not pay_type or pay_type not in ZPAY_ALLOWED_TYPES:
                 return error_response("unsupported payment type", 400)

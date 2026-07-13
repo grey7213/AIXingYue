@@ -81,3 +81,13 @@
 - Nginx `/download/` 已返回 404，公网 `https://patcher.villainy.top/download/ai-xingyue-latest.apk` 不再分发 APK。
 - 前端 Rewards/Me/Dashboard 不再渲染购买按钮、兑换输入、套餐和订阅卡片；首页和信息中心改为引导 Web App。
 - 线上验证：service/nginx active，`CONTENT_MODE=local_only`，公开 `/health` 200；浏览器 `output/verify_channels_closed_browser.py` 验证首页无 APK 链接、无在线充值文案，Rewards/Me/Dashboard 均为维护态且无 console/page error。
+
+## 2026-07-13 当前支付状态（覆盖早期非目标）
+
+- 充值渠道已恢复，并同时提供：
+  - 爱发电购买自动发货卡密，回到 Rewards 页面兑换。
+  - ZPAY 在线支付宝，异步回调确认后自动增加 `paid_points`。
+- 在线支付宝既支持固定积分包/月度额度包，也支持用户自定义金额。
+- 自定义金额范围 `1.00–5000.00 CNY`，最多两位小数，按 `1 CNY = 1000` 惑梦币由服务端计算到账额度，不接受前端自定义 points。
+- 历史兑换码库存、兑换历史和爱发电运营方式均保留，不再是仅回滚/客服用途。
+- 支付回调已实现签名、PID、订单金额、支付类型、状态和幂等校验；浏览器 return 不负责入账。

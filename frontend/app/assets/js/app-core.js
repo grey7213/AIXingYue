@@ -129,9 +129,13 @@ export const api = {
   },
   credits: () => rawRequest('/console/api/user/credits'),
   depositMeta: () => rawRequest('/console/api/web/deposit-meta'),
-  createPaymentOrder: (planId, payType) => rawRequest('/console/api/web/payments/orders', {
+  createPaymentOrder: (planId, payType, amountCny = null) => rawRequest('/console/api/web/payments/orders', {
     method: 'POST',
-    body: { plan_id: planId, pay_type: payType },
+    body: {
+      ...(planId ? { plan_id: planId } : {}),
+      pay_type: payType,
+      ...(amountCny !== null ? { amount_cny: amountCny } : {}),
+    },
   }),
   paymentOrder: (orderNo) => rawRequest(`/console/api/web/payments/orders/${encodeURIComponent(orderNo)}`),
   redeemCode: (code) => rawRequest('/console/api/web/redeem-code', { method: 'POST', body: { code } }),
