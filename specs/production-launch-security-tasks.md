@@ -8,7 +8,7 @@
 | PLS4 | 阻断用户 Base URL 窃取站点模型 Key/SSRF | Done | 用户创建卡提交攻击者 URL 后响应和 DB 均为空；站点模型地址只取管理员预设 |
 | PLS5 | 加固登录、请求体、图片代理和 CORS | Done | PBKDF2、登录/验证码限流、32MB body、10MB 图片代理、禁重定向、恶意 Origin 无 ACAO、日志递归脱敏 |
 | PLS6 | 部署、线上 API 与浏览器验证 | Done | backend/Nginx active，内外 health OK，local_only；桌面 1440 和移动 390 无溢出/console error；临时用户、订单和验证码已清理 |
-| PLS7 | 提交、推送并形成剩余风险清单 | In progress | 安全报告已形成；待本轮精确 Git 提交和 push |
+| PLS7 | 提交、推送并形成剩余风险清单 | Done | 安全报告已形成；提交 `578aeb7` 已推送到 `origin/main` |
 
 ## 线上验收摘要
 
