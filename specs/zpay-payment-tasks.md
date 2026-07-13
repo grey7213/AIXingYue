@@ -12,7 +12,7 @@ Updated: 2026-07-13
 | ZP6 | 备份、配置、部署线上 | Done | DB 在线备份 `quick_check=ok`；backend/env/frontend 均有时间戳备份；service/nginx active |
 | ZP7 | 线上订单和官方收银台验证 | Done | 临时 ¥10 pending 订单被 ZPAY 正式网关接受并 302 到官方收银台；未付款余额不变，测试订单已清理 |
 | ZP8 | 真实支付到账验证 | Pending | 等待一笔真实付款后核对 notify 与余额 |
-| ZP9 | 更新记录并提交推送 | In progress | 更新项目规则/current-state 后做 focused commit + origin/main |
+| ZP9 | 更新记录并提交推送 | Done | 支付实现提交 `55fb9c0` 已推送到 `origin/main`；项目规则和 current-state 已更新 |
 
 ## 2026-07-13 验证记录
 
