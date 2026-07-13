@@ -551,3 +551,8 @@
   Cause: `deposit_meta_json()` 曾在 ZPAY 可用时强制清空 `aifadian_url`；Python `Decimal` 默认接受 `1e2`，且若直接信任请求体 `points/plan_name` 会破坏服务端计价边界。
   Fix: 同时公开 `payment_providers=[zpay,aifadian]` 与爱发电 URL；自定义金额只接受普通十进制字符串、范围 1.00–5000.00 且最多两位小数，金额转整数分后由服务端按 `PAYMENT_POINTS_PER_CNY` 生成 `custom` 订单；忽略客户端 points/name。
   Verify: 2026-07-13 本地 E2E 验证 12.34→12340、1e2/越界/三位小数被拒、伪造积分无效；线上固定 ¥10 和自定义 ¥12.34 均进入官方收银台、余额不变；桌面/390px 同时显示爱发电和在线支付宝且无溢出/console error。
+
+- Symptom: 后台 Alpine 页面控制台报 `Alpine Expression Error: Unexpected token 'try'`，对应 JSON 字段输入框无法绑定 change 事件。
+  Cause: Alpine 指令表达式不接受以 `try { ... } catch { ... }` 开头的语句块；把完整异常处理直接写入 `@change` 会在组件初始化时编译失败。
+  Fix: 将 JSON 解析与异常处理移到 `admin-app.js` 方法中，HTML 指令只调用单个方法，例如 `@change="parseGlobalArrayField(...)"`。
+  Verify: 2026-07-13 线上重新加载全局正则编辑器并展开条目后，新增 warning/error 为 0；桌面和 390x844 页面正常渲染。

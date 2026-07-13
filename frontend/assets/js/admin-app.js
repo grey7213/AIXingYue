@@ -20,6 +20,7 @@ function adminPanel() {
       { id: 'redeem', label: '兑换码', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7h3a2 2 0 012 2v1m-5-3V5a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2h2m8-8L7 15m10 0h2a2 2 0 002-2v-1m-4 3v4a2 2 0 01-2 2H9a2 2 0 01-2-2v-4"/></svg>' },
       { id: 'site', label: '运营配置', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h10M4 18h7m8-7l-2 2-1-1m3 4l-2 2-1-1"/></svg>' },
       { id: 'llm', label: '模型配置', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>' },
+      { id: 'global-presets', label: '全局预设', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h10M18 16l2 2 3-3"/></svg>' },
       { id: 'plugins', label: 'Tavo 插件', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3M5 11h14M7 21h10a2 2 0 002-2v-8H5v8a2 2 0 002 2zm5-6v3m-2-2h4"/></svg>' },
       { id: 'apps', label: '角色卡', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14-7H5a2 2 0 00-2 2v12a2 2 0 002 2h14a2 2 0 002-2V6a2 2 0 00-2-2zm-3 11l-2-2-4 4"/></svg>' },
     ],
@@ -619,6 +620,11 @@ function adminPanel() {
     siteForm: null,
 
     llmSettings: null,
+    globalPresets: null,
+    globalPresetKind: 'prompt',
+    globalPresetEditor: null,
+    globalPresetSearch: '',
+    globalPresetFilter: 'all',
     llmForm: {
       enabled: true,
       base_url: '',
@@ -830,8 +836,202 @@ function adminPanel() {
       if (id === 'redeem' && this.redeemCodes.length === 0) await this.loadRedeemCodes(1);
       if (id === 'site' && !this.siteSettings) await this.loadSiteSettings();
       if (id === 'llm' && !this.llmSettings) await this.loadLlmSettings();
+      if (id === 'global-presets' && !this.globalPresets) await this.loadGlobalPresets();
       if (id === 'plugins' && this.tavoPlugins.length === 0) await this.loadTavoPlugins();
       if (id === 'apps' && this.apps.length === 0) await this.loadApps(1);
+    },
+
+    stripGlobalPresetPrivate(value) {
+      if (Array.isArray(value)) return value.map(item => this.stripGlobalPresetPrivate(item));
+      if (!value || typeof value !== 'object') return value;
+      return Object.fromEntries(Object.entries(value)
+        .filter(([key]) => !key.startsWith('_'))
+        .map(([key, item]) => [key, this.stripGlobalPresetPrivate(item)]));
+    },
+
+    globalPresetLibrary(kind = this.globalPresetKind) {
+      return this.globalPresets?.[kind] || { active_id: '', items: [] };
+    },
+
+    globalPresetItems(kind = this.globalPresetKind) {
+      return this.globalPresetLibrary(kind).items || [];
+    },
+
+    prepareGlobalPresetEditor(preset, kind = this.globalPresetKind) {
+      const editor = JSON.parse(JSON.stringify(preset || {}));
+      editor._kind = kind;
+      const entries = kind === 'prompt' ? ((editor.prompts || []).length ? editor.prompts : (editor.blocks || [])) : (editor.scripts || []);
+      entries.forEach(entry => {
+        entry._raw_json = JSON.stringify(this.stripGlobalPresetPrivate(entry), null, 2);
+      });
+      editor._preset_json = JSON.stringify(this.stripGlobalPresetPrivate(editor), null, 2);
+      return editor;
+    },
+
+    openGlobalPreset(kind, presetId) {
+      this.globalPresetKind = kind;
+      const preset = this.globalPresetItems(kind).find(item => item.id === presetId) || this.globalPresetItems(kind)[0];
+      this.globalPresetEditor = preset ? this.prepareGlobalPresetEditor(preset, kind) : null;
+    },
+
+    async loadGlobalPresets(selectId = '') {
+      this.loading = true;
+      try {
+        const response = await api.admin.globalPresets();
+        this.globalPresets = response.data || response || { prompt: { items: [] }, regex: { items: [] } };
+        const library = this.globalPresetLibrary();
+        const target = selectId || this.globalPresetEditor?.id || library.active_id || library.items?.[0]?.id || '';
+        this.openGlobalPreset(this.globalPresetKind, target);
+      } catch (err) {
+        this.showToast(err.message || '加载全局预设失败', 'error');
+      } finally { this.loading = false; }
+    },
+
+    switchGlobalPresetKind(kind) {
+      this.globalPresetKind = kind === 'regex' ? 'regex' : 'prompt';
+      this.globalPresetSearch = '';
+      this.globalPresetFilter = 'all';
+      const library = this.globalPresetLibrary();
+      this.openGlobalPreset(this.globalPresetKind, library.active_id || library.items?.[0]?.id || '');
+    },
+
+    globalPresetEntries() {
+      if (!this.globalPresetEditor) return [];
+      const source = this.globalPresetKind === 'prompt'
+        ? ((this.globalPresetEditor.prompts || []).length ? this.globalPresetEditor.prompts : (this.globalPresetEditor.blocks || []))
+        : (this.globalPresetEditor.scripts || []);
+      const query = String(this.globalPresetSearch || '').trim().toLowerCase();
+      return source.filter(entry => {
+        const enabled = this.isGlobalPresetEntryEnabled(entry);
+        if (this.globalPresetFilter === 'enabled' && !enabled) return false;
+        if (this.globalPresetFilter === 'disabled' && enabled) return false;
+        if (this.globalPresetFilter === 'marker' && !entry.marker) return false;
+        if (!query) return true;
+        return [entry.name, entry.identifier, entry.scriptName, entry.id, entry.content, entry.findRegex]
+          .some(value => String(value || '').toLowerCase().includes(query));
+      });
+    },
+
+    isGlobalPresetEntryEnabled(entry) {
+      if (this.globalPresetKind === 'regex') return !entry?.disabled;
+      if (this.globalPresetEditor?.format === 'legacy-blocks' || !(this.globalPresetEditor?.prompts || []).length) return entry?.enabled !== false;
+      return !!entry?.in_order && entry?.order_enabled !== false;
+    },
+
+    globalPresetStats() {
+      const editor = this.globalPresetEditor;
+      if (!editor) return { total: 0, enabled: 0, markers: 0, unlisted: 0 };
+      const entries = this.globalPresetKind === 'prompt' ? ((editor.prompts || []).length ? editor.prompts : (editor.blocks || [])) : (editor.scripts || []);
+      return {
+        total: entries.length,
+        enabled: entries.filter(entry => this.isGlobalPresetEntryEnabled(entry)).length,
+        markers: entries.filter(entry => !!entry.marker).length,
+        unlisted: entries.filter(entry => this.globalPresetKind === 'prompt' && entry.in_order === false).length,
+      };
+    },
+
+    applyGlobalEntryJson(entry) {
+      try {
+        const parsed = JSON.parse(String(entry?._raw_json || '{}'));
+        const privateJson = entry._raw_json;
+        Object.keys(entry).forEach(key => delete entry[key]);
+        Object.assign(entry, parsed, { _raw_json: privateJson });
+        this.showToast('完整条目 JSON 已应用', 'success');
+      } catch {
+        this.showToast('条目 JSON 格式错误', 'error');
+      }
+    },
+
+    parseGlobalArrayField(entry, key, rawValue, label) {
+      try {
+        const parsed = JSON.parse(String(rawValue || '[]'));
+        if (!Array.isArray(parsed)) throw new Error('not array');
+        entry[key] = parsed;
+      } catch {
+        this.showToast(`${label || key} JSON 错误`, 'error');
+      }
+    },
+
+    applyGlobalPresetJson() {
+      try {
+        const parsed = JSON.parse(String(this.globalPresetEditor?._preset_json || '{}'));
+        parsed.id = this.globalPresetEditor.id;
+        this.globalPresetEditor = this.prepareGlobalPresetEditor(parsed, this.globalPresetKind);
+        this.showToast('完整预设 JSON 已应用', 'success');
+      } catch {
+        this.showToast('预设 JSON 格式错误', 'error');
+      }
+    },
+
+    async importGlobalPromptFile(event) {
+      const file = event?.target?.files?.[0];
+      if (!file) return;
+      this.loading = true;
+      try {
+        const raw = await file.text();
+        const preset = JSON.parse(raw);
+        const response = await api.admin.importGlobalPromptPreset({ preset, filename: file.name });
+        this.globalPresetKind = 'prompt';
+        await this.loadGlobalPresets((response.data || response)?.preset?.id || '');
+        this.showToast(`已导入全部 ${(response.data || response)?.preset?.stats?.entry_count || 0} 个提示词条目`, 'success');
+      } catch (err) {
+        this.showToast(err.message || '提示词预设导入失败', 'error');
+      } finally {
+        this.loading = false;
+        if (event?.target) event.target.value = '';
+      }
+    },
+
+    fileAsDataUrl(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(reader.error || new Error('文件读取失败'));
+        reader.readAsDataURL(file);
+      });
+    },
+
+    async importGlobalRegexFile(event) {
+      const file = event?.target?.files?.[0];
+      if (!file) return;
+      this.loading = true;
+      try {
+        const dataUrl = await this.fileAsDataUrl(file);
+        const response = await api.admin.importGlobalRegexPreset({ data_url: dataUrl, filename: file.name });
+        this.globalPresetKind = 'regex';
+        await this.loadGlobalPresets((response.data || response)?.preset?.id || '');
+        this.showToast(`已导入全部 ${(response.data || response)?.preset?.stats?.entry_count || 0} 条正则`, 'success');
+      } catch (err) {
+        this.showToast(err.message || '正则预设导入失败', 'error');
+      } finally {
+        this.loading = false;
+        if (event?.target) event.target.value = '';
+      }
+    },
+
+    async saveGlobalPreset() {
+      if (!this.globalPresetEditor?.id) return;
+      this.loading = true;
+      try {
+        const payload = this.stripGlobalPresetPrivate(this.globalPresetEditor);
+        await api.admin.saveGlobalPreset(this.globalPresetKind, this.globalPresetEditor.id, payload);
+        await this.loadGlobalPresets(this.globalPresetEditor.id);
+        this.showToast('全局预设已保存', 'success');
+      } catch (err) {
+        this.showToast(err.message || '全局预设保存失败', 'error');
+      } finally { this.loading = false; }
+    },
+
+    async activateGlobalPreset(kind, presetId) {
+      this.loading = true;
+      try {
+        await api.admin.activateGlobalPreset(kind, presetId);
+        this.globalPresetKind = kind;
+        await this.loadGlobalPresets(presetId);
+        this.showToast('已设为当前全局预设，其余同类预设已停用', 'success');
+      } catch (err) {
+        this.showToast(err.message || '启用全局预设失败', 'error');
+      } finally { this.loading = false; }
     },
 
     async loadStats() {
@@ -1425,7 +1625,6 @@ function adminPanel() {
           temperature: Number(this.llmForm.temperature || 0.8),
           clear_api_key: !!this.llmForm.clear_api_key,
           default_model_preset_id: this.llmForm.default_model_preset_id,
-          global_prompt_preset: this.serializeGlobalPromptPreset(),
           image_model: this.serializeImageModelSettings(),
           memory_settings: this.normalizeMemorySettings(this.llmForm.memory_settings || {}),
           presets: this.llmForm.presets.map(p => ({
@@ -1456,7 +1655,6 @@ function adminPanel() {
         }
         const r = await api.admin.saveLlmSettings(payload);
         this.llmSettings = r.data || r;
-        this.llmForm.global_prompt_preset = this.normalizeGlobalPromptPreset(this.llmSettings.global_prompt_preset || payload.global_prompt_preset);
         this.llmForm.image_model = this.normalizeImageModelSettings(this.llmSettings.image_model || payload.image_model);
         this.llmForm.memory_settings = this.normalizeMemorySettings(this.llmSettings.memory_settings || payload.memory_settings);
         this.llmForm.api_key = '';

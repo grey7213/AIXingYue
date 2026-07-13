@@ -165,6 +165,15 @@ export const api = {
     llmSettings: () => request('/admin/api/llm-settings'),
     saveLlmSettings: (payload) =>
       request('/admin/api/llm-settings', { method: 'POST', body: payload }),
+    globalPresets: () => request('/admin/api/global-presets'),
+    importGlobalPromptPreset: (payload) =>
+      request('/admin/api/global-presets/import-prompt', { method: 'POST', body: payload }),
+    importGlobalRegexPreset: (payload) =>
+      request('/admin/api/global-presets/import-regex', { method: 'POST', body: payload }),
+    saveGlobalPreset: (kind, presetId, payload) =>
+      request(`/admin/api/global-presets/${encodeURIComponent(kind)}/${encodeURIComponent(presetId)}`, { method: 'POST', body: { preset: payload } }),
+    activateGlobalPreset: (kind, presetId) =>
+      request(`/admin/api/global-presets/${encodeURIComponent(kind)}/${encodeURIComponent(presetId)}/activate`, { method: 'POST', body: {} }),
     tavoPlugins: () => request('/admin/api/tavo-plugins'),
     importTavoPlugin: (payload) =>
       request('/admin/api/tavo-plugins/import', { method: 'POST', body: payload }),

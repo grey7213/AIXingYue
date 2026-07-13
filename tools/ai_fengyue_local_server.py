@@ -126,6 +126,8 @@ CUSTOM_PAYMENT_MAX_CENTS = max(
 )
 SITE_SETTINGS_KEY = "site_settings"
 GLOBAL_PROMPT_PRESET_KEY = "global_prompt_preset"
+GLOBAL_PROMPT_PRESETS_KEY = "global_prompt_presets"
+GLOBAL_REGEX_PRESETS_KEY = "global_regex_presets"
 IMAGE_MODEL_SETTINGS_KEY = "image_model_settings"
 MEMORY_SETTINGS_KEY = "memory_settings"
 ACTIVE_STORE = None
@@ -5872,9 +5874,148 @@ class Store:
             default_id = normalized[0]["id"] if normalized else "default"
         return normalized, default_id
 
-    def global_prompt_preset(self) -> dict:
+    def global_prompt_presets(self) -> dict:
         saved = self.get_api_settings_raw()
-        return normalize_global_prompt_preset(saved.get(GLOBAL_PROMPT_PRESET_KEY) or "")
+        return normalize_prompt_preset_collection(
+            saved.get(GLOBAL_PROMPT_PRESETS_KEY) or "",
+            legacy=saved.get(GLOBAL_PROMPT_PRESET_KEY) or "",
+        )
+
+    def global_regex_presets(self) -> dict:
+        saved = self.get_api_settings_raw()
+        return normalize_regex_preset_collection(saved.get(GLOBAL_REGEX_PRESETS_KEY) or "")
+
+    def global_prompt_preset(self) -> dict:
+        collection = self.global_prompt_presets()
+        active_id = collection.get("active_id") or ""
+        return next((item for item in collection.get("items") or [] if item.get("id") == active_id), normalize_global_prompt_preset(""))
+
+    def global_regex_preset(self) -> dict:
+        collection = self.global_regex_presets()
+        active_id = collection.get("active_id") or ""
+        return next((item for item in collection.get("items") or [] if item.get("id") == active_id), {"enabled": False, "scripts": []})
+
+    def global_presets(self) -> dict:
+        return {"prompt": self.global_prompt_presets(), "regex": self.global_regex_presets()}
+
+    def _save_global_collection(self, key: str, collection: dict) -> None:
+        raw = json.dumps(collection, ensure_ascii=False, separators=(",", ":"))
+        if len(raw.encode("utf-8")) > 4 * 1024 * 1024:
+            raise ValueError("global preset collection is too large")
+        with self.lock:
+            self.conn.execute(
+                "insert into api_settings(key,value,updated_at) values(?,?,?) "
+                "on conflict(key) do update set value=excluded.value, updated_at=excluded.updated_at",
+                (key, raw, now_ms()),
+            )
+            self.conn.commit()
+
+    def import_global_prompt_preset(self, payload: object, filename: str = "") -> dict:
+        if isinstance(payload, str):
+            if len(payload.encode("utf-8")) > 2 * 1024 * 1024:
+                raise ValueError("prompt preset is too large")
+            try:
+                payload = json.loads(payload)
+            except Exception as exc:
+                raise ValueError(f"invalid prompt JSON: {exc}") from exc
+        if not isinstance(payload, dict) or not isinstance(payload.get("prompts"), list):
+            raise ValueError("SillyTavern prompts are required")
+        collection = self.global_prompt_presets()
+        preset = dict(payload)
+        preset["id"] = _global_preset_id(preset.get("id"), f"prompt-{int(time.time())}-{uuid.uuid4().hex[:6]}")
+        preset["name"] = str(preset.get("name") or preset.get("preset_name") or Path(filename or "SillyTavern 预设").stem)[:160]
+        preset["source"] = "sillytavern"
+        preset["source_file"] = Path(filename).name[:260] if filename else ""
+        preset["enabled"] = True
+        preset = normalize_full_prompt_preset(preset, len(collection.get("items") or []))
+        items = [dict(item, enabled=False) for item in collection.get("items") or [] if item.get("id") != preset["id"]]
+        items.append(preset)
+        collection = normalize_prompt_preset_collection({"active_id": preset["id"], "items": items})
+        self._save_global_collection(GLOBAL_PROMPT_PRESETS_KEY, collection)
+        return preset
+
+    def import_global_regex_preset(self, package_value: str, filename: str = "", name: str = "") -> dict:
+        raw_value = str(package_value or "").strip()
+        if raw_value.startswith("data:"):
+            raw_value = raw_value.split(",", 1)[-1]
+        try:
+            package = base64.b64decode(raw_value, validate=True)
+        except Exception as exc:
+            raise ValueError("invalid regex ZIP data") from exc
+        if not package or len(package) > 2 * 1024 * 1024:
+            raise ValueError("regex ZIP is empty or too large")
+        scripts: list[dict] = []
+        total_size = 0
+        try:
+            with zipfile.ZipFile(io.BytesIO(package)) as archive:
+                infos = archive.infolist()
+                if not infos or len(infos) > GLOBAL_REGEX_MAX_ENTRIES:
+                    raise ValueError("regex ZIP member count is invalid")
+                for order, info in enumerate(infos):
+                    safe_name = info.filename.replace("\\", "/")
+                    parts = [part for part in safe_name.split("/") if part]
+                    if info.is_dir():
+                        continue
+                    if not parts or safe_name.startswith("/") or ".." in parts or not safe_name.lower().endswith(".json"):
+                        raise ValueError(f"unsafe regex ZIP member: {info.filename}")
+                    total_size += int(info.file_size or 0)
+                    if total_size > 4 * 1024 * 1024:
+                        raise ValueError("regex ZIP expands beyond the allowed size")
+                    try:
+                        item = json.loads(archive.read(info).decode("utf-8-sig"))
+                    except Exception as exc:
+                        raise ValueError(f"invalid regex JSON: {info.filename}") from exc
+                    if not isinstance(item, dict):
+                        raise ValueError(f"regex member is not an object: {info.filename}")
+                    item = dict(item)
+                    item["order"] = order
+                    item["source_file"] = Path(info.filename).name[:260]
+                    scripts.append(item)
+        except zipfile.BadZipFile as exc:
+            raise ValueError("invalid regex ZIP") from exc
+        collection = self.global_regex_presets()
+        preset_id = _global_preset_id("", f"regex-{int(time.time())}-{uuid.uuid4().hex[:6]}")
+        preset = normalize_full_regex_preset({
+            "id": preset_id,
+            "name": str(name or Path(filename or "全局正则预设").stem)[:160],
+            "source": "sillytavern-regex-zip",
+            "source_file": Path(filename).name[:260] if filename else "",
+            "enabled": True,
+            "scripts": scripts,
+        }, len(collection.get("items") or []))
+        items = [dict(item, enabled=False) for item in collection.get("items") or [] if item.get("id") != preset_id]
+        items.append(preset)
+        collection = normalize_regex_preset_collection({"active_id": preset_id, "items": items})
+        self._save_global_collection(GLOBAL_REGEX_PRESETS_KEY, collection)
+        return preset
+
+    def save_global_preset(self, kind: str, preset_id: str, payload: object) -> dict:
+        if kind not in {"prompt", "regex"} or not isinstance(payload, dict):
+            raise ValueError("invalid global preset")
+        collection = self.global_prompt_presets() if kind == "prompt" else self.global_regex_presets()
+        items = list(collection.get("items") or [])
+        index = next((idx for idx, item in enumerate(items) if str(item.get("id") or "") == preset_id), -1)
+        if index < 0:
+            raise ValueError("global preset not found")
+        merged = dict(payload)
+        merged["id"] = preset_id
+        merged["enabled"] = preset_id == collection.get("active_id")
+        items[index] = normalize_full_prompt_preset(merged, index) if kind == "prompt" else normalize_full_regex_preset(merged, index)
+        next_collection = ({"active_id": collection.get("active_id"), "items": items})
+        next_collection = normalize_prompt_preset_collection(next_collection) if kind == "prompt" else normalize_regex_preset_collection(next_collection)
+        self._save_global_collection(GLOBAL_PROMPT_PRESETS_KEY if kind == "prompt" else GLOBAL_REGEX_PRESETS_KEY, next_collection)
+        return next_collection["items"][index]
+
+    def activate_global_preset(self, kind: str, preset_id: str) -> dict:
+        if kind not in {"prompt", "regex"}:
+            raise ValueError("invalid global preset kind")
+        collection = self.global_prompt_presets() if kind == "prompt" else self.global_regex_presets()
+        if preset_id and preset_id not in {str(item.get("id") or "") for item in collection.get("items") or []}:
+            raise ValueError("global preset not found")
+        collection["active_id"] = preset_id
+        collection = normalize_prompt_preset_collection(collection) if kind == "prompt" else normalize_regex_preset_collection(collection)
+        self._save_global_collection(GLOBAL_PROMPT_PRESETS_KEY if kind == "prompt" else GLOBAL_REGEX_PRESETS_KEY, collection)
+        return collection
 
     def image_model_settings(self, include_secret: bool = False) -> dict:
         saved = self.get_api_settings_raw()
@@ -5890,6 +6031,7 @@ class Store:
     def effective_llm_settings(self, app: dict | None = None, user_id: str = "") -> dict:
         presets, default_id = self.llm_presets(include_secrets=True)
         global_prompt = self.global_prompt_preset()
+        global_regex = self.global_regex_preset()
         enabled = [p for p in presets if p.get("enabled")]
         candidates = enabled or presets
         selected_key = ""
@@ -5911,6 +6053,7 @@ class Store:
                     "preset_name": selected_user.get("name") or selected_user.get("model") or "",
                     "source": "user",
                     "global_prompt_preset": global_prompt,
+                    "global_regex_preset": global_regex,
                 }
         selected = None
         selected_model = ""
@@ -5942,6 +6085,7 @@ class Store:
             "preset_id": selected.get("id") or default_id,
             "preset_name": selected.get("name") or selected.get("model") or "",
             "global_prompt_preset": global_prompt,
+            "global_regex_preset": global_regex,
         }
 
     def public_llm_settings(self) -> dict:
@@ -5961,6 +6105,9 @@ class Store:
             "api_key_preview": preview,
             "source": "database_or_env",
             "global_prompt_preset": self.global_prompt_preset(),
+            "global_prompt_presets": self.global_prompt_presets(),
+            "global_regex_preset": self.global_regex_preset(),
+            "global_regex_presets": self.global_regex_presets(),
             "image_model": self.image_model_settings(include_secret=False),
             "memory_settings": self.memory_settings(),
         }
@@ -8703,6 +8850,229 @@ def normalize_global_prompt_preset(value: object) -> dict:
     }
 
 
+GLOBAL_PRESET_MAX_ITEMS = 30
+GLOBAL_PROMPT_MAX_ENTRIES = 240
+GLOBAL_REGEX_MAX_ENTRIES = 120
+
+
+def _preset_bool(value: object, default: bool = False) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() not in ("", "0", "false", "no", "off", "disabled", "none", "null")
+
+
+def _global_preset_id(value: object, fallback: str) -> str:
+    text = re.sub(r"[^A-Za-z0-9_.:-]+", "-", str(value or fallback)).strip("-")
+    return (text or fallback)[:120]
+
+
+def normalize_full_prompt_preset(value: object, index: int = 0) -> dict:
+    """Preserve the complete SillyTavern preset while adding editable order metadata."""
+    raw = dict(value) if isinstance(value, dict) else {}
+    preset_id = _global_preset_id(raw.get("id"), f"prompt-{index + 1}")
+    prompts = raw.get("prompts") if isinstance(raw.get("prompts"), list) else []
+    prompt_order = raw.get("prompt_order") if isinstance(raw.get("prompt_order"), list) else []
+    first_group = next((item for item in prompt_order if isinstance(item, dict) and isinstance(item.get("order"), list)), {})
+    order_items = first_group.get("order") if isinstance(first_group, dict) else []
+    order_lookup: dict[str, tuple[int, bool]] = {}
+    for order_index, item in enumerate(order_items or []):
+        if not isinstance(item, dict):
+            continue
+        identifier = str(item.get("identifier") or item.get("id") or "")
+        if identifier and identifier not in order_lookup:
+            order_lookup[identifier] = (order_index, _preset_bool(item.get("enabled"), True))
+    clean_prompts: list[dict] = []
+    seen: set[str] = set()
+    for prompt_index, item in enumerate(prompts[:GLOBAL_PROMPT_MAX_ENTRIES]):
+        if not isinstance(item, dict):
+            continue
+        prompt = dict(item)
+        identifier = str(prompt.get("identifier") or prompt.get("id") or f"prompt-{prompt_index + 1}")[:160]
+        if identifier in seen:
+            identifier = f"{identifier}-{prompt_index + 1}"
+        seen.add(identifier)
+        ordered = order_lookup.get(identifier)
+        has_editor_order = any(key in prompt for key in ("in_order", "order_enabled", "order"))
+        prompt["identifier"] = identifier
+        prompt.setdefault("name", identifier)
+        prompt["in_order"] = _preset_bool(prompt.get("in_order"), ordered is not None) if has_editor_order else ordered is not None
+        try:
+            prompt["order"] = int(prompt.get("order")) if has_editor_order and prompt.get("order") is not None else int(ordered[0] if ordered is not None else len(order_lookup) + prompt_index)
+        except Exception:
+            prompt["order"] = int(ordered[0] if ordered is not None else len(order_lookup) + prompt_index)
+        prompt["order_enabled"] = _preset_bool(prompt.get("order_enabled"), bool(ordered[1]) if ordered is not None else False) if has_editor_order else (bool(ordered[1]) if ordered is not None else False)
+        clean_prompts.append(prompt)
+    clean_prompts.sort(key=lambda item: (0 if item.get("in_order") else 1, int(item.get("order") or 0)))
+    raw["id"] = preset_id
+    raw["name"] = str(raw.get("name") or raw.get("preset_name") or raw.get("display_name") or f"全局提示词预设 {index + 1}")[:160]
+    raw["source"] = str(raw.get("source") or ("sillytavern" if prompts else "manual"))[:60]
+    raw["source_file"] = str(raw.get("source_file") or "")[:260]
+    raw["enabled"] = _preset_bool(raw.get("enabled"), False)
+    raw["format"] = "sillytavern" if prompts else str(raw.get("format") or "legacy-blocks")[:40]
+    raw["prompts"] = clean_prompts
+    if clean_prompts:
+        ordered_prompts = sorted((item for item in clean_prompts if item.get("in_order")), key=lambda item: int(item.get("order") or 0))
+        raw["prompt_order"] = [{
+            "character_id": first_group.get("character_id", 100001) if isinstance(first_group, dict) else 100001,
+            "order": [
+                {"identifier": str(item.get("identifier") or ""), "enabled": bool(item.get("order_enabled"))}
+                for item in ordered_prompts
+            ],
+        }]
+    elif isinstance(raw.get("blocks"), list):
+        raw["blocks"] = normalize_global_prompt_blocks(raw.get("blocks"))
+    raw["stats"] = {
+        "entry_count": len(clean_prompts) if clean_prompts else len(raw.get("blocks") or []),
+        "ordered_count": sum(1 for item in clean_prompts if item.get("in_order")),
+        "enabled_count": sum(1 for item in clean_prompts if item.get("in_order") and item.get("order_enabled")),
+        "marker_count": sum(1 for item in clean_prompts if _preset_bool(item.get("marker"), False)),
+        "unlisted_count": sum(1 for item in clean_prompts if not item.get("in_order")),
+    }
+    return raw
+
+
+def prompt_preset_runtime_blocks(value: object) -> list[dict]:
+    preset = normalize_full_prompt_preset(value)
+    prompts = preset.get("prompts") if isinstance(preset.get("prompts"), list) else []
+    if not prompts:
+        return normalize_global_prompt_blocks(preset.get("blocks") or [])
+    after_history = False
+    blocks: list[dict] = []
+    for item in sorted((p for p in prompts if p.get("in_order")), key=lambda p: int(p.get("order") or 0)):
+        identifier = str(item.get("identifier") or "")
+        if identifier == "chatHistory":
+            after_history = True
+        if not item.get("order_enabled"):
+            continue
+        content = str(item.get("content") or "")
+        marker = _preset_bool(item.get("marker"), False) or (not content.strip() and _preset_bool(item.get("system_prompt"), False))
+        if marker or not content.strip():
+            continue
+        role = str(item.get("role") or "system").strip().lower()
+        if role not in {"system", "user", "assistant"}:
+            role = "system"
+        blocks.append({
+            "id": identifier,
+            "name": str(item.get("name") or identifier),
+            "position": "post_history" if after_history else "system_before",
+            "role": role,
+            "order": int(item.get("order") or len(blocks)),
+            "enabled": True,
+            "content": content,
+        })
+    return blocks
+
+
+def normalize_prompt_preset_collection(value: object, legacy: object = None) -> dict:
+    parsed = value
+    if isinstance(parsed, str):
+        try:
+            parsed = json.loads(parsed) if parsed.strip() else {}
+        except Exception:
+            parsed = {}
+    items = parsed.get("items") if isinstance(parsed, dict) and isinstance(parsed.get("items"), list) else []
+    active_id = str(parsed.get("active_id") or "") if isinstance(parsed, dict) else ""
+    if not items and legacy:
+        legacy_item = normalize_global_prompt_preset(legacy)
+        legacy_item.update({"id": "legacy-global-prompt", "format": "legacy-blocks", "source_file": ""})
+        items = [legacy_item]
+        if legacy_item.get("enabled"):
+            active_id = legacy_item["id"]
+    clean: list[dict] = []
+    seen: set[str] = set()
+    for index, item in enumerate(items[:GLOBAL_PRESET_MAX_ITEMS]):
+        preset = normalize_full_prompt_preset(item, index)
+        preset_id = preset["id"]
+        if preset_id in seen:
+            preset_id = f"{preset_id}-{index + 1}"
+            preset["id"] = preset_id
+        seen.add(preset_id)
+        clean.append(preset)
+    if active_id not in seen:
+        active_id = next((item["id"] for item in clean if item.get("enabled")), "")
+    for item in clean:
+        item["enabled"] = bool(active_id and item["id"] == active_id)
+    return {"version": 2, "active_id": active_id, "items": clean}
+
+
+def normalize_full_regex_script(value: object, index: int = 0) -> dict:
+    raw = dict(value) if isinstance(value, dict) else {}
+    raw["id"] = str(raw.get("id") or f"regex-{index + 1}")[:160]
+    raw["scriptName"] = str(raw.get("scriptName") or raw.get("name") or f"Regex {index + 1}")[:200]
+    raw["findRegex"] = str(raw.get("findRegex") if raw.get("findRegex") is not None else raw.get("find") or raw.get("pattern") or "")[:12000]
+    raw["replaceString"] = str(raw.get("replaceString") if raw.get("replaceString") is not None else raw.get("replace") or raw.get("replacement") or "")[:REGEX_REPLACE_MAX_CHARS]
+    raw["trimStrings"] = list(raw.get("trimStrings") or [])[:100] if isinstance(raw.get("trimStrings"), list) else []
+    placement = raw.get("placement")
+    if not isinstance(placement, list):
+        placement = [placement] if placement is not None else [2]
+    raw["placement"] = [int(item) for item in placement if str(item).lstrip("-").isdigit()][:12]
+    raw["disabled"] = _preset_bool(raw.get("disabled"), False)
+    raw["markdownOnly"] = _preset_bool(raw.get("markdownOnly"), False)
+    raw["promptOnly"] = _preset_bool(raw.get("promptOnly"), False)
+    raw["runOnEdit"] = _preset_bool(raw.get("runOnEdit"), False)
+    try:
+        raw["substituteRegex"] = int(raw.get("substituteRegex") or 0)
+    except Exception:
+        raw["substituteRegex"] = 0
+    for key in ("minDepth", "maxDepth"):
+        try:
+            raw[key] = int(raw[key]) if raw.get(key) is not None and str(raw.get(key)).strip() != "" else None
+        except Exception:
+            raw[key] = None
+    try:
+        order = int(raw.get("order") if raw.get("order") is not None else index)
+    except Exception:
+        order = index
+    raw["order"] = max(0, min(9999, order))
+    return raw
+
+
+def normalize_full_regex_preset(value: object, index: int = 0) -> dict:
+    raw = dict(value) if isinstance(value, dict) else {}
+    raw["id"] = _global_preset_id(raw.get("id"), f"regex-preset-{index + 1}")
+    raw["name"] = str(raw.get("name") or f"全局正则预设 {index + 1}")[:160]
+    raw["source"] = str(raw.get("source") or "sillytavern-regex")[:60]
+    raw["source_file"] = str(raw.get("source_file") or "")[:260]
+    raw["enabled"] = _preset_bool(raw.get("enabled"), False)
+    scripts = raw.get("scripts") if isinstance(raw.get("scripts"), list) else []
+    raw["scripts"] = [normalize_full_regex_script(item, idx) for idx, item in enumerate(scripts[:GLOBAL_REGEX_MAX_ENTRIES]) if isinstance(item, dict)]
+    raw["scripts"].sort(key=lambda item: int(item.get("order") or 0))
+    raw["stats"] = {
+        "entry_count": len(raw["scripts"]),
+        "enabled_count": sum(1 for item in raw["scripts"] if not item.get("disabled")),
+        "disabled_count": sum(1 for item in raw["scripts"] if item.get("disabled")),
+    }
+    return raw
+
+
+def normalize_regex_preset_collection(value: object) -> dict:
+    parsed = value
+    if isinstance(parsed, str):
+        try:
+            parsed = json.loads(parsed) if parsed.strip() else {}
+        except Exception:
+            parsed = {}
+    items = parsed.get("items") if isinstance(parsed, dict) and isinstance(parsed.get("items"), list) else []
+    active_id = str(parsed.get("active_id") or "") if isinstance(parsed, dict) else ""
+    clean: list[dict] = []
+    seen: set[str] = set()
+    for index, item in enumerate(items[:GLOBAL_PRESET_MAX_ITEMS]):
+        preset = normalize_full_regex_preset(item, index)
+        preset_id = preset["id"]
+        if preset_id in seen:
+            preset_id = f"{preset_id}-{index + 1}"
+            preset["id"] = preset_id
+        seen.add(preset_id)
+        clean.append(preset)
+    if active_id not in seen:
+        active_id = next((item["id"] for item in clean if item.get("enabled")), "")
+    for item in clean:
+        item["enabled"] = bool(active_id and item["id"] == active_id)
+    return {"version": 1, "active_id": active_id, "items": clean}
+
+
 def normalize_quick_replies(value: object) -> list:
     if not isinstance(value, list):
         return []
@@ -8778,6 +9148,14 @@ def normalize_regex_scripts(value: object) -> list:
             "flags": "".join(ch for ch in flags if ch in "ims")[:3],
             "enabled": enabled,
             "order": max(0, min(order, 9999)),
+            "placement": list(raw.get("placement") or []) if isinstance(raw.get("placement"), list) else [],
+            "markdownOnly": bool(raw.get("markdownOnly", False)),
+            "promptOnly": bool(raw.get("promptOnly", False)),
+            "runOnEdit": bool(raw.get("runOnEdit", False)),
+            "substituteRegex": raw.get("substituteRegex", 0),
+            "minDepth": raw.get("minDepth"),
+            "maxDepth": raw.get("maxDepth"),
+            "trimStrings": list(raw.get("trimStrings") or []) if isinstance(raw.get("trimStrings"), list) else [],
         })
     out.sort(key=lambda item: (item.get("order", 0), item.get("name", "")))
     return out
@@ -9453,7 +9831,11 @@ def prompt_block_texts(extras: dict, position: str, *, char_name: str = "", user
 
 
 def global_prompt_messages(preset: object, position: str, *, char_name: str = "", user_name: str = "", max_chars: int = 40000, template_context: dict | None = None) -> list[dict]:
-    config = normalize_global_prompt_preset(preset)
+    if isinstance(preset, dict) and isinstance(preset.get("prompts"), list):
+        config = dict(preset)
+        config["blocks"] = prompt_preset_runtime_blocks(preset)
+    else:
+        config = normalize_global_prompt_preset(preset)
     if not config.get("enabled"):
         return []
     out: list[dict] = []
@@ -9695,6 +10077,53 @@ def apply_regex_scripts(text: str, app: dict) -> str:
             value = pattern.sub(lambda match: expand_silly_regex_replacement(replacement, match), value)
         except re.error as exc:
             log(f"regex script skipped for {app.get('id')}: {exc}")
+    return value
+
+
+def apply_global_regex_scripts(text: object, preset: object, *, placement: int, stage: str, depth: int = 0) -> str:
+    value = str(text or "")
+    if not isinstance(preset, dict) or not preset.get("enabled"):
+        return value
+    scripts = preset.get("scripts") if isinstance(preset.get("scripts"), list) else []
+    normalized_scripts = [normalize_full_regex_script(item, index) for index, item in enumerate(scripts) if isinstance(item, dict)]
+    for index, raw in enumerate(sorted(normalized_scripts, key=lambda item: int(item.get("order") or 0))):
+        script = normalize_full_regex_script(raw, index)
+        if script.get("disabled"):
+            continue
+        placements = script.get("placement") or [2]
+        if int(placement) not in placements:
+            continue
+        prompt_only = bool(script.get("promptOnly"))
+        markdown_only = bool(script.get("markdownOnly"))
+        if stage == "prompt" and not (prompt_only or not markdown_only):
+            continue
+        if stage == "render" and not (markdown_only or not prompt_only):
+            continue
+        min_depth = script.get("minDepth")
+        max_depth = script.get("maxDepth")
+        if min_depth is not None and depth < int(min_depth):
+            continue
+        if max_depth is not None and depth > int(max_depth):
+            continue
+        find, inline_flags = split_silly_regex_pattern(script.get("findRegex") or "")
+        if not find:
+            continue
+        flags = 0
+        flag_text = str(raw.get("flags") or inline_flags or "").lower()
+        if "i" in flag_text:
+            flags |= re.IGNORECASE
+        if "m" in flag_text:
+            flags |= re.MULTILINE
+        if "s" in flag_text:
+            flags |= re.DOTALL
+        try:
+            pattern = re.compile(find, flags=flags)
+            replacement = str(script.get("replaceString") or "")
+            value = pattern.sub(lambda match: expand_silly_regex_replacement(replacement, match), value)
+            if len(value) > REGEX_REPLACE_MAX_CHARS:
+                value = value[:REGEX_REPLACE_MAX_CHARS]
+        except (re.error, ValueError, OverflowError) as exc:
+            log(f"global regex script skipped for {preset.get('id')}: {exc}")
     return value
 
 
@@ -10021,7 +10450,7 @@ def normalize_visible_chat_reply(text: object) -> str:
     return value or ("" if changed_any else original)
 
 
-def process_model_reply(app: dict, reply: object, *, char_name: str = "", user_name: str = "", template_context: dict | None = None) -> str:
+def process_model_reply(app: dict, reply: object, *, char_name: str = "", user_name: str = "", template_context: dict | None = None, global_regex_preset: object = None) -> str:
     ctx = dict(template_context) if isinstance(template_context, dict) else {}
     if isinstance(app, dict):
         ctx.setdefault("app", app)
@@ -10047,6 +10476,7 @@ def process_model_reply(app: dict, reply: object, *, char_name: str = "", user_n
     )
     rendered = apply_tavern_render_injections(rendered, render_injections)
     rendered = apply_regex_scripts(rendered, app or {})
+    rendered = apply_global_regex_scripts(rendered, global_regex_preset, placement=2, stage="render", depth=0)
     return normalize_visible_chat_reply(rendered)
 
 
@@ -10091,6 +10521,7 @@ def build_user_llm_request(app: dict, content: str, messages: list[dict] | None 
     recent_text = "\n".join(str(m.get("content") or "") for m in trimmed_history) + "\n" + content
     apply_initial_template_variables(extras.get("world_info") or [], template_context, char_name=char_name, user_name=user_name)
     global_preset = settings.get("global_prompt_preset") if isinstance(settings, dict) else None
+    global_regex_preset = settings.get("global_regex_preset") if isinstance(settings, dict) else None
     system_prompt = build_system_prompt(app, persona, recent_text, template_context=template_context)
     global_before = global_prompt_messages(
         global_preset,
@@ -10114,10 +10545,19 @@ def build_user_llm_request(app: dict, content: str, messages: list[dict] | None 
         )
     chat_messages = [{"role": "system", "content": system_prompt}]
     chat_messages.extend(memory_context_messages(context, char_name=char_name, user_name=user_name, template_context=template_context))
-    for msg in trimmed_history:
+    for message_index, msg in enumerate(trimmed_history):
         role = str(msg.get("role") or "").strip()
+        raw_message_content = str(msg.get("content") or "").strip()
+        if role in {"user", "assistant"}:
+            raw_message_content = apply_global_regex_scripts(
+                raw_message_content,
+                global_regex_preset,
+                placement=1 if role == "user" else 2,
+                stage="prompt",
+                depth=max(0, len(trimmed_history) - message_index - 1),
+            )
         content_value = render_tavern_template(
-            str(msg.get("content") or "").strip(),
+            raw_message_content,
             char_name,
             user_name,
             template_context=template_context,
@@ -10127,7 +10567,7 @@ def build_user_llm_request(app: dict, content: str, messages: list[dict] | None 
         if role in {"user", "assistant", "system"} and content_value:
             chat_messages.append({"role": role, "content": content_value})
     user_content = render_tavern_template(
-        content,
+        apply_global_regex_scripts(content, global_regex_preset, placement=1, stage="prompt", depth=0),
         char_name,
         user_name,
         template_context=template_context,
@@ -10274,9 +10714,10 @@ def call_user_llm(app: dict, content: str, messages: list[dict] | None = None, s
     template_context = dict(context) if isinstance(context, dict) else {}
     template_context.setdefault("app", app)
     template_context.setdefault("app_id", str(app.get("id") or ""))
+    global_regex_preset = settings.get("global_regex_preset") if isinstance(settings, dict) else None
     if not request_info.get("enabled"):
         fallback = str(request_info.get("fallback") or build_chat_reply(content, char_name))
-        return process_model_reply(app, fallback, char_name=char_name, user_name=user_name, template_context=template_context)
+        return process_model_reply(app, fallback, char_name=char_name, user_name=user_name, template_context=template_context, global_regex_preset=global_regex_preset)
     endpoint = str(request_info.get("endpoint") or "")
     headers = request_info.get("headers") if isinstance(request_info.get("headers"), dict) else {}
     payload = request_info.get("payload") if isinstance(request_info.get("payload"), dict) else {}
@@ -10287,17 +10728,17 @@ def call_user_llm(app: dict, content: str, messages: list[dict] | None = None, s
             raw = resp.read()
         text = raw.decode("utf-8", errors="replace").strip()
         if not text:
-            return process_model_reply(app, fallback, char_name=char_name, user_name=user_name, template_context=template_context)
+            return process_model_reply(app, fallback, char_name=char_name, user_name=user_name, template_context=template_context, global_regex_preset=global_regex_preset)
         try:
             data = json.loads(text)
         except Exception:
             answer = extract_sse_answer(text)
-            return process_model_reply(app, answer or fallback, char_name=char_name, user_name=user_name, template_context=template_context)
+            return process_model_reply(app, answer or fallback, char_name=char_name, user_name=user_name, template_context=template_context, global_regex_preset=global_regex_preset)
         answer = extract_upstream_chat_answer(data)
-        return process_model_reply(app, answer or fallback, char_name=char_name, user_name=user_name, template_context=template_context)
+        return process_model_reply(app, answer or fallback, char_name=char_name, user_name=user_name, template_context=template_context, global_regex_preset=global_regex_preset)
     except Exception as exc:
         log(f"user llm failed for {app.get('id')}: {exc}")
-        return process_model_reply(app, fallback, char_name=char_name, user_name=user_name, template_context=template_context)
+        return process_model_reply(app, fallback, char_name=char_name, user_name=user_name, template_context=template_context, global_regex_preset=global_regex_preset)
 
 
 def _image_ext_for_mime(mime: str) -> str:
@@ -10563,7 +11004,8 @@ def chat_reply_for_app(store: "Store", user_id: str, app_id: str, content: str, 
                 history = [dict(row) for row in store.list_messages(conversation_id, user_id, limit=100)]
             except Exception:
                 history = []
-        if selected_model or app.get("source") in ("user", "admin"):
+        global_runtime_active = bool((llm_settings.get("global_prompt_preset") or {}).get("enabled") or (llm_settings.get("global_regex_preset") or {}).get("enabled"))
+        if selected_model or app.get("source") in ("user", "admin") or global_runtime_active:
             persona = store.get_persona(user_id)
             context = store.chat_context(user_id, app_id, conversation_id, content, history) if conversation_id else {}
             answer = call_user_llm(app, content, history, llm_settings, persona, context)
@@ -10658,10 +11100,12 @@ def regenerate_reply_for_app(store: "Store", user_id: str, app_id: str, *, histo
         selected_model = store.public_model_selection(model_override)
         if selected_model:
             app["llm_model"] = selected_model
-        if selected_model or app.get("source") in ("user", "admin"):
+        llm_settings = store.effective_llm_settings(app, user_id=user_id)
+        global_runtime_active = bool((llm_settings.get("global_prompt_preset") or {}).get("enabled") or (llm_settings.get("global_regex_preset") or {}).get("enabled"))
+        if selected_model or app.get("source") in ("user", "admin") or global_runtime_active:
             persona = store.get_persona(user_id)
             context = store.chat_context(user_id, app_id, conversation_id, last_user_content, history) if conversation_id else {}
-            answer = call_user_llm(app, last_user_content, history, store.effective_llm_settings(app, user_id=user_id), persona, context)
+            answer = call_user_llm(app, last_user_content, history, llm_settings, persona, context)
             return app, answer
         answer = proxy_upstream_chat(store, app_id, last_user_content, app_name=app_name or str(app.get("name") or ""))
         return app, answer
@@ -11627,14 +12071,16 @@ class Handler(BaseHTTPRequestHandler):
             reply_parts: list[str] = []
             persona = self.store.get_persona(user["id"]) if app else {}
             context = {}
+            settings = self.store.effective_llm_settings(app, user_id=user["id"]) if app else {}
             if app and model_override:
                 app["llm_model"] = model_override
-            if app and (model_override or app.get("source") in ("user", "admin")):
+                settings = self.store.effective_llm_settings(app, user_id=user["id"])
+            global_runtime_active = bool((settings.get("global_prompt_preset") or {}).get("enabled") or (settings.get("global_regex_preset") or {}).get("enabled"))
+            if app and (model_override or app.get("source") in ("user", "admin") or global_runtime_active):
                 try:
                     history = [dict(row) for row in self.store.list_messages(conv_id, user["id"], limit=100)]
                 except Exception:
                     history = []
-                settings = self.store.effective_llm_settings(app, user_id=user["id"])
                 context = self.store.chat_context(user["id"], app_id, conv_id, content, history)
                 chunks = stream_user_llm_chunks(app, content, history, settings, persona, context, strict=True)
             else:
@@ -11660,6 +12106,7 @@ class Handler(BaseHTTPRequestHandler):
                     char_name=str(app.get("name") or app_name or "Ta"),
                     user_name=str((persona or {}).get("name") or "你"),
                     template_context=context,
+                    global_regex_preset=settings.get("global_regex_preset") if isinstance(settings, dict) else None,
                 )
                 if not str(reply_text or "").strip():
                     raise RuntimeError("模型回复处理后为空，请重试")
@@ -11810,6 +12257,7 @@ class Handler(BaseHTTPRequestHandler):
                 char_name=str(app.get("name") or conversation.get("app_name") or "Ta"),
                 user_name=str((persona or {}).get("name") or "你"),
                 template_context=context,
+                global_regex_preset=settings.get("global_regex_preset") if isinstance(settings, dict) else None,
             )
             reply_text = str(reply_text or "").strip()
             if not reply_text:
@@ -13533,6 +13981,54 @@ class Handler(BaseHTTPRequestHandler):
                     except (TypeError, ValueError) as exc:
                         return error_response(f"invalid llm settings: {exc}", 400)
                 return error_response("method not allowed", 405)
+
+            if normalized == "admin/api/global-presets":
+                if self.command.upper() != "GET":
+                    return error_response("method not allowed", 405)
+                return ok_response(self.store.global_presets())
+
+            if normalized == "admin/api/global-presets/import-prompt":
+                if self.command.upper() != "POST" or not isinstance(body, dict):
+                    return error_response("invalid body")
+                try:
+                    preset = self.store.import_global_prompt_preset(
+                        body.get("preset") if body.get("preset") is not None else body.get("raw") or "",
+                        str(body.get("filename") or ""),
+                    )
+                except ValueError as exc:
+                    return error_response(str(exc), 400)
+                return ok_response({"preset": preset, "library": self.store.global_prompt_presets()})
+
+            if normalized == "admin/api/global-presets/import-regex":
+                if self.command.upper() != "POST" or not isinstance(body, dict):
+                    return error_response("invalid body")
+                try:
+                    preset = self.store.import_global_regex_preset(
+                        str(body.get("package_file") or body.get("file") or body.get("data_base64") or body.get("data_url") or ""),
+                        str(body.get("filename") or ""),
+                        str(body.get("name") or ""),
+                    )
+                except ValueError as exc:
+                    return error_response(str(exc), 400)
+                return ok_response({"preset": preset, "library": self.store.global_regex_presets()})
+
+            if normalized.startswith("admin/api/global-presets/"):
+                parts = normalized.split("/")
+                kind = parts[3] if len(parts) >= 5 else ""
+                preset_id = unquote(parts[4]) if len(parts) >= 5 else ""
+                if kind not in {"prompt", "regex"} or not preset_id:
+                    return error_response("global preset not found", 404)
+                if self.command.upper() != "POST" or not isinstance(body, dict):
+                    return error_response("invalid body")
+                try:
+                    if len(parts) >= 6 and parts[5] == "activate":
+                        collection = self.store.activate_global_preset(kind, preset_id)
+                        return ok_response({"library": collection})
+                    preset = self.store.save_global_preset(kind, preset_id, body.get("preset") if isinstance(body.get("preset"), dict) else body)
+                    return ok_response({"preset": preset})
+                except ValueError as exc:
+                    status = 404 if "not found" in str(exc) else 400
+                    return error_response(str(exc), status)
 
             if normalized == "admin/api/tavo-plugins":
                 return ok_response({"list": self.store.list_tavo_plugins(include_manifest=True)})
