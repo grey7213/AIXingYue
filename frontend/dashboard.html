@@ -7,7 +7,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
   <link rel="icon" href="/favicon.ico">
   <link rel="apple-touch-icon" sizes="180x180" href="/assets/img/apple-touch-icon.png">
-  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="/assets/vendor/tailwindcss-browser.js?v=20260713-local"></script>
   <link rel="stylesheet" href="/assets/css/custom.css?v=20260703-fengyue-ui2">
   <script type="module" src="/assets/js/dashboard-app.js?v=20260713-zpay"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
@@ -102,11 +102,11 @@
             </div>
             <div>
               <label class="xy-label" x-text="authText('password_label', '密码')">密码</label>
-              <input type="password" x-model="registerForm.password" class="xy-input" :placeholder="authText('register_password_placeholder', '至少 6 位')" required minlength="6">
+              <input type="password" x-model="registerForm.password" class="xy-input" :placeholder="authText('register_password_placeholder', '至少 8 位')" required minlength="8">
             </div>
             <div class="text-xs text-slate-400 leading-relaxed bg-white/5 rounded-lg p-3">
               <p class="mb-1" x-text="authText('register_hint_email', '验证码将通过邮件发送至上述邮箱')">验证码将通过邮件发送至上述邮箱</p>
-              <p x-text="authText('register_hint_points', '注册后将自动获得 2500 积分，约 50 次角色回复')">注册后将自动获得 2500 积分，约 50 次角色回复</p>
+              <p x-text="authText('register_hint_points', '注册后将自动获得 500 惑梦币，约 10 次角色回复')">注册后将自动获得 500 惑梦币，约 10 次角色回复</p>
             </div>
             <button type="submit" class="xy-btn xy-btn-primary w-full" :disabled="loading">
               <span x-show="!loading" x-text="authText('register_button_text', '完成注册')">完成注册</span>

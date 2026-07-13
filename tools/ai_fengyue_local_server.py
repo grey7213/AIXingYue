@@ -13,6 +13,7 @@ import math
 import os
 import random
 import re
+import secrets
 import select
 import shutil
 import smtplib
@@ -29,7 +30,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse, unquote, quote
 from urllib.error import HTTPError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -71,12 +72,12 @@ TTS_VOICES = [
     {"id":"zh-TW-HsiaoChenNeural","name":"晓臻","gender":"台湾女声","style":"自然"},
     {"id":"zh-TW-YunJheNeural","name":"云哲","gender":"台湾男声","style":"自然"},
 ]
-NEW_USER_INITIAL_POINTS = int(os.environ.get("NEW_USER_INITIAL_POINTS", str(CHAT_MESSAGE_COST * 50)) or str(CHAT_MESSAGE_COST * 50))
+NEW_USER_INITIAL_POINTS = int(os.environ.get("NEW_USER_INITIAL_POINTS", str(CHAT_MESSAGE_COST * 10)) or str(CHAT_MESSAGE_COST * 10))
 NEW_USER_INITIAL_CHAT_TIMES = max(0, NEW_USER_INITIAL_POINTS // max(1, CHAT_MESSAGE_COST))
 REGISTER_CODE_EMAIL_HOURLY_LIMIT = int(os.environ.get("REGISTER_CODE_EMAIL_HOURLY_LIMIT", "3") or "3")
 REGISTER_CODE_IP_HOURLY_LIMIT = int(os.environ.get("REGISTER_CODE_IP_HOURLY_LIMIT", "8") or "8")
 REGISTER_IP_DAILY_FREE_ACCOUNT_LIMIT = int(os.environ.get("REGISTER_IP_DAILY_FREE_ACCOUNT_LIMIT", "3") or "3")
-BETA_MAX_REGISTERED_USERS = int(os.environ.get("BETA_MAX_REGISTERED_USERS", "250") or "250")
+BETA_MAX_REGISTERED_USERS = int(os.environ.get("BETA_MAX_REGISTERED_USERS", "0") or "0")
 GENERATION_GLOBAL_CONCURRENCY = int(os.environ.get("GENERATION_GLOBAL_CONCURRENCY", "20") or "20")
 GENERATION_USER_CONCURRENCY = int(os.environ.get("GENERATION_USER_CONCURRENCY", "2") or "2")
 GENERATION_IP_CONCURRENCY = int(os.environ.get("GENERATION_IP_CONCURRENCY", "5") or "5")
@@ -85,6 +86,18 @@ ADMIN_EMAILS = set(filter(None, os.environ.get("ADMIN_EMAILS", "local@ctf.test")
 UPSTREAM_CONTENT_BASE = os.environ.get("UPSTREAM_CONTENT_BASE", "https://aifun.wiki/").rstrip("/") + "/"
 CONTENT_MODE = os.environ.get("CONTENT_MODE", "cache_first").strip().lower()
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://patcher.villainy.top").rstrip("/")
+AUTH_TOKEN_SECRET = os.environ.get("AUTH_TOKEN_SECRET", "").strip()
+AUTH_TOKEN_TTL_SECONDS = env_int("AUTH_TOKEN_TTL_SECONDS", 30 * 24 * 60 * 60, 300, 365 * 24 * 60 * 60)
+ALLOWED_CORS_ORIGINS = {
+    item.strip().rstrip("/")
+    for item in os.environ.get("ALLOWED_CORS_ORIGINS", PUBLIC_BASE_URL).split(",")
+    if item.strip()
+}
+MAX_REQUEST_BODY_BYTES = env_int("MAX_REQUEST_BODY_BYTES", 32 * 1024 * 1024, 1024, 256 * 1024 * 1024)
+IMAGE_PROXY_MAX_BYTES = env_int("IMAGE_PROXY_MAX_BYTES", 10 * 1024 * 1024, 1024, 64 * 1024 * 1024)
+LOGIN_FAILURE_WINDOW_SECONDS = env_int("LOGIN_FAILURE_WINDOW_SECONDS", 15 * 60, 60, 24 * 60 * 60)
+LOGIN_EMAIL_FAILURE_LIMIT = env_int("LOGIN_EMAIL_FAILURE_LIMIT", 10, 1, 1000)
+LOGIN_IP_FAILURE_LIMIT = env_int("LOGIN_IP_FAILURE_LIMIT", 30, 1, 5000)
 USER_LLM_BASE_URL = os.environ.get("USER_LLM_BASE_URL") or os.environ.get("OPENAI_BASE_URL") or ""
 USER_LLM_API_KEY = os.environ.get("USER_LLM_API_KEY") or os.environ.get("OPENAI_API_KEY") or ""
 USER_LLM_MODEL = os.environ.get("USER_LLM_MODEL") or os.environ.get("LLM_MODEL") or "gpt-4o-mini"
@@ -565,8 +578,17 @@ def rewrite_image_urls(value: object) -> object:
 
 
 def token_for(user_id: str) -> str:
-    payload = json.dumps({"sub": user_id, "iat": int(time.time()), "scope": "local"}, separators=(",", ":")).encode("utf-8")
-    return "local." + base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+    if len(AUTH_TOKEN_SECRET.encode("utf-8")) < 32:
+        raise RuntimeError("AUTH_TOKEN_SECRET must be at least 32 bytes")
+    issued_at = int(time.time())
+    payload = json.dumps(
+        {"sub": user_id, "iat": issued_at, "exp": issued_at + AUTH_TOKEN_TTL_SECONDS, "scope": "local"},
+        separators=(",", ":"),
+    ).encode("utf-8")
+    encoded = base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+    signature = hmac.new(AUTH_TOKEN_SECRET.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256).digest()
+    encoded_signature = base64.urlsafe_b64encode(signature).decode("ascii").rstrip("=")
+    return f"local.{encoded}.{encoded_signature}"
 
 
 def business_date() -> str:
@@ -578,16 +600,85 @@ def user_id_from_token(value: str | None) -> str | None:
     token = (value or "").strip()
     if token.lower().startswith("bearer "):
         token = token[7:].strip()
-    if not token.startswith("local."):
+    if not token.startswith("local.") or len(AUTH_TOKEN_SECRET.encode("utf-8")) < 32:
         return None
-    payload = token.split(".", 1)[1]
+    parts = token.split(".")
+    if len(parts) != 3:
+        return None
+    payload = parts[1]
+    expected = hmac.new(AUTH_TOKEN_SECRET.encode("utf-8"), payload.encode("ascii"), hashlib.sha256).digest()
+    signature = parts[2] + "=" * (-len(parts[2]) % 4)
+    try:
+        provided = base64.urlsafe_b64decode(signature.encode("ascii"))
+    except Exception:
+        return None
+    if not hmac.compare_digest(expected, provided):
+        return None
     payload += "=" * (-len(payload) % 4)
     try:
         data = json.loads(base64.urlsafe_b64decode(payload.encode("ascii")).decode("utf-8"))
     except Exception:
         return None
+    now = int(time.time())
+    if data.get("scope") != "local" or int(data.get("iat") or 0) > now + 60 or int(data.get("exp") or 0) < now:
+        return None
     user_id = data.get("sub")
     return str(user_id) if user_id else None
+
+
+def anonymous_route_allowed(normalized: str, method: str) -> bool:
+    method = method.upper()
+    exact = {
+        "console/api/register/email", "console/api/register", "console/api/register/name_check",
+        "console/api/login", "console/api/oauth-token-login",
+        "console/api/password-reset/email", "console/api/reset-password/email",
+        "console/api/password-reset", "console/api/reset-password",
+        "console/api/web/creator-leaderboard", "console/api/web/creator-contests",
+        "console/api/web/deposit-meta", "console/api/web/model-presets",
+        "console/api/web/provider-templates", "console/api/v1/activities/gift-packs",
+        "console/api/workspaces/sidebar_notice", "console/api/app_site/list",
+        "console/api/emojis", "go/api/posts/recommended",
+    }
+    if normalized in exact:
+        return True
+    if method == "GET" and normalized.startswith(("console/api/activity/", "go/api/explore/")):
+        return True
+    if method == "GET" and normalized.startswith(("console/api/apps/", "go/api/apps/")):
+        parts = normalized.split("/")
+        if len(parts) == 4 and parts[3] != "chat-messages":
+            return True
+    if method == "GET" and (normalized.endswith("announcements") or "announcement" in normalized):
+        return True
+    if method == "GET" and normalized.endswith("model-list"):
+        return True
+    return False
+
+
+def sanitize_request_log(headers: dict, body: str) -> tuple[dict, str]:
+    sensitive_headers = {"authorization", "cookie", "set-cookie", "x-api-key", "proxy-authorization"}
+    safe_headers = {
+        str(key): ("[redacted]" if str(key).lower() in sensitive_headers else str(value)[:1000])
+        for key, value in (headers or {}).items()
+    }
+    sensitive_keys = {"password", "code", "token", "api_key", "key", "secret", "authorization"}
+
+    def clean(value):
+        if isinstance(value, dict):
+            return {key: ("[redacted]" if str(key).lower() in sensitive_keys else clean(item)) for key, item in value.items()}
+        if isinstance(value, list):
+            return [clean(item) for item in value[:100]]
+        if isinstance(value, str):
+            return value[:4000]
+        return value
+
+    safe_body = str(body or "")[:16000]
+    try:
+        parsed = json.loads(body) if body else {}
+        safe_body = json.dumps(clean(parsed), ensure_ascii=False, separators=(",", ":"))[:16000]
+    except Exception:
+        if re.search(r"(?i)(password|token|api[_-]?key|secret|code)=", safe_body):
+            safe_body = "[redacted form body]"
+    return safe_headers, safe_body
 
 
 def normalize_email(value: str | None) -> str:
@@ -762,7 +853,7 @@ def site_settings_defaults() -> dict:
             "primary_cta_href": "/app/login.html?next=%2Fapp%2F",
             "secondary_cta_text": "先看看 App",
             "secondary_cta_href": "/app/login.html?next=%2Fapp%2F",
-            "trust_text": "30 秒注册 · 2500 积分起步 · 约 50 次回复 · 邮箱验证",
+            "trust_text": "30 秒注册 · 500 惑梦币体验 · 约 10 次回复 · 邮箱验证",
             "preview_title": "不只是聊天，而是一段真实的相遇",
             "preview_subtitle": "每一个角色都有独立的世界观、记忆和情感反应",
             "download_title": "网页端暂时开放",
@@ -772,7 +863,7 @@ def site_settings_defaults() -> dict:
             "features_subtitle": "为每一位创作者打造的 AI 角色扮演体验",
             "feature_cards": [
                 {"title": "多角色对话", "description": "海量预设角色，覆盖动漫、游戏、原创人设。可自定义性格、背景、说话风格。"},
-                {"title": "每日奖励", "description": "注册即赠 2500 积分，约 50 次角色回复；每日签到获得额外积分，已有额度网页与客户端共用。"},
+                {"title": "每日奖励", "description": "注册即赠 500 惑梦币，约 10 次角色回复；每日签到获得额外额度，已有额度网页与客户端共用。"},
                 {"title": "安全可靠", "description": "邮箱验证码注册，账号安全有保障。本地化数据存储，隐私不外泄。"},
                 {"title": "高速响应", "description": "专属服务器节点，低延迟流式输出，沉浸式体验毫无卡顿。"},
                 {"title": "智能创作", "description": "长上下文记忆，故事连贯发展。剧情自由分支，每次对话都是独一无二的体验。"},
@@ -787,7 +878,7 @@ def site_settings_defaults() -> dict:
             "download_note": "首次安装可能需要在系统设置中允许\"未知来源\"应用。如下载未自动开始，请在浏览器中使用复制链接到下载工具。",
             "faq_title": "常见问题",
             "faq_items": [
-                {"q": "如何注册账号？", "a": "打开 Web App 后选择「注册」，输入邮箱获取验证码，填写昵称和密码即可完成注册。注册成功后会自动登录并赠送 2500 积分，约 50 次角色回复。"},
+                {"q": "如何注册账号？", "a": "打开 Web App 后选择「注册」，输入邮箱获取验证码，填写昵称和密码即可完成注册。注册成功后会自动登录并赠送 500 惑梦币，约 10 次角色回复。"},
                 {"q": "积分是做什么用的？", "a": "积分用于消耗调用 AI 模型生成内容。不同模型每次对话消耗不同积分。每日签到可获得额外积分，也可通过充值获取更多积分。"},
                 {"q": "安装时提示风险怎么办？", "a": "由于本应用为定制版本未上架应用商店，部分系统会提示来源未知。请在系统「安全设置」中允许浏览器或文件管理器安装应用，并按提示安装即可。"},
                 {"q": "忘记密码怎么办？", "a": "在登录页点击「忘记密码」，输入注册邮箱获取验证码后即可设置新密码。验证码 10 分钟内有效。"},
@@ -908,7 +999,7 @@ def site_settings_defaults() -> dict:
             "dashboard_login_hint": "还没有账号？",
             "dashboard_register_link_text": "立即注册",
             "register_hint_email": "验证码将通过邮件发送至上述邮箱",
-            "register_hint_points": "注册后将自动获得 2500 积分，约 50 次角色回复",
+            "register_hint_points": "注册后将自动获得 500 惑梦币，约 10 次角色回复",
             "email_label": "邮箱",
             "email_placeholder": "you@example.com",
             "password_label": "密码",
@@ -917,8 +1008,8 @@ def site_settings_defaults() -> dict:
             "code_placeholder": "6 位验证码",
             "nickname_label": "昵称",
             "nickname_placeholder": "给自己起个名字",
-            "register_password_placeholder": "至少 6 位",
-            "reset_password_placeholder": "输入新密码，至少 6 位",
+            "register_password_placeholder": "至少 8 位",
+            "reset_password_placeholder": "输入新密码，至少 8 位",
             "invalid_email_text": "请输入正确的邮箱地址",
             "code_sent_text": "验证码已发送，请查收邮件",
             "reset_code_sent_text": "密码重置验证码已发送，请查收邮件",
@@ -2244,7 +2335,7 @@ class Store:
                     email text unique,
                     name text not null,
                     password_hash text,
-                    points integer not null default 2500,
+                    points integer not null default 500,
                     is_admin integer not null default 0,
                     created_at integer not null,
                     updated_at integer not null
@@ -2862,8 +2953,27 @@ class Store:
         return self.upsert_user("local@ctf.test", "本地测试用户", "local123456")
 
     def password_hash(self, password: str | None) -> str:
-        value = password or "local123456"
-        return hashlib.sha256(("ai-fengyue-local:" + value).encode("utf-8")).hexdigest()
+        value = str(password or "")
+        iterations = 260000
+        salt = secrets.token_bytes(16)
+        digest = hashlib.pbkdf2_hmac("sha256", value.encode("utf-8"), salt, iterations)
+        return f"pbkdf2_sha256${iterations}${salt.hex()}${digest.hex()}"
+
+    def verify_password(self, password: str | None, stored_hash: str | None) -> bool:
+        value = str(password or "")
+        stored = str(stored_hash or "")
+        if stored.startswith("pbkdf2_sha256$"):
+            try:
+                _, iterations_text, salt_hex, digest_hex = stored.split("$", 3)
+                digest = hashlib.pbkdf2_hmac("sha256", value.encode("utf-8"), bytes.fromhex(salt_hex), int(iterations_text))
+                return hmac.compare_digest(digest.hex(), digest_hex)
+            except Exception:
+                return False
+        legacy = hashlib.sha256(("ai-fengyue-local:" + value).encode("utf-8")).hexdigest()
+        return bool(stored) and hmac.compare_digest(legacy, stored)
+
+    def password_needs_rehash(self, stored_hash: str | None) -> bool:
+        return not str(stored_hash or "").startswith("pbkdf2_sha256$260000$")
 
     def upsert_user(self, email: str, name: str | None, password: str | None, remote_addr: str | None = None) -> sqlite3.Row:
         with self.lock:
@@ -2938,8 +3048,8 @@ class Store:
         clean_email = normalize_email(email)
         if not is_valid_email(clean_email):
             raise ValueError("invalid email")
-        if not password or len(str(password)) < 6:
-            raise ValueError("password must be at least 6 characters")
+        if not password or len(str(password)) < 8:
+            raise ValueError("password must be at least 8 characters")
         with self.lock:
             user = self.get_user_by_email(clean_email)
             if not user:
@@ -3017,6 +3127,24 @@ class Store:
                 "select count(*) from user_security_events where remote_addr=? and event_type='register_success' and created_at>=?",
                 (remote_addr, since_ms),
             ).fetchone()[0] or 0)
+
+    def recent_login_failure_counts(self, email: str | None, remote_addr: str | None, since_ms: int) -> tuple[int, int]:
+        clean_email = normalize_email(email or "")
+        with self.lock:
+            email_count = int(self.conn.execute(
+                "select count(*) from user_security_events where email=? and event_type='login_failed' and created_at>=?",
+                (clean_email, since_ms),
+            ).fetchone()[0] or 0) if clean_email else 0
+            ip_count = int(self.conn.execute(
+                "select count(*) from user_security_events where remote_addr=? and event_type='login_failed' and created_at>=?",
+                (remote_addr, since_ms),
+            ).fetchone()[0] or 0) if remote_addr else 0
+        return email_count, ip_count
+
+    def commit_security_event(self, user_id: str | None, email: str | None, event_type: str, remote_addr: str | None = None, meta: dict | None = None) -> None:
+        with self.lock:
+            self.record_security_event(user_id, email, event_type, remote_addr, meta)
+            self.conn.commit()
 
     def public_user_count(self) -> int:
         with self.lock:
@@ -3791,10 +3919,11 @@ class Store:
         return [(row["url"], row["local_url"]) for row in rows]
 
     def log_request(self, method: str, path: str, query: str, headers: dict, body: str, status: int) -> None:
+        safe_headers, safe_body = sanitize_request_log(headers, body)
         with self.lock:
             self.conn.execute(
                 "insert into request_log(ts,method,path,query,headers,body,status) values(?,?,?,?,?,?,?)",
-                (now_ms(), method, path, query, json.dumps(headers, ensure_ascii=False), body, status),
+                (now_ms(), method, path, str(query or "")[:4000], json.dumps(safe_headers, ensure_ascii=False), safe_body, status),
             )
             self.conn.commit()
 
@@ -4837,7 +4966,7 @@ class Store:
                   data.get("cover_url") or "", json.dumps(data.get("tags") or [], ensure_ascii=False),
                   data.get("opening_statement") or "", json.dumps(data.get("suggested_questions") or [], ensure_ascii=False),
                   data.get("pre_prompt") or "", normalize_user_selected_llm_model(data.get("llm_model")),
-                  data.get("api_base_url") or "",
+                  "",
                   int(data.get("age_rating") or 0), int(data.get("gender") or 0),
                   data.get("language") or "zh-Hans", data.get("status") or "published",
                   1 if data.get("is_public", True) else 0, extra_json, ts, ts),
@@ -5059,7 +5188,7 @@ class Store:
             if not row:
                 return None
             allowed = ("name", "summary", "description", "cover_url", "opening_statement",
-                       "pre_prompt", "llm_model", "api_base_url", "age_rating", "gender", "language", "status", "is_public")
+                       "pre_prompt", "llm_model", "age_rating", "gender", "language", "status", "is_public")
             updates = {}
             for k in allowed:
                 if k in data:
@@ -9203,7 +9332,7 @@ def normalize_user_app_extras(data: dict) -> dict:
         return {}
     extras: dict = {}
     if "bg_url" in data:
-        extras["bg_url"] = str(data.get("bg_url") or "").strip()
+        extras["bg_url"] = normalize_background_input(data.get("bg_url"))
     if "tts_voice_id" in data:
         voice_id = str(data.get("tts_voice_id") or "").strip()
         allowed_voices = {str(item.get("id") or "") for item in TTS_VOICES}
@@ -9316,6 +9445,21 @@ def normalize_cover_input(value: object) -> str:
     if text.startswith("/media-cache/cover/"):
         return public_url(text)
     return text
+
+
+def normalize_background_input(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    text = value.strip()
+    if text.startswith(("/media-cache/", "/assets/")):
+        return text
+    try:
+        parsed = urlparse(text)
+        if parsed.scheme == "https" and parsed.hostname:
+            return text
+    except Exception:
+        pass
+    return ""
 
 
 def normalize_user_avatar_input(value: object) -> str:
@@ -10517,8 +10661,10 @@ def build_user_llm_request(app: dict, content: str, messages: list[dict] | None 
     else:
         model = str(USER_LLM_MODEL or "").strip()
     model = model or "gpt-4o-mini"
-    base_url = (app.get("api_base_url") or settings.get("base_url") or USER_LLM_BASE_URL or "").strip().rstrip("/")
-    api_key = (settings.get("api_key") or app.get("api_key") or USER_LLM_API_KEY or "").strip()
+    # Platform secrets may only be sent to administrator-configured providers.
+    # Never let a role card override the destination while reusing a site API key.
+    base_url = (settings.get("base_url") or USER_LLM_BASE_URL or "").strip().rstrip("/")
+    api_key = (settings.get("api_key") or USER_LLM_API_KEY or "").strip()
     try:
         temperature = float(settings.get("temperature", USER_LLM_TEMPERATURE))
     except (TypeError, ValueError):
@@ -11041,14 +11187,15 @@ def chat_reply_for_app(store: "Store", user_id: str, app_id: str, content: str, 
     return {}, answer
 
 
-def user_can_access_app(row: sqlite3.Row | dict | None, user_id: str) -> bool:
+def user_can_access_app(row: sqlite3.Row | dict | None, user_id: str | None) -> bool:
     if not row:
         return False
     data = dict(row)
     source = data.get("source") or "upstream"
-    if source == "user":
-        return bool(data.get("is_public", 1)) or (data.get("owner_user_id") == user_id)
-    return source in ("admin", "upstream") or (data.get("status") or "published") == "published"
+    owner_user_id = str(data.get("owner_user_id") or "")
+    if source == "user" and user_id and owner_user_id == user_id:
+        return True
+    return bool(data.get("is_public", 1)) and (data.get("status") or "published") == "published"
 
 
 def group_history_for_llm(messages: list[dict]) -> list[dict]:
@@ -11330,7 +11477,7 @@ def profile_json(user: sqlite3.Row) -> dict:
         "interface_theme": "system",
         "timezone": "Asia/Shanghai",
         "last_login_at": now_ms(),
-        "last_login_ip": "127.0.0.1",
+        "last_login_ip": "",
         "created_at": user["created_at"],
         "sign_reminder_enabled": False,
         "extend": {
@@ -11564,6 +11711,21 @@ def public_site_settings_json(settings: dict) -> dict:
     home = public.setdefault("home", {})
     app = public.setdefault("app", {})
     dashboard = public.setdefault("dashboard", {})
+    auth = public.setdefault("auth", {})
+    home["trust_text"] = "30 秒注册 · 500 惑梦币体验 · 约 10 次回复 · 邮箱验证"
+    auth["register_hint_points"] = "注册后将自动获得 500 惑梦币，约 10 次角色回复"
+    auth["register_password_placeholder"] = "至少 8 位"
+    auth["reset_password_placeholder"] = "输入新密码，至少 8 位"
+    feature_cards = home.get("feature_cards")
+    if isinstance(feature_cards, list):
+        for item in feature_cards:
+            if isinstance(item, dict) and ("注册即赠" in str(item.get("description") or "") or str(item.get("title") or "") == "每日奖励"):
+                item["description"] = "注册即赠 500 惑梦币，约 10 次角色回复；每日签到获得额外额度，已有额度网页与客户端共用。"
+    faq_items = home.get("faq_items")
+    if isinstance(faq_items, list):
+        for item in faq_items:
+            if isinstance(item, dict) and "如何注册" in str(item.get("q") or ""):
+                item["a"] = "打开 Web App 后选择「注册」，输入邮箱获取验证码，填写昵称和至少 8 位密码即可完成注册。注册成功后会自动登录并赠送 500 惑梦币，约 10 次角色回复。"
     if not APK_DOWNLOAD_ENABLED:
         home["primary_cta_href"] = "/app/login.html?next=%2Fapp%2F"
         home["download_title"] = "网页端暂时开放"
@@ -11600,7 +11762,7 @@ def public_site_settings_json(settings: dict) -> dict:
                 description = str(item.get("description") or "")
                 if "积分" in title or "充值" in description:
                     item["title"] = "每日奖励"
-                    item["description"] = "注册即赠 2500 积分，约 50 次角色回复；每日签到获得额外积分，已有额度网页与客户端共用。"
+                    item["description"] = "注册即赠 500 惑梦币，约 10 次角色回复；每日签到获得额外额度，已有额度网页与客户端共用。"
         deposit = public.setdefault("deposit", {})
         deposit.update({
             "aifadian_url": "",
@@ -11827,7 +11989,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self) -> None:
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_cors_headers()
         self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.send_header("Access-Control-Max-Age", "86400")
@@ -11842,15 +12004,17 @@ class Handler(BaseHTTPRequestHandler):
         log("%s - %s" % (self.client_address[0], message))
 
     def client_ip(self) -> str:
-        forwarded = self.headers.get("X-Forwarded-For", "")
-        if forwarded:
-            first = forwarded.split(",", 1)[0].strip()
-            if first:
-                return first[:80]
-        real_ip = self.headers.get("X-Real-IP", "").strip()
-        if real_ip:
-            return real_ip[:80]
-        return (self.client_address[0] if self.client_address else "")[:80]
+        peer = (self.client_address[0] if self.client_address else "")[:80]
+        if peer in ("127.0.0.1", "::1"):
+            real_ip = self.headers.get("X-Real-IP", "").strip()
+            if real_ip:
+                return real_ip[:80]
+            forwarded = self.headers.get("X-Forwarded-For", "")
+            if forwarded:
+                first = forwarded.split(",", 1)[0].strip()
+                if first:
+                    return first[:80]
+        return peer
 
     def client_connection_closed(self, wait_seconds: float = 0.0) -> bool:
         connection = getattr(self, "connection", None)
@@ -11874,14 +12038,14 @@ class Handler(BaseHTTPRequestHandler):
     def verification_store(self) -> "VerificationStore":
         return self.server.verification_store
 
-    def authenticated_user(self) -> sqlite3.Row:
+    def authenticated_user(self) -> sqlite3.Row | None:
         auth = self.headers.get("Authorization") or self.headers.get("authorization")
         user_id = user_id_from_token(auth)
         if user_id:
             user = self.store.get_user_by_id(user_id)
             if user:
                 return user
-        return self.store.current_user()
+        return None
 
     def authenticated_token_user(self) -> sqlite3.Row | None:
         auth = self.headers.get("Authorization") or self.headers.get("authorization")
@@ -11892,6 +12056,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def read_body(self) -> tuple[str, object]:
         length = int(self.headers.get("Content-Length", "0") or "0")
+        if length < 0 or length > MAX_REQUEST_BODY_BYTES:
+            raise ValueError("request body too large")
         raw = self.rfile.read(length) if length else b""
         text = raw.decode("utf-8", errors="replace")
         if not text:
@@ -11901,13 +12067,20 @@ class Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             return text, parse_qs(text)
 
+    def send_cors_headers(self) -> None:
+        origin = str(self.headers.get("Origin") or "").strip().rstrip("/")
+        if origin and origin in ALLOWED_CORS_ORIGINS:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+
     def send_json(self, status: int, payload: object) -> None:
         data = json_bytes(payload)
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "close")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_cors_headers()
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.end_headers()
         self.wfile.write(data)
@@ -11945,9 +12118,9 @@ class Handler(BaseHTTPRequestHandler):
         raw = "".join(chunks).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "close")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_cors_headers()
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.send_header("Content-Length", str(len(raw)))
         self.end_headers()
@@ -11958,10 +12131,10 @@ class Handler(BaseHTTPRequestHandler):
     def send_sse_headers(self, status: int = 200) -> None:
         self.send_response(status)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-        self.send_header("Cache-Control", "no-cache, no-transform")
+        self.send_header("Cache-Control", "no-store, no-transform")
         self.send_header("Connection", "close")
         self.send_header("X-Accel-Buffering", "no")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_cors_headers()
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.end_headers()
 
@@ -11979,7 +12152,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(raw)))
         self.send_header("Cache-Control", "public, max-age=604800")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_cors_headers()
         self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(raw)
@@ -12032,14 +12205,25 @@ class Handler(BaseHTTPRequestHandler):
                 "Referer": "https://aifun.wiki/",
                 "Accept": "image/avif,image/webp,image/png,image/*,*/*",
             })
-            with urlopen(req, timeout=20) as resp:
+            class NoRedirect(HTTPRedirectHandler):
+                def redirect_request(self, req, fp, code, msg, headers, newurl):
+                    return None
+
+            with build_opener(NoRedirect()).open(req, timeout=20) as resp:
                 ctype = resp.headers.get("Content-Type", "image/jpeg")
-                raw = resp.read()
+                if not str(ctype).lower().startswith("image/"):
+                    raise ValueError("upstream is not an image")
+                content_length = int(resp.headers.get("Content-Length") or 0)
+                if content_length and content_length > IMAGE_PROXY_MAX_BYTES:
+                    raise ValueError("image too large")
+                raw = resp.read(IMAGE_PROXY_MAX_BYTES + 1)
+                if len(raw) > IMAGE_PROXY_MAX_BYTES:
+                    raise ValueError("image too large")
             self.send_response(200)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(raw)))
             self.send_header("Cache-Control", "public, max-age=604800")
-            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_cors_headers()
             self.send_header("Connection", "close")
             self.end_headers()
             self.wfile.write(raw)
@@ -12351,7 +12535,11 @@ class Handler(BaseHTTPRequestHandler):
     def handle_any(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
-        body_text, body = self.read_body()
+        try:
+            body_text, body = self.read_body()
+        except (TypeError, ValueError):
+            self.send_json(413, error_response("request body too large", 413))
+            return
         status = 200
         if path == "/health":
             self.store.log_request(
@@ -12446,6 +12634,13 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_web_chat_continue_stream(body)
             return
         payload = self.route(path, parsed.query, body)
+        if isinstance(payload, dict) and payload.get("result") == "failure":
+            try:
+                status = int(payload.get("status") or payload.get("code") or 400)
+            except (TypeError, ValueError):
+                status = 400
+            if status < 400 or status > 599:
+                status = 400
         self.store.log_request(
             self.command,
             path,
@@ -12467,6 +12662,8 @@ class Handler(BaseHTTPRequestHandler):
             return ok_response(public_site_settings_json(self.store.site_settings()))
 
         user = self.authenticated_user()
+        if not user and not anonymous_route_allowed(normalized, self.command):
+            return error_response("unauthorized", 401)
 
         if normalized == "console/api/web/tts/voices":
             if not self.authenticated_token_user():
@@ -12499,6 +12696,8 @@ class Handler(BaseHTTPRequestHandler):
             lang = body.get("lang", "zh-Hans") if isinstance(body, dict) else "zh-Hans"
             if not is_valid_email(email_value):
                 return error_response("invalid email")
+            if self.store.get_user_by_email(email_value):
+                return ok_response({"status": "accepted", "retry_after": 60, "reused": True})
             try:
                 self.store.ensure_beta_registration_available(email_value)
             except ValueError as exc:
@@ -12548,8 +12747,8 @@ class Handler(BaseHTTPRequestHandler):
                 email, name, password, code = "", "", "", ""
             if not is_valid_email(email):
                 return error_response("invalid email")
-            if not password:
-                return error_response("password is required")
+            if not password or len(str(password)) < 8:
+                return error_response("password must be at least 8 characters")
             if self.store.get_user_by_email(email):
                 return error_response("email already registered", 409)
             try:
@@ -12574,11 +12773,20 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 email, password = "", None
             normalized_email = normalize_email(str(email))
+            remote_ip = self.client_ip()
+            failure_since = now_ms() - LOGIN_FAILURE_WINDOW_SECONDS * 1000
+            email_failures, ip_failures = self.store.recent_login_failure_counts(normalized_email, remote_ip, failure_since)
+            if email_failures >= LOGIN_EMAIL_FAILURE_LIMIT or ip_failures >= LOGIN_IP_FAILURE_LIMIT:
+                return error_response("too many login attempts, try later", 429)
             existing = self.store.get_user_by_email(normalized_email)
-            if not is_valid_email(normalized_email) or not password or not existing:
+            if not is_valid_email(normalized_email) or not password or not existing or not self.store.verify_password(str(password), existing["password_hash"]):
+                self.store.commit_security_event(existing["id"] if existing else None, normalized_email, "login_failed", remote_ip, {})
                 return error_response("invalid email or password", 401)
-            if existing["password_hash"] != self.store.password_hash(str(password)):
-                return error_response("invalid email or password", 401)
+            if self.store.password_needs_rehash(existing["password_hash"]):
+                with self.store.lock:
+                    self.store.conn.execute("update users set password_hash=?, updated_at=? where id=?", (self.store.password_hash(str(password)), now_ms(), existing["id"]))
+                    self.store.conn.commit()
+            self.store.commit_security_event(existing["id"], normalized_email, "login_success", remote_ip, {})
             return ok_response(token_for(existing["id"]))
 
         if normalized in ("console/api/password-reset", "console/api/reset-password"):
@@ -12590,8 +12798,8 @@ class Handler(BaseHTTPRequestHandler):
                 email, password, code = "", None, ""
             if not is_valid_email(email):
                 return error_response("invalid email")
-            if not password or len(str(password)) < 6:
-                return error_response("password must be at least 6 characters")
+            if not password or len(str(password)) < 8:
+                return error_response("password must be at least 8 characters")
             if not self.store.get_user_by_email(email):
                 return error_response("invalid verification code", 401)
             if not (self.verification_store.verify(email, str(code), "password_reset") or self.store.verify_email_code(email, str(code), purpose="password_reset")):
@@ -13377,6 +13585,8 @@ class Handler(BaseHTTPRequestHandler):
             if len(seg) == 4:
                 local = self.store.get_local_app(app_id)
                 if local:
+                    if not user_can_access_app(local, user["id"] if user else None):
+                        return error_response("角色不存在或已下架", 404)
                     card = local_app_to_card(dict(local))
                     card["favorited"] = self.store.is_favorite(user["id"] if user else None, card["id"])
                     card["liked"] = self.store.is_liked(user["id"] if user else None, card["id"])
@@ -14404,6 +14614,9 @@ class VerificationStore:
                     created_at integer, accepted_at integer, updated_at integer
                 );
             """)
+            columns = {row[1] for row in conn.execute("pragma table_info(email_codes)").fetchall()}
+            if "verify_attempts" not in columns:
+                conn.execute("alter table email_codes add column verify_attempts integer default 0")
 
     def connect(self):
         conn = sqlite3.connect(str(self.path), timeout=5)
@@ -14416,6 +14629,17 @@ class VerificationStore:
         ts = int(time.time())
         value = normalize_email(email)
         with self.connect() as conn:
+            hour_ago = ts - 3600
+            email_sends = int(conn.execute(
+                "select coalesce(sum(send_count),0) from email_codes where email=? and purpose=? and last_sent_at>=?",
+                (value, purpose, hour_ago),
+            ).fetchone()[0] or 0)
+            ip_sends = int(conn.execute(
+                "select coalesce(sum(send_count),0) from email_codes where remote_addr=? and purpose=? and last_sent_at>=?",
+                (remote_addr or "", purpose, hour_ago),
+            ).fetchone()[0] or 0) if remote_addr else 0
+            if email_sends >= REGISTER_CODE_EMAIL_HOURLY_LIMIT or ip_sends >= REGISTER_CODE_IP_HOURLY_LIMIT:
+                raise ValueError("too many verification emails, try later")
             row = conn.execute("select * from email_codes where email=? and purpose=? and consumed_at is null and expires_at>=? order by id desc limit 1", (value, purpose, ts)).fetchone()
             if row and ts - int(row["last_sent_at"] or 0) < 60:
                 return {"code": row["code"], "id": row["id"], "retry_after": 60 - (ts - int(row["last_sent_at"] or 0)), "send": False, "reused": True}
@@ -14429,8 +14653,13 @@ class VerificationStore:
     def verify(self, email: str, code: str, purpose: str = "register") -> bool:
         ts = int(time.time())
         with self.connect() as conn:
-            row = conn.execute("select id,code from email_codes where email=? and purpose=? and consumed_at is null and expires_at>=? order by id desc limit 1", (normalize_email(email), purpose, ts)).fetchone()
-            if not row or row["code"] != str(code or "").strip(): return False
+            conn.execute("begin immediate")
+            row = conn.execute("select id,code,verify_attempts from email_codes where email=? and purpose=? and consumed_at is null and expires_at>=? order by id desc limit 1", (normalize_email(email), purpose, ts)).fetchone()
+            if not row or int(row["verify_attempts"] or 0) >= 5:
+                return False
+            if not hmac.compare_digest(str(row["code"]), str(code or "").strip()):
+                conn.execute("update email_codes set verify_attempts=verify_attempts+1 where id=?", (row["id"],))
+                return False
             conn.execute("update email_codes set consumed_at=? where email=? and purpose=? and consumed_at is null", (ts, normalize_email(email), purpose))
             return True
 
@@ -14454,6 +14683,8 @@ def main() -> int:
     parser.add_argument("--db", type=Path, default=DEFAULT_DB)
     args = parser.parse_args()
 
+    if len(AUTH_TOKEN_SECRET.encode("utf-8")) < 32:
+        raise RuntimeError("AUTH_TOKEN_SECRET must be configured with at least 32 bytes")
     store = Store(args.db)
     global ACTIVE_STORE, MEDIA_DIR
     ACTIVE_STORE = store

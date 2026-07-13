@@ -6,9 +6,9 @@
   <title>登录 · 惑梦（Homer）</title>
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
   <link rel="icon" href="/favicon.ico">
-  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="/assets/vendor/tailwindcss-browser.js?v=20260713-local"></script>
   <link rel="stylesheet" href="/app/assets/css/app.css?v=20260711-cloak-theme">
-  <script type="module" src="/app/assets/js/login.js?v=20260707-password-reset-cachefix"></script>
+  <script type="module" src="/app/assets/js/login.js?v=20260713-auth-migration"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen bg-[#0a0420]">
@@ -82,13 +82,14 @@
           </div>
           <div>
             <label class="xy-label" x-text="authText('password_label', '密码')">密码</label>
-            <input type="password" x-model="registerForm.password" class="xy-input" :placeholder="authText('register_password_placeholder', '至少 6 位')" required minlength="6">
+            <input type="password" x-model="registerForm.password" class="xy-input" :placeholder="authText('register_password_placeholder', '至少 8 位')" required minlength="8">
           </div>
           <button type="submit" class="xy-btn xy-btn-primary w-full" :disabled="loading">
             <span x-show="!loading" x-text="authText('register_button_text', '完成注册')">完成注册</span>
             <span x-show="loading" class="xy-loading"></span>
           </button>
         </form>
+        <p class="text-xs text-slate-500 mt-4 text-center" x-text="authText('register_hint_points', '注册后将自动获得 500 惑梦币，约 10 次角色回复')">注册后将自动获得 500 惑梦币，约 10 次角色回复</p>
       </div>
 
       <!-- 重置密码 -->
@@ -116,7 +117,7 @@
           </div>
           <div>
             <label class="xy-label" x-text="authText('password_label', '密码')">密码</label>
-            <input type="password" x-model="resetForm.password" class="xy-input" :placeholder="authText('reset_password_placeholder', '输入新密码，至少 6 位')" required minlength="6" autocomplete="new-password">
+            <input type="password" x-model="resetForm.password" class="xy-input" :placeholder="authText('reset_password_placeholder', '输入新密码，至少 8 位')" required minlength="8" autocomplete="new-password">
           </div>
           <button type="submit" class="xy-btn xy-btn-primary w-full" :disabled="loading">
             <span x-show="!loading" x-text="authText('reset_button_text', '重置并登录')">重置并登录</span>

@@ -1,5 +1,16 @@
-import { api, setToken, ApiError } from '/app/assets/js/app-core.js';
+import { api, setToken, clearAuth, ApiError } from '/app/assets/js/app-core.js?v=20260713-auth-migration';
 import { loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-channels-closed';
+
+function safeNextPath() {
+  const value = new URLSearchParams(location.search).get('next') || '/app/';
+  try {
+    const target = new URL(value, location.origin);
+    if (target.origin === location.origin && target.pathname.startsWith('/app/')) {
+      return target.pathname + target.search + target.hash;
+    }
+  } catch {}
+  return '/app/';
+}
 
 async function publicPost(path, body) {
   let response;
@@ -58,12 +69,18 @@ function loginPage() {
     resetCountdownTimer: null,
     siteSettings: null,
 
-    init() {
-      // 已登录直接跳转
+    async init() {
+      // 只有服务端仍认可的 token 才直接跳转。签名/过期策略升级后，
+      // 旧 token 会在这里被清理，避免登录页和 /app/ 之间循环跳转。
       const token = localStorage.getItem('ai_xingyue_token');
       if (token) {
-        const next = new URLSearchParams(location.search).get('next') || '/app/';
-        location.replace(next);
+        try {
+          await api.profile();
+          location.replace(safeNextPath());
+          return;
+        } catch (error) {
+          if (error instanceof ApiError && error.code === 401) clearAuth();
+        }
       }
       this.loadSiteSettings();
     },
@@ -83,8 +100,7 @@ function loginPage() {
     },
 
     goNext() {
-      const next = new URLSearchParams(location.search).get('next') || '/app/';
-      location.replace(next);
+      location.replace(safeNextPath());
     },
 
     openReset() {

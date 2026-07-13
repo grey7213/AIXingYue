@@ -42,6 +42,14 @@ export function isLoggedIn() {
   return !!getToken();
 }
 
+function handleUnauthorized() {
+  clearAuth();
+  if (location.pathname.startsWith('/app/') && !location.pathname.endsWith('/login.html')) {
+    const next = location.pathname + location.search + location.hash;
+    location.replace('/app/login.html?next=' + encodeURIComponent(next));
+  }
+}
+
 async function request(path, { method = 'GET', body, headers = {}, auth = true } = {}) {
   const finalHeaders = { 'Accept': 'application/json', ...headers };
   if (body !== undefined && body !== null && !(body instanceof FormData)) {
@@ -68,6 +76,7 @@ async function request(path, { method = 'GET', body, headers = {}, auth = true }
   } catch {
     data = { raw: text };
   }
+  if (response.status === 401 && auth) handleUnauthorized();
   if (!response.ok) {
     const message = (data && (data.message || data.msg)) || `HTTP ${response.status}`;
     throw new ApiError(message, response.status, data);

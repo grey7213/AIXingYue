@@ -1,4 +1,4 @@
-import { api, getToken, ApiError } from '/app/assets/js/app-core.js?v=20260710-web-reliability';
+import { api, getToken, ApiError } from '/app/assets/js/app-core.js?v=20260713-auth-migration';
 
 const statusNode = document.querySelector('[data-resume-status]');
 

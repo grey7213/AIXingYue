@@ -1,5 +1,13 @@
 // 惑梦（Homer） Web App 共享核心 - 在所有 /app/*.html 顶部加载
-import { api as baseApi, getToken, setToken, clearAuth, getCachedUser, setCachedUser, formatDateTime, ApiError } from '/assets/js/api.js';
+import { api as baseApi, getToken, setToken, clearAuth, getCachedUser, setCachedUser, formatDateTime, ApiError } from '/assets/js/api.js?v=20260713-auth-migration';
+
+function redirectAfterUnauthorized() {
+  clearAuth();
+  if (location.pathname.startsWith('/app/') && !location.pathname.endsWith('/login.html')) {
+    const next = location.pathname + location.search + location.hash;
+    location.replace('/app/login.html?next=' + encodeURIComponent(next));
+  }
+}
 
 // 扩展共享 api 实例（增加 chat / explore / conversation 方法）
 async function rawRequest(path, opts = {}) {
@@ -15,6 +23,7 @@ async function rawRequest(path, opts = {}) {
   const text = await res.text();
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
+  if (res.status === 401 && opts.auth !== false) redirectAfterUnauthorized();
   if (!res.ok) throw new ApiError((data && (data.message || data.msg)) || `HTTP ${res.status}`, res.status, data);
   if (data && data.result === 'failure') throw new ApiError(data.message || data.msg || '请求失败', parseInt(data.code) || res.status, data);
   return data;
@@ -31,6 +40,7 @@ async function sseRequest(path, payload, handlers = {}, options = {}) {
     signal: options.signal,
   });
   if (!res.ok || !res.body) {
+    if (res.status === 401) redirectAfterUnauthorized();
     let message = `HTTP ${res.status}`;
     try {
       const data = await res.json();

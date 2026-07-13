@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 import argparse
 import posixpath
+import re
+import secrets
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import paramiko
 
@@ -17,6 +20,10 @@ DEFAULT_KEY = Path.home() / ".ssh" / "villainy_backup_ed25519"
 NGINX_CONF = "/etc/nginx/sites-available/sub2api.conf"
 PATCHER_NGINX_CONF = "/etc/nginx/sites-available/ai-fengyue-patcher.conf"
 FRONTEND_REMOTE = "/var/www/ai-fengyue-frontend"
+DOMAIN_NAME_RE = re.compile(
+    r"(?=.{1,253}\Z)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}\Z"
+)
+EMAIL_RE = re.compile(r"[^\s@,]+@[^\s@,]+\.[^\s@,]+\Z")
 
 
 def log(message: str) -> None:
@@ -75,6 +82,41 @@ def remote_exists(sftp: paramiko.SFTPClient, path: str) -> bool:
         return True
     except FileNotFoundError:
         return False
+
+
+def validate_deploy_args(args: argparse.Namespace) -> None:
+    if not 1 <= args.port <= 65535:
+        raise ValueError("--port must be between 1 and 65535")
+    if not DOMAIN_NAME_RE.fullmatch(args.domain_name):
+        raise ValueError("--domain-name must be a plain DNS hostname")
+
+    parsed_domain = urlsplit(args.domain.rstrip("/"))
+    if (
+        parsed_domain.scheme != "https"
+        or parsed_domain.hostname != args.domain_name
+        or parsed_domain.port is not None
+        or parsed_domain.path not in ("", "/")
+        or parsed_domain.query
+        or parsed_domain.fragment
+        or parsed_domain.username
+        or parsed_domain.password
+    ):
+        raise ValueError("--domain must be the HTTPS origin matching --domain-name")
+    args.domain = args.domain.rstrip("/")
+
+    deploy_parts = args.deploy_dir.split("/")
+    if (
+        not args.deploy_dir.startswith("/")
+        or any(part in ("", ".", "..") for part in deploy_parts[1:])
+        or not re.fullmatch(r"/[A-Za-z0-9._/-]+", args.deploy_dir)
+    ):
+        raise ValueError("--deploy-dir must be a simple absolute POSIX path")
+
+    if args.admin_emails:
+        emails = [item.strip() for item in args.admin_emails.split(",")]
+        if not emails or any(not EMAIL_RE.fullmatch(email) for email in emails):
+            raise ValueError("--admin-emails must contain only comma-separated email addresses")
+        args.admin_emails = ",".join(emails)
 
 
 def proxy_locations(port: int) -> str:
@@ -165,7 +207,14 @@ server {{
     index index.html;
     charset utf-8;
 
-    client_max_body_size 200M;
+    client_max_body_size 32M;
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Permissions-Policy "camera=(), geolocation=(), payment=(), usb=()" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self'; media-src 'self' blob:; frame-src 'self' data: blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; worker-src 'none'" always;
 
 {proxy_locations(port)}
 
@@ -178,8 +227,15 @@ server {{
     location /assets/ {{
         try_files $uri =404;
         expires 1h;
-        add_header Cache-Control "public, must-revalidate";
     }}
+
+    location ~ /\\. {{
+        deny all;
+        return 404;
+    }}
+
+    location = /robots.txt {{ try_files $uri =404; }}
+    location = /.well-known/security.txt {{ try_files $uri =404; }}
 
     # /app/ Web 应用（仿 riliaichat 角色聊天端）
     location /app/ {{
@@ -223,12 +279,29 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory={deploy_dir}
 Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=MEDIA_DIR={FRONTEND_REMOTE}/media-cache
 EnvironmentFile=-{env}
 ExecStart=/usr/bin/python3 {script} --host 127.0.0.1 --port {port} --db {db}
 Restart=on-failure
 RestartSec=3
-User=root
+User=ai-xingyue
+Group=ai-xingyue
+UMask=0027
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths={deploy_dir}/data {FRONTEND_REMOTE}/media-cache
 
 [Install]
 WantedBy=multi-user.target
@@ -236,7 +309,7 @@ WantedBy=multi-user.target
 
 
 def env_template() -> str:
-    return """# AI Xingyue backend mail settings.
+    return f"""# AI Xingyue backend mail settings.
 # Leave SMTP_HOST empty to use local sendmail/postfix.
 APP_BRAND=AI星月
 SMTP_HOST=
@@ -249,6 +322,12 @@ SMTP_STARTTLS=true
 SENDMAIL_PATH=/usr/sbin/sendmail
 # 管理员邮箱（逗号分隔）。这些账号登录后可访问 /admin.html 管理后台。
 ADMIN_EMAILS=local@ctf.test
+AUTH_TOKEN_SECRET={secrets.token_urlsafe(48)}
+AUTH_TOKEN_TTL_SECONDS=2592000
+NEW_USER_INITIAL_POINTS=500
+BETA_MAX_REGISTERED_USERS=0
+ALLOWED_CORS_ORIGINS=https://patcher.villainy.top
+MAX_REQUEST_BODY_BYTES=33554432
 """
 
 
@@ -294,6 +373,8 @@ def main() -> int:
     parser.add_argument("--skip-mail-install", action="store_true")
     args = parser.parse_args()
 
+    validate_deploy_args(args)
+
     if not args.backend.exists():
         raise FileNotFoundError(args.backend)
     if not args.key.exists():
@@ -305,6 +386,7 @@ def main() -> int:
         timestamp = time.strftime("%Y%m%d-%H%M%S")
         run(ssh, "hostname && python3 --version && nginx -t")
         run(ssh, f"mkdir -p {args.deploy_dir}/data")
+        run(ssh, "id -u ai-xingyue >/dev/null 2>&1 || useradd --system --home /nonexistent --shell /usr/sbin/nologin ai-xingyue")
         run(ssh, f"cp {NGINX_CONF} {NGINX_CONF}.bak-ai-xingyue-{timestamp}")
         run(ssh, f"[ -f {PATCHER_NGINX_CONF} ] && cp {PATCHER_NGINX_CONF} {PATCHER_NGINX_CONF}.bak-{timestamp} || true")
 
@@ -319,12 +401,30 @@ def main() -> int:
         env_path = posixpath.join(args.deploy_dir, "ai-fengyue.env")
         if remote_exists(sftp, env_path):
             log(f"keeping existing env file: {env_path}")
+            current_env = read_text(sftp, env_path)
+            lines = current_env.splitlines()
+            changed_env = False
             if args.admin_emails:
-                current_env = read_text(sftp, env_path)
                 lines = [ln for ln in current_env.splitlines() if not ln.lstrip().startswith("ADMIN_EMAILS=")]
                 lines.append(f"ADMIN_EMAILS={args.admin_emails}")
-                upload_text(sftp, env_path, "\n".join(lines) + "\n", 0o600)
+                changed_env = True
                 log(f"updated ADMIN_EMAILS in {env_path}")
+            defaults = {
+                "AUTH_TOKEN_SECRET": secrets.token_urlsafe(48),
+                "AUTH_TOKEN_TTL_SECONDS": "2592000",
+                "NEW_USER_INITIAL_POINTS": "500",
+                "BETA_MAX_REGISTERED_USERS": "0",
+                "ALLOWED_CORS_ORIGINS": "https://patcher.villainy.top",
+                "MAX_REQUEST_BODY_BYTES": "33554432",
+            }
+            existing_names = {ln.split("=", 1)[0].strip() for ln in lines if "=" in ln and not ln.lstrip().startswith("#")}
+            for name, value in defaults.items():
+                if name not in existing_names:
+                    lines.append(f"{name}={value}")
+                    changed_env = True
+            if changed_env:
+                upload_text(sftp, env_path, "\n".join(lines) + "\n", 0o600)
+                log("updated production security defaults in env (secret value not logged)")
         else:
             log(f"creating env placeholder: {env_path}")
             template = env_template()
@@ -386,6 +486,11 @@ def main() -> int:
             )
 
         run(ssh, "systemctl daemon-reload")
+        run(ssh, f"chown -R ai-xingyue:ai-xingyue {args.deploy_dir}/data && chmod 750 {args.deploy_dir}/data && find {args.deploy_dir}/data -type f -name '*.sqlite3*' -exec chmod 600 {{}} +")
+        # The backend writes media even when --skip-frontend is used. Prepare this
+        # path unconditionally after any frontend-wide www-data chown.
+        run(ssh, f"mkdir -p {FRONTEND_REMOTE}/media-cache && chown -R ai-xingyue:ai-xingyue {FRONTEND_REMOTE}/media-cache && chmod 750 {FRONTEND_REMOTE}/media-cache")
+        run(ssh, f"chown root:ai-xingyue {env_path} && chmod 640 {env_path}")
         run(ssh, "systemctl enable --now ai-fengyue-backend.service")
         run(ssh, "systemctl restart ai-fengyue-backend.service")
         run(ssh, "sleep 1; systemctl --no-pager --full status ai-fengyue-backend.service | sed -n '1,18p'")
@@ -401,12 +506,9 @@ def main() -> int:
             run(ssh, f"curl -k -sI {args.domain}/ | head -n 5", check=False)
             run(ssh, f"curl -k -sI {args.domain}/dashboard.html | head -n 5", check=False)
             run(ssh, f"curl -k -sI {args.domain}/admin.html | head -n 5", check=False)
-        run(
-            ssh,
-            f"curl -k -sS -X POST {args.domain}/console/api/register/email "
-            "-H 'Content-Type: application/json' "
-            "-d '{\"email\":\"ctf-test@example.com\",\"lang\":\"zh-Hans\"}'",
-        )
+        # Keep deploy verification read-only. Registration/email probes send real
+        # messages and consume abuse-control quotas, so they belong in an explicit
+        # post-deploy acceptance test rather than the deploy helper.
         log("deployment complete")
         return 0
     finally:

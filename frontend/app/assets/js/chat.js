@@ -77,6 +77,20 @@ function plainTextHtml(value) {
   return escapeHtml(value).replace(/\n/g, '<br>');
 }
 
+function safeImageUrl(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  try {
+    const url = new URL(text, location.origin);
+    if (url.origin === location.origin) {
+      return (url.pathname.startsWith('/media-cache/') || url.pathname.startsWith('/assets/')) ? url.href : '';
+    }
+    return url.protocol === 'https:' ? url.href : '';
+  } catch {
+    return '';
+  }
+}
+
 function normalizeAdvancedRenderSettings(settings = {}) {
   const source = settings && typeof settings === 'object' ? settings : {};
   const jsMode = ADVANCED_JS_MODES.has(source.javascript) ? source.javascript : DEFAULT_ADVANCED_RENDER_SETTINGS.javascript;
@@ -1094,6 +1108,12 @@ function chatPage() {
     _ttsAudio: null,
     _conversationLoadSeq: 0,
     _refreshAfterGeneration: false,
+    heroStyle() {
+      const url = safeImageUrl(this.appHero);
+      return url
+        ? { backgroundImage: `url(${JSON.stringify(url)})` }
+        : { background: 'linear-gradient(135deg, #1a1230, #2d1b69 60%, #4c1d95)' };
+    },
     siteSettings: null,
 
     async init() {

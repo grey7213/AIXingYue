@@ -6,7 +6,7 @@
   <title>聊天 · 惑梦（Homer）</title>
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
   <link rel="icon" href="/favicon.ico">
-  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="/assets/vendor/tailwindcss-browser.js?v=20260713-local"></script>
   <link rel="stylesheet" href="/app/assets/css/app.css?v=20260712-theme-safe">
   <style>
     :root {
@@ -1564,7 +1564,7 @@
         </aside>
 
         <!-- 角色头图 -->
-        <div class="chat-window__hero" :style="appHero ? `background-image: url('${appHero}')` : 'background: linear-gradient(135deg, #1a1230, #2d1b69 60%, #4c1d95);'">
+        <div class="chat-window__hero" :style="heroStyle()">
           <div class="chat-tools" x-show="appId || conversation">
             <button class="tool-btn" :class="{ 'is-active': memoryOpen }" @click.stop="toggleMemoryPanel" :title="chatText('memory_tool_title', '记忆')">
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v12m6-6H6M5 4h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1z"/></svg>

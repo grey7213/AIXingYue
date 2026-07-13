@@ -62,6 +62,11 @@
 
 ## Reusable Pitfalls
 
+- Symptom: 升级为签名 token 后，已有浏览器会在 `/app/` 与登录页之间循环，或停在“正在读取你的历史会话”。
+  Cause: 旧 token 已失效，但登录页只判断 localStorage 中是否存在 token 就直接跳转；共享 API 收到 401 时也未清理旧凭证。
+  Fix: 2026-07-13 `frontend/assets/js/api.js` 和 `frontend/app/assets/js/app-core.js` 收到鉴权 401 时清理本地认证并跳到登录页；`login.js` 先调用 profile 验证 token，只有有效 token 才直跳。
+  Verify: 真实浏览器保留旧 token 打开登录页后稳定停留在登录表单，不再循环；重新登录后进入 Explore，桌面/移动 Rewards 无 console error。
+
 - Symptom: 标签优化 ZIP 的 `tag-overrides.filled.csv` 仍是上一轮结果，直接运行旧回填工具会漏掉文件名中新增的 1767 张标签，并把 318 张 `CLEAR` 卡继续保留。
   Cause: 第三方本轮主要通过 `cards/<display_id>__<标签表达式>[√/✗].json` 改名，未同步更新 filled CSV；同时角色表没有外键，直接删除 CLEAR 卡会让历史会话失联。
   Fix: 2026-07-13 使用 `tools/sync_role_card_filename_tags.py` 校验 Manifest/卡 SHA 后从文件名解析优化标签；CLEAR 卡先审计引用，306 张无功能引用卡物理删除，12 张关联会话的卡保留原 ID 并设为私有隐藏。

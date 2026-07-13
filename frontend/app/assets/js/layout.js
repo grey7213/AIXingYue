@@ -41,7 +41,7 @@ function svg(path) {
 
 function navLabel(item, settings, mobile = false) {
   const labels = settings?.app?.[mobile ? 'mobile_nav_labels' : 'nav_labels'] || {};
-  return labels[item.key] || item.label;
+  return escapeHtml(labels[item.key] || item.label);
 }
 
 function appText(settings, key, fallback = '') {
