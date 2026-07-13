@@ -3436,6 +3436,31 @@ class Store:
                 ).fetchone()
             return self.conn.execute("select * from payment_orders where order_no=?", (clean,)).fetchone()
 
+    def list_payment_orders(self, user_id: str, page: int = 1, page_size: int = 20) -> tuple[list[sqlite3.Row], int]:
+        clean_user_id = str(user_id or "").strip()
+        if not clean_user_id:
+            return [], 0
+        safe_page = max(1, int(page or 1))
+        safe_page_size = max(1, min(50, int(page_size or 20)))
+        offset = (safe_page - 1) * safe_page_size
+        with self.lock:
+            total = int(self.conn.execute(
+                "select count(*) from payment_orders where user_id=?",
+                (clean_user_id,),
+            ).fetchone()[0] or 0)
+            rows = self.conn.execute(
+                """
+                select order_no,provider,plan_id,plan_kind,product_name,pay_type,
+                       money_cents,points,status,created_at,updated_at,paid_at
+                from payment_orders
+                where user_id=?
+                order by created_at desc,id desc
+                limit ? offset ?
+                """,
+                (clean_user_id, safe_page_size, offset),
+            ).fetchall()
+        return list(rows), total
+
     def fulfill_zpay_payment(self, params: dict[str, str], remote_addr: str | None = None) -> tuple[sqlite3.Row, bool]:
         order_no = str(params.get("out_trade_no") or "").strip()
         provider_trade_no = str(params.get("trade_no") or "").strip()
@@ -11414,6 +11439,7 @@ def redeem_code_status(item: sqlite3.Row | dict, ts: int | None = None) -> str:
 
 
 def payment_order_json(item: sqlite3.Row | dict, user: sqlite3.Row | dict | None = None) -> dict:
+    status = str(item["status"] or "pending").lower()
     payload = {
         "order_no": str(item["order_no"]),
         "provider": str(item["provider"] or "zpay"),
@@ -11426,7 +11452,9 @@ def payment_order_json(item: sqlite3.Row | dict, user: sqlite3.Row | dict | None
         "amount_cny": cents_to_money(int(item["money_cents"] or 0)),
         "money_cents": int(item["money_cents"] or 0),
         "points": int(item["points"] or 0),
-        "status": str(item["status"] or "pending"),
+        "status": status,
+        "status_label": "已到账" if status == "paid" else "待支付",
+        "credited": status == "paid",
         "created_at": int(item["created_at"] or 0),
         "updated_at": int(item["updated_at"] or 0),
         "paid_at": int(item["paid_at"] or 0) if item["paid_at"] else None,
@@ -11496,7 +11524,13 @@ def deposit_meta_json(user: sqlite3.Row | None = None) -> dict:
         "payment_provider": "zpay" if zpay_available else "aifadian",
         "payment_providers": payment_providers,
         "payment_create_url": "/console/api/web/payments/orders" if zpay_available else "",
+        "payment_orders_url": "/console/api/web/payments/orders" if zpay_available else "",
+        "default_pay_type": ("alipay" if "alipay" in ZPAY_ALLOWED_TYPES else ZPAY_PAYMENT_TYPE) if zpay_available else "",
         "pay_types": sorted(ZPAY_ALLOWED_TYPES) if zpay_available else [],
+        "pay_type_options": [
+            {"id": pay_type, "label": {"alipay": "支付宝", "wxpay": "微信支付"}.get(pay_type, pay_type)}
+            for pay_type in sorted(ZPAY_ALLOWED_TYPES)
+        ] if zpay_available else [],
         "aifadian_url": aifadian_url,
         "aifadian_available": bool(aifadian_url),
         "payment_available": zpay_available or bool(aifadian_url),
@@ -12992,6 +13026,17 @@ class Handler(BaseHTTPRequestHandler):
             token_user = self.authenticated_token_user()
             if not token_user:
                 return error_response("unauthorized", 401)
+            if self.command.upper() == "GET":
+                page = parse_query_int(query, "page", 1, 1, 100000)
+                page_size = parse_query_int(query, "page_size", 20, 1, 50)
+                orders, total = self.store.list_payment_orders(token_user["id"], page=page, page_size=page_size)
+                items = []
+                for order in orders:
+                    item = payment_order_json(order)
+                    if str(order["status"] or "pending").lower() == "pending" and zpay_is_configured():
+                        item["pay_url"] = zpay_submit_url(order)
+                    items.append(item)
+                return ok_response({"list": items, "total": total, "page": page, "page_size": page_size})
             if self.command.upper() != "POST":
                 return error_response("method not allowed", 405)
             if not PAYMENT_CHANNEL_ENABLED or not zpay_is_configured():
@@ -13039,7 +13084,10 @@ class Handler(BaseHTTPRequestHandler):
             if not order:
                 return error_response("payment order not found", 404)
             current_user = self.store.get_user_by_id(token_user["id"]) or token_user
-            return ok_response(payment_order_json(order, current_user))
+            payload = payment_order_json(order, current_user)
+            if str(order["status"] or "pending").lower() == "pending" and zpay_is_configured():
+                payload["pay_url"] = zpay_submit_url(order)
+            return ok_response(payload)
 
         if normalized == "console/api/web/redeem-code":
             if self.command.upper() != "POST":

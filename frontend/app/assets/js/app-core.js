@@ -137,6 +137,10 @@ export const api = {
       ...(amountCny !== null ? { amount_cny: amountCny } : {}),
     },
   }),
+  paymentOrders: (params = {}) => {
+    const qs = new URLSearchParams(params);
+    return rawRequest(`/console/api/web/payments/orders?${qs}`);
+  },
   paymentOrder: (orderNo) => rawRequest(`/console/api/web/payments/orders/${encodeURIComponent(orderNo)}`),
   redeemCode: (code) => rawRequest('/console/api/web/redeem-code', { method: 'POST', body: { code } }),
   redemptions: (params = {}) => {
