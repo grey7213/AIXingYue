@@ -17,7 +17,7 @@ Updated: 2026-07-13
 | ZP11 | 后端支持自定义金额并同时公开爱发电 | Done | 12.34→12340；边界/小数/科学计数/伪造积分/固定套餐/幂等回归通过 |
 | ZP12 | Rewards 双通道和自定义金额 UI | Done | 桌面/390px：两入口可见、12.34→预计 12340、0.99 提示、无溢出/console error |
 | ZP13 | 备份部署与线上未付款验证 | Done | 备份 quick_check=ok；固定 ¥10/自定义 ¥12.34 均 302 到官方收银台、pending、余额不变、已清理 |
-| ZP14 | 更新记录并提交推送（二次扩展） | In progress | focused commit + origin/main |
+| ZP14 | 更新记录并提交推送（二次扩展） | Done | 实现提交 `d72d247` 已推送到 `origin/main`；current-state 与项目规则已更新 |
 
 ## 2026-07-13 验证记录
 
