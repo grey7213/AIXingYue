@@ -18,4 +18,4 @@
 - 2026-07-13：线上临时用户验证初始 `500` 惑梦币/`300` 农场币/8 块土地；种植幂等回放成功、冲突返回 409；强制成熟后收获 `points_added=10`、余额 `510`、农场币 `340`；随后旧签到接口 `points_added=0`。
 - 2026-07-13：支付回归保持 `zpay + aifadian`，自定义在线支付宝金额仍启用；临时用户和农场数据清理为 0，SQLite `quick_check=ok`。
 - 2026-07-13：线上 `ai-fengyue-backend.service`、`nginx` active，内外 `/health` 为 OK，`CONTENT_MODE=local_only`；桌面和 390px 截图为 `output/playwright/farm-live-desktop.png`、`farm-live-mobile.png`。
-- 2026-07-13 V2：用户新版 ZIP 主要删除虚构好友和虚构统计。正式版停止系统 NPC 展示与奖励，好友接口返回真实好友准备中的空状态，旧采摘接口返回 409；保留服务端 XP/等级、作物图鉴、每日首收和全部支付链路。截图为 `output/playwright/farm-v2-live-desktop.png`、`farm-v2-live-mobile.png`。
+- 2026-07-13 V2：用户新版 ZIP 主要删除虚构好友和虚构统计。正式版停止系统 NPC 展示与奖励，好友接口返回普通空状态，页面只显示“0 位好友/还没有好友”，旧采摘接口返回 409；保留服务端 XP/等级、作物图鉴、每日首收和全部支付链路。截图为 `output/playwright/farm-v2-live-desktop.png`、`farm-v2-live-mobile.png`。

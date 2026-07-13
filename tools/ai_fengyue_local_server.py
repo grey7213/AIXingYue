@@ -3695,9 +3695,9 @@ class Store:
         state = self.farm_state(user_id)
         return {
             "date": state["date"],
-            "mode": "real_friends_pending",
+            "mode": "empty",
             "available": False,
-            "message": "真实好友农场功能准备中，当前不会生成虚构邻居。",
+            "message": "当前账号暂无可访问的好友农场。",
             "list": [],
             "friends": [],
             "steals_used": 0,

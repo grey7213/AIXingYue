@@ -9,8 +9,8 @@
 ## 落地映射
 
 - 保留现有 `farm.html`、`farm.css`、`farm.js`、App Shell、Bearer 鉴权和服务端 `farm_*` API。
-- 好友区域改为“真实好友准备中”的空状态，不再展示系统 NPC。
-- `/console/api/web/farm/friends` 返回 `mode=real_friends_pending` 和空列表；旧 NPC 采摘接口返回 409，不再发放农场币/XP。
+- 好友区域改为“0 位好友/还没有好友”的普通空状态，不再展示系统 NPC 或功能准备中文案。
+- `/console/api/web/farm/friends` 返回 `mode=empty` 和空列表；旧 NPC 采摘接口返回 409，不再发放农场币/XP。
 - 保留真实服务端 XP、等级、每日首收、作物图鉴、倒计时和充值入口，这些不是原型中的虚构统计。
 - 移植新版更完整的第 3 生长阶段像素图与轻量阶段动画。
 

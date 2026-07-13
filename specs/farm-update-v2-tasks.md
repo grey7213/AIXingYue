@@ -12,7 +12,7 @@
 
 - 新包 SHA-256：`8E16D14D89458E787DEB72938C7C250864B567AB978009BE3BE9C1012605326C`；包内 40 项 SHA256 全部通过，无路径穿越，npm audit 0 known vulnerabilities。
 - 本地 `farm-backend-verify.py`：种植、浇水、收获、体力、连续活跃、好友空状态、旧 NPC 停用、幂等与旧签到共享奖励全部通过。
-- 线上 `/farm/friends`：`mode=real_friends_pending`、好友数 0、剩余采摘次数 0；旧 NPC 采摘返回 409，农场币/XP/体力不变。
+- 线上 `/farm/friends`：`mode=empty`、好友数 0、剩余采摘次数 0；页面不显示功能准备中文案；旧 NPC 采摘返回 409，农场币/XP/体力不变。
 - 线上种植/强制成熟/收获正常，首次收获领取每日奖励，随后旧 `dailyapppoints` 返回 0。
 - 支付回归：`payment_providers=[zpay,aifadian]`，自定义在线支付宝金额仍启用。
 - 浏览器：第 1/2/3 生长阶段各渲染 1 个，第 3 阶段不再提前显示成熟造型；NPC 卡片 0，好友空状态存在；390px `horizontalOverflow=false`，console error=0。

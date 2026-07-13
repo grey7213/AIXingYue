@@ -106,7 +106,7 @@ function farmPage() {
     siteSettings: null,
     plots: [],
     friends: [],
-    friendsMode: 'real_friends_pending',
+    friendsMode: 'empty',
     friendsMessage: '',
     seeds: BASE_SEEDS.map(item => ({ ...item })),
     coins: 0,
@@ -308,8 +308,8 @@ function farmPage() {
       const data = unwrap(result);
       const items = data.list || data.friends || data.items || (Array.isArray(data) ? data : []);
       this.friends = this.normalizeFriends(items);
-      this.friendsMode = String(data.mode || (this.friends.length ? 'available' : 'real_friends_pending'));
-      this.friendsMessage = String(data.message || '好友关系接入后，这里才会显示真实账号的农场状态。');
+      this.friendsMode = String(data.mode || (this.friends.length ? 'available' : 'empty'));
+      this.friendsMessage = String(data.message || '当前账号暂无可访问的好友农场。');
       this.stealsLeft = intValue(data.steals_remaining ?? data.steals_left ?? data.stealsLeft ?? data.remaining, this.stealsLeft);
     },
 
