@@ -536,3 +536,13 @@
   Cause: Web 页面都有 `x-cloak`，但直接加载的 `frontend/app/assets/css/app.css` 没有 cloak 规则；工坊 fallback 又把换行写成双转义 `\\n`。页面同时使用 Alpine 自动 `init()` 与 `x-init="init()"`，会重复请求。
   Fix: 在 app.css 顶部定义 `[x-cloak]`，所有页面统一刷新 CSS cache-buster；运营设置读取时归一化字面换行；移除重复 x-init；workshop/info 用 ready 骨架，暖黑橙金 Hero 和暖纸统计卡统一主题。
   Verify: 2026-07-11 静态检查 15 个 cloak 页面、旧 CSS 版本 0、双转义 0、重复 x-init 0；线上 8 个页面刷新冒烟无字面 `\\n`/横向溢出/浏览器错误；工坊/信息中心 API 各请求 1 次，信息中心显示 8778 公开官方角色。
+
+- Symptom: ZPAY 异步通知重试或同一支付单重复通知时，用户可能被重复增加惑梦币。
+  Cause: 支付回调天然可能重复送达；只按回调次数直接加币、或仅在应用层先查后写，无法保证并发幂等。
+  Fix: 使用 `payment_orders` 作为服务端订单账本；只接受 PID、签名、订单号、金额、支付类型和 `TRADE_SUCCESS` 全部匹配的 notify，在同一 SQLite 写事务内把订单从 pending 原子更新为 paid 并增加 `paid_points`；return 页面只跳转，不入账；notify 成功必须返回纯文本 `success`。
+  Verify: 2026-07-13 本地 E2E 首次 notify 增加 10000，重复 notify 增加 0；错签拒绝、return 不入账、跨用户查单拒绝；线上官方网关接受临时 ¥10 pending 订单，未付款余额保持不变。
+
+- Symptom: 开启 `PAYMENT_CHANNEL_ENABLED=true` 后，旧 `/console/api/ctf/recharge` 直充接口可能被连带开放，绕过 ZPAY 付款直接增加积分。
+  Cause: 旧逻辑把“支付页面可用”与“CTF 测试直充可用”共用一个开关，且历史兼容路径存在直接入账能力。
+  Fix: 新增独立 `CTF_DIRECT_RECHARGE_ENABLED`，默认 `false`；两个旧 CTF 直充路径默认返回 403。即使显式开启，也必须验证 bearer token，并且入账用户只能取自 token，不能信任请求体用户标识。
+  Verify: 2026-07-13 本地与线上在 ZPAY 已启用时，旧 CTF 直充仍返回 403；线上环境明确为 `CTF_DIRECT_RECHARGE_ENABLED=false`。

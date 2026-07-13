@@ -163,12 +163,11 @@ function dashboard() {
       };
     },
 
-    openAifadian() {
-      const url = this.deposit?.aifadian_url;
-      if (this.paymentAvailable() && url) {
-        window.open(url, '_blank', 'noopener,noreferrer');
+    openPayments() {
+      if (this.paymentAvailable()) {
+        window.location.href = '/app/rewards.html';
       } else {
-        this.showToast(this.depositText('support_text', this.dashboardText('aifadian_missing_text', '充值通道暂时关闭')), 'error');
+        this.showToast(this.depositText('support_text', this.dashboardText('payment_missing_text', '充值通道暂时关闭')), 'error');
       }
     },
 

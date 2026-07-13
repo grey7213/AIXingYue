@@ -8,7 +8,7 @@
   <link rel="icon" href="/favicon.ico">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="/app/assets/css/app.css?v=20260711-cloak-theme">
-  <script type="module" src="/app/assets/js/hub-pages.js?v=20260703-channels-closed"></script>
+  <script type="module" src="/app/assets/js/hub-pages.js?v=20260713-zpay"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
@@ -21,7 +21,7 @@
       <header class="app-topbar">
         <h1 x-text="rewardsText('page_title', 'Credits')">Credits</h1>
         <div class="grow"></div>
-        <button class="xy-btn xy-btn-primary text-sm" x-show="paymentAvailable()" @click="openAifadian" x-text="depositText('button_text', '前往购买')">前往购买</button>
+        <button class="xy-btn xy-btn-primary text-sm" x-show="paymentAvailable()" @click="focusPayment">选择套餐</button>
       </header>
       <section class="app-page-pad max-w-6xl mx-auto space-y-5">
         <template x-if="message">
@@ -58,21 +58,33 @@
           </div>
 
           <div class="form-panel">
-            <div class="text-white font-semibold mb-2" x-text="depositText('title', '充值通道维护中')">充值通道维护中</div>
-            <div class="text-sm text-slate-400 mb-4" x-text="depositText('description', '充值和兑换入口暂时关闭，已有余额、每日奖励和聊天功能不受影响。')">充值和兑换入口暂时关闭，已有余额、每日奖励和聊天功能不受影响。</div>
-            <template x-if="paymentAvailable()">
+            <div class="text-white font-semibold mb-2">支付订单</div>
+            <template x-if="currentOrder">
               <div>
-                <div class="flex gap-2">
-                  <input class="xy-input flex-1 uppercase font-mono" x-model="redeemInput" @keydown.enter="redeemNow" :placeholder="depositText('redeem_placeholder', 'XY-XXXX-XXXX-XXXX-XXXX')">
-                  <button class="xy-btn xy-btn-primary shrink-0" @click="redeemNow" :disabled="busy">
-                    <span x-show="!busy" x-text="depositText('redeem_button_text', '兑换')">兑换</span>
-                    <span x-show="busy" class="xy-loading"></span>
-                  </button>
+                <div class="list-row !grid-cols-[minmax(0,1fr)_auto] !px-0">
+                  <div>
+                    <div class="title" x-text="orderStatusText()"></div>
+                    <div class="meta font-mono" x-text="currentOrder.order_no"></div>
+                  </div>
+                  <span class="xy-badge xy-badge-green" x-text="currentOrder.amount_cny ? `¥${currentOrder.amount_cny}` : '查询中'"></span>
                 </div>
-                <button class="xy-btn xy-btn-ghost w-full justify-center mt-3" @click="openAifadian" x-text="depositText('button_text', '前往购买兑换码')">前往购买兑换码</button>
+                <div class="flex gap-2 mt-3">
+                  <button class="xy-btn xy-btn-ghost text-sm flex-1 justify-center" @click="refreshPaymentOrder()" :disabled="busy">刷新状态</button>
+                  <button class="xy-btn xy-btn-primary text-sm flex-1 justify-center" x-show="orderPending() && currentOrder.pay_url" @click="continuePayment">继续支付</button>
+                </div>
               </div>
             </template>
+            <template x-if="!currentOrder">
+              <p class="text-sm text-slate-400">选择套餐并完成在线支付后，惑梦币会自动发放到当前账号。</p>
+            </template>
             <p class="text-xs text-slate-500 mt-3" x-text="paymentNote()"></p>
+            <details class="mt-3 border-t border-white/10 pt-3">
+              <summary class="text-xs text-slate-500 cursor-pointer">备用兑换码入口</summary>
+              <div class="flex gap-2 mt-3">
+                <input class="xy-input flex-1 uppercase font-mono" x-model="redeemInput" @keydown.enter="redeemNow" :placeholder="depositText('redeem_placeholder', 'XY-XXXX-XXXX-XXXX-XXXX')">
+                <button class="xy-btn xy-btn-ghost shrink-0" @click="redeemNow" :disabled="busy">兑换</button>
+              </div>
+            </details>
           </div>
         </div>
 
@@ -84,11 +96,11 @@
                 <div class="text-white font-semibold" x-text="rewardsText('packages_title', '推荐套餐')">推荐套餐</div>
                 <div class="text-xs text-slate-500 mt-1" x-text="deposit?.rate_label || '1 CNY = 1000 惑梦币'"></div>
               </div>
-              <button class="xy-btn xy-btn-ghost text-sm" @click="openAifadian" x-text="depositText('button_text', rewardsText('purchase_button_fallback', '购买'))">购买</button>
+
             </div>
             <div class="grid md:grid-cols-2 gap-3">
               <template x-for="pkg in (deposit?.packages || [])" :key="pkg.id">
-                <button class="quick-tile text-left !p-4" @click="openAifadian(pkg)">
+                <button class="quick-tile text-left !p-4" :class="{ 'ring-2 ring-violet-400': selectedPlan?.id === pkg.id }" @click="selectPlan(pkg)">
                   <div class="flex items-start justify-between gap-3">
                     <strong x-text="pkg.label"></strong>
                     <span class="xy-badge xy-badge-purple" x-text="`¥${pkg.price_cny}`"></span>
@@ -106,11 +118,11 @@
                 <div class="text-white font-semibold" x-text="depositText('subscriptions_title', '月度订阅')">月度订阅</div>
                 <div class="text-xs text-slate-500 mt-1" x-text="depositText('subscriptions_note', '订阅为月度额度包，不承诺无限使用；额度用完后可继续兑换积分包。')"></div>
               </div>
-              <button class="xy-btn xy-btn-ghost text-sm shrink-0" @click="openAifadian" x-text="depositText('button_text', rewardsText('purchase_button_fallback', '购买'))">购买</button>
+
             </div>
             <div class="grid md:grid-cols-3 gap-3">
               <template x-for="sub in (deposit?.subscriptions || [])" :key="sub.id">
-                <button class="quick-tile text-left !p-4" @click="openAifadian(sub)">
+                <button class="quick-tile text-left !p-4" :class="{ 'ring-2 ring-violet-400': selectedPlan?.id === sub.id }" @click="selectPlan(sub)">
                   <div class="flex items-start justify-between gap-3">
                     <strong x-text="sub.label"></strong>
                     <span class="xy-badge xy-badge-green" x-text="`¥${sub.price_cny}/${sub.period || '月'}`"></span>
@@ -119,6 +131,24 @@
                   <div class="text-xs text-slate-400 mt-2" x-text="sub.description || ''"></div>
                 </button>
               </template>
+            </div>
+            <div id="payment-checkout" class="form-panel" x-show="selectedPlan && paymentAvailable()" x-transition>
+              <div class="flex items-start justify-between gap-4 mb-4">
+                <div>
+                  <div class="text-white font-semibold">确认支付</div>
+                  <div class="text-xs text-slate-500 mt-1" x-text="selectedPlan ? `${selectedPlan.label || selectedPlan.id} · ¥${selectedPlan.price_cny}` : ''"></div>
+                </div>
+              </div>
+              <p class="text-sm text-slate-400">付款将为当前登录账号自动充值，请在支付完成后返回本页查看到账状态。</p>
+              <div class="grid gap-3 mt-3" :class="availablePayTypes().length > 1 ? 'grid-cols-2' : 'grid-cols-1'">
+                <template x-for="pay in availablePayTypes()" :key="pay.id">
+                  <button class="xy-btn justify-center" :class="payType === pay.id ? 'xy-btn-primary' : 'xy-btn-ghost'" @click="payType=pay.id" x-text="pay.label"></button>
+                </template>
+              </div>
+              <button class="xy-btn xy-btn-primary w-full justify-center mt-3" @click="createPayment" :disabled="busy || !selectedPlan || !payType">
+                <span x-show="!busy">创建订单并前往支付</span>
+                <span x-show="busy" class="xy-loading"></span>
+              </button>
             </div>
           </div>
           </div>

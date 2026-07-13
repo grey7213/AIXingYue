@@ -6,6 +6,7 @@ import email.message
 import email.utils
 import html
 import hashlib
+import hmac
 import io
 import json
 import math
@@ -23,6 +24,7 @@ import time
 import uuid
 import zipfile
 import zlib
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse, unquote, quote
@@ -79,6 +81,7 @@ USER_LLM_MODEL = os.environ.get("USER_LLM_MODEL") or os.environ.get("LLM_MODEL")
 USER_LLM_TEMPERATURE = float(os.environ.get("USER_LLM_TEMPERATURE", "0.8") or "0.8")
 USER_BYOK_ENABLED = str(os.environ.get("USER_BYOK_ENABLED", "0")).strip().lower() in ("1", "true", "yes", "on")
 PAYMENT_CHANNEL_ENABLED = env_bool("PAYMENT_CHANNEL_ENABLED", False)
+CTF_DIRECT_RECHARGE_ENABLED = env_bool("CTF_DIRECT_RECHARGE_ENABLED", False)
 APK_DOWNLOAD_ENABLED = env_bool("APK_DOWNLOAD_ENABLED", False)
 DEFAULT_CLEAN_ZONE_EXCLUDE_TERMS = [
     "猎奇", "重口", "福瑞", "furry", "guro", "gore", "血腥", "猎奇向",
@@ -95,6 +98,16 @@ LLM_UPSTREAM_USER_AGENT = os.environ.get(
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
 )
 AIFADIAN_URL = os.environ.get("AIFADIAN_URL", "").strip()
+ZPAY_ENABLED = env_bool("ZPAY_ENABLED", False)
+ZPAY_PID = os.environ.get("ZPAY_PID", "").strip()
+ZPAY_KEY = os.environ.get("ZPAY_KEY", "").strip()
+ZPAY_GATEWAY = os.environ.get("ZPAY_GATEWAY", "").strip().rstrip("/")
+ZPAY_PAYMENT_TYPE = os.environ.get("ZPAY_PAYMENT_TYPE", "alipay").strip().lower() or "alipay"
+ZPAY_ALLOWED_TYPES = {
+    item.strip().lower()
+    for item in os.environ.get("ZPAY_ALLOWED_TYPES", ZPAY_PAYMENT_TYPE).split(",")
+    if item.strip()
+}
 SITE_SETTINGS_KEY = "site_settings"
 GLOBAL_PROMPT_PRESET_KEY = "global_prompt_preset"
 IMAGE_MODEL_SETTINGS_KEY = "image_model_settings"
@@ -392,6 +405,86 @@ def rewrite_media_urls(value: object, mappings: list[tuple[str, str]] | None = N
 def normalize_query(query: str | None) -> str:
     pairs = parse_qsl(query or "", keep_blank_values=True)
     return urlencode(sorted(pairs), doseq=True)
+
+
+def money_to_cents(value: object) -> int:
+    try:
+        amount = Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    except (InvalidOperation, TypeError, ValueError):
+        raise ValueError("invalid payment amount")
+    cents = int(amount * 100)
+    if cents <= 0:
+        raise ValueError("invalid payment amount")
+    return cents
+
+
+def cents_to_money(cents: int) -> str:
+    return f"{max(0, int(cents or 0)) / 100:.2f}"
+
+
+def zpay_is_configured() -> bool:
+    if not (ZPAY_ENABLED and ZPAY_PID and ZPAY_KEY and ZPAY_GATEWAY):
+        return False
+    try:
+        parsed = urlparse(ZPAY_GATEWAY)
+    except Exception:
+        return False
+    return bool(
+        parsed.scheme.lower() == "https"
+        and (parsed.hostname or "").lower() == "zpayz.cn"
+        and parsed.port in (None, 443)
+        and parsed.path in ("", "/")
+        and not parsed.params
+        and not parsed.query
+        and not parsed.fragment
+        and not parsed.username
+        and not parsed.password
+    )
+
+
+def zpay_sign(params: dict[str, object]) -> str:
+    if not ZPAY_KEY:
+        raise ValueError("ZPAY is not configured")
+    items: list[tuple[str, str]] = []
+    for key, value in params.items():
+        clean_key = str(key)
+        if clean_key in ("sign", "sign_type") or value is None:
+            continue
+        clean_value = str(value)
+        if clean_value == "":
+            continue
+        items.append((clean_key, clean_value))
+    canonical = "&".join(f"{key}={value}" for key, value in sorted(items, key=lambda item: item[0]))
+    return hashlib.md5((canonical + ZPAY_KEY).encode("utf-8")).hexdigest()
+
+
+def zpay_query_params(query: str) -> dict[str, str]:
+    params: dict[str, str] = {}
+    for key, value in parse_qsl(query or "", keep_blank_values=True):
+        if key in params:
+            raise ValueError("duplicate callback parameter")
+        params[key] = value
+    return params
+
+
+def verify_zpay_callback(query: str) -> dict[str, str]:
+    if not zpay_is_configured():
+        raise ValueError("ZPAY is not configured")
+    params = zpay_query_params(query)
+    received_sign = str(params.get("sign") or "").strip().lower()
+    if not received_sign:
+        raise ValueError("missing signature")
+    expected_sign = zpay_sign(params).lower()
+    if not hmac.compare_digest(received_sign, expected_sign):
+        raise ValueError("invalid signature")
+    if str(params.get("pid") or "") != ZPAY_PID:
+        raise ValueError("merchant mismatch")
+    if str(params.get("trade_status") or "") != "TRADE_SUCCESS":
+        raise ValueError("payment not successful")
+    if not str(params.get("out_trade_no") or "").strip():
+        raise ValueError("missing order number")
+    money_to_cents(params.get("money"))
+    return params
 
 
 def content_cache_key(method: str, path: str, query: str | None) -> str:
@@ -2162,6 +2255,33 @@ class Store:
                     created_at integer not null,
                     remote_addr text
                 );
+                create table if not exists payment_orders (
+                    id integer primary key autoincrement,
+                    order_no text unique not null,
+                    provider text not null default 'zpay',
+                    provider_trade_no text,
+                    user_id text not null,
+                    plan_id text not null,
+                    plan_kind text not null,
+                    product_name text not null,
+                    pay_type text not null,
+                    money_cents integer not null,
+                    points integer not null,
+                    status text not null default 'pending',
+                    created_at integer not null,
+                    updated_at integer not null,
+                    paid_at integer,
+                    notified_at integer,
+                    notify_count integer not null default 0,
+                    remote_addr text,
+                    notify_payload_json text
+                );
+                create index if not exists idx_payment_orders_user
+                    on payment_orders(user_id, created_at desc);
+                create index if not exists idx_payment_orders_status
+                    on payment_orders(status, updated_at desc);
+                create unique index if not exists idx_payment_orders_provider_trade
+                    on payment_orders(provider, provider_trade_no);
                 create table if not exists content_cache (
                     id integer primary key autoincrement,
                     cache_key text unique not null,
@@ -3174,6 +3294,193 @@ class Store:
             )
             self.conn.commit()
             return self.get_user_by_id(user_id) or self.current_user(), order_id
+
+    def payment_plan(self, plan_id: str) -> dict | None:
+        clean_id = str(plan_id or "").strip()
+        if not clean_id:
+            return None
+        settings = self.site_settings()
+        deposit = settings.get("deposit") if isinstance(settings.get("deposit"), dict) else {}
+        for kind, key in (("package", "packages"), ("subscription", "subscriptions")):
+            items = deposit.get(key)
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if not isinstance(item, dict) or str(item.get("id") or "").strip() != clean_id:
+                    continue
+                try:
+                    money_cents = money_to_cents(item.get("price_cny"))
+                    points = int(item.get("points") or 0)
+                except (TypeError, ValueError):
+                    return None
+                if points <= 0:
+                    return None
+                label = str(item.get("label") or clean_id).strip()[:80] or clean_id
+                return {
+                    "id": clean_id,
+                    "kind": kind,
+                    "label": label,
+                    "product_name": f"{label} · {points} 惑梦币"[:120],
+                    "money_cents": money_cents,
+                    "points": points,
+                }
+        return None
+
+    def create_payment_order(
+        self,
+        user_id: str,
+        plan: dict,
+        pay_type: str,
+        remote_addr: str | None = None,
+    ) -> sqlite3.Row:
+        ts = now_ms()
+        with self.lock:
+            for _ in range(5):
+                order_no = time.strftime("%Y%m%d%H%M%S", time.localtime()) + "".join(
+                    str(random.SystemRandom().randrange(10)) for _ in range(12)
+                )
+                try:
+                    self.conn.execute(
+                        """
+                        insert into payment_orders(
+                            order_no,provider,user_id,plan_id,plan_kind,product_name,pay_type,
+                            money_cents,points,status,created_at,updated_at,remote_addr
+                        ) values(?,?,?,?,?,?,?,?,?,'pending',?,?,?)
+                        """,
+                        (
+                            order_no,
+                            "zpay",
+                            user_id,
+                            str(plan["id"]),
+                            str(plan["kind"]),
+                            str(plan["product_name"]),
+                            pay_type,
+                            int(plan["money_cents"]),
+                            int(plan["points"]),
+                            ts,
+                            ts,
+                            remote_addr or "",
+                        ),
+                    )
+                    self.conn.commit()
+                    row = self.conn.execute("select * from payment_orders where order_no=?", (order_no,)).fetchone()
+                    if row:
+                        return row
+                except sqlite3.IntegrityError:
+                    self.conn.rollback()
+                    continue
+            raise RuntimeError("failed to allocate payment order")
+
+    def get_payment_order(self, order_no: str, user_id: str | None = None) -> sqlite3.Row | None:
+        clean = str(order_no or "").strip()
+        if not clean:
+            return None
+        with self.lock:
+            if user_id:
+                return self.conn.execute(
+                    "select * from payment_orders where order_no=? and user_id=?",
+                    (clean, user_id),
+                ).fetchone()
+            return self.conn.execute("select * from payment_orders where order_no=?", (clean,)).fetchone()
+
+    def fulfill_zpay_payment(self, params: dict[str, str], remote_addr: str | None = None) -> tuple[sqlite3.Row, bool]:
+        order_no = str(params.get("out_trade_no") or "").strip()
+        provider_trade_no = str(params.get("trade_no") or "").strip()
+        paid_cents = money_to_cents(params.get("money"))
+        if not provider_trade_no:
+            raise ValueError("missing provider trade number")
+        ts = now_ms()
+        safe_payload = {
+            key: value
+            for key, value in params.items()
+            if key not in ("sign", "sign_type")
+        }
+        with self.lock:
+            try:
+                self.conn.execute("begin immediate")
+                row = self.conn.execute("select * from payment_orders where order_no=?", (order_no,)).fetchone()
+                if not row:
+                    raise ValueError("payment order not found")
+                if str(row["provider"] or "") != "zpay":
+                    raise ValueError("payment provider mismatch")
+                if int(row["money_cents"] or 0) != paid_cents:
+                    raise ValueError("payment amount mismatch")
+                if str(params.get("type") or "").strip().lower() != str(row["pay_type"] or "").strip().lower():
+                    raise ValueError("payment type mismatch")
+                duplicate_trade = self.conn.execute(
+                    "select order_no from payment_orders where provider='zpay' and provider_trade_no=? and order_no<>? and status='paid'",
+                    (provider_trade_no, order_no),
+                ).fetchone()
+                if duplicate_trade:
+                    raise ValueError("provider trade number already used")
+                if str(row["status"] or "") == "paid":
+                    if row["provider_trade_no"] and str(row["provider_trade_no"]) != provider_trade_no:
+                        raise ValueError("provider trade number mismatch")
+                    self.conn.execute(
+                        "update payment_orders set notified_at=?, notify_count=notify_count+1, updated_at=? where order_no=?",
+                        (ts, ts, order_no),
+                    )
+                    self.conn.commit()
+                    paid_row = self.conn.execute("select * from payment_orders where order_no=?", (order_no,)).fetchone()
+                    return paid_row, False
+                if str(row["status"] or "") != "pending":
+                    raise ValueError("payment order is not pending")
+                updated = self.conn.execute(
+                    """
+                    update payment_orders
+                    set status='paid', provider_trade_no=?, paid_at=?, notified_at=?,
+                        notify_count=notify_count+1, updated_at=?, remote_addr=?, notify_payload_json=?
+                    where order_no=? and status='pending'
+                    """,
+                    (
+                        provider_trade_no,
+                        ts,
+                        ts,
+                        ts,
+                        remote_addr or str(row["remote_addr"] or ""),
+                        json.dumps(safe_payload, ensure_ascii=False, separators=(",", ":")),
+                        order_no,
+                    ),
+                )
+                if updated.rowcount != 1:
+                    raise RuntimeError("payment order state changed")
+                self.conn.execute(
+                    """
+                    update users
+                    set paid_points=coalesce(paid_points,0)+?, updated_at=?
+                    where id=?
+                    """,
+                    (int(row["points"]), ts, str(row["user_id"])),
+                )
+                self.conn.execute(
+                    """
+                    update users
+                    set points=max(0, coalesce(free_points,0)+coalesce(paid_points,0)+coalesce(reward_points,0)),
+                        updated_at=?
+                    where id=?
+                    """,
+                    (ts, str(row["user_id"])),
+                )
+                self.conn.execute(
+                    "insert into recharge_orders(order_id,user_id,product_id,points,created_at,remote_addr) values(?,?,?,?,?,?)",
+                    (order_no, str(row["user_id"]), str(row["plan_id"]), int(row["points"]), ts, remote_addr or ""),
+                )
+                self.conn.execute(
+                    "insert into user_events(user_id,event_type,summary,payload_json,created_at) values(?,?,?,?,?)",
+                    (
+                        str(row["user_id"]),
+                        "payment",
+                        f"ZPAY 支付到账 {int(row['points'])} 惑梦币",
+                        json.dumps({"order_no": order_no, "plan_id": row["plan_id"], "points": int(row["points"])}, ensure_ascii=False),
+                        ts,
+                    ),
+                )
+                self.conn.commit()
+                paid_row = self.conn.execute("select * from payment_orders where order_no=?", (order_no,)).fetchone()
+                return paid_row, True
+            except Exception:
+                self.conn.rollback()
+                raise
 
     def generate_redeem_code(self, prefix: str = "XY") -> str:
         alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -10611,6 +10918,47 @@ def redeem_code_status(item: sqlite3.Row | dict, ts: int | None = None) -> str:
     return "unused"
 
 
+def payment_order_json(item: sqlite3.Row | dict, user: sqlite3.Row | dict | None = None) -> dict:
+    payload = {
+        "order_no": str(item["order_no"]),
+        "provider": str(item["provider"] or "zpay"),
+        "plan_id": str(item["plan_id"]),
+        "plan_kind": str(item["plan_kind"]),
+        "product_name": str(item["product_name"]),
+        "pay_type": str(item["pay_type"]),
+        "money": cents_to_money(int(item["money_cents"] or 0)),
+        "amount_cny": cents_to_money(int(item["money_cents"] or 0)),
+        "money_cents": int(item["money_cents"] or 0),
+        "points": int(item["points"] or 0),
+        "status": str(item["status"] or "pending"),
+        "created_at": int(item["created_at"] or 0),
+        "updated_at": int(item["updated_at"] or 0),
+        "paid_at": int(item["paid_at"] or 0) if item["paid_at"] else None,
+    }
+    if user is not None:
+        payload["balance"] = credit_balance_json(user)
+    return payload
+
+
+def zpay_submit_payload(order: sqlite3.Row | dict) -> dict[str, str]:
+    params = {
+        "pid": ZPAY_PID,
+        "type": str(order["pay_type"]),
+        "out_trade_no": str(order["order_no"]),
+        "notify_url": public_url("/console/api/web/payments/zpay/notify"),
+        "return_url": public_url("/console/api/web/payments/zpay/return"),
+        "name": str(order["product_name"]),
+        "money": cents_to_money(int(order["money_cents"] or 0)),
+    }
+    params["sign"] = zpay_sign(params)
+    params["sign_type"] = "MD5"
+    return params
+
+
+def zpay_submit_url(order: sqlite3.Row | dict) -> str:
+    return f"{ZPAY_GATEWAY}/submit.php?{urlencode(zpay_submit_payload(order))}"
+
+
 def deposit_meta_json(user: sqlite3.Row | None = None) -> dict:
     settings = ACTIVE_STORE.site_settings() if ACTIVE_STORE is not None else site_settings_defaults()
     deposit = settings.get("deposit") if isinstance(settings.get("deposit"), dict) else site_settings_defaults()["deposit"]
@@ -10640,27 +10988,31 @@ def deposit_meta_json(user: sqlite3.Row | None = None) -> dict:
             "payment_note_unavailable": "充值通道暂时关闭，恢复后会重新开放购买和兑换。",
             "balance": credit_balance_json(user) if user is not None else None,
         }
+    zpay_available = zpay_is_configured()
     return {
-        "mode": "aifadian_redeem_code",
+        "mode": "zpay_direct" if zpay_available else "aifadian_redeem_code",
         "channel_enabled": True,
-        "aifadian_url": aifadian_url,
-        "payment_available": bool(aifadian_url),
+        "payment_provider": "zpay" if zpay_available else "aifadian",
+        "payment_create_url": "/console/api/web/payments/orders" if zpay_available else "",
+        "pay_types": sorted(ZPAY_ALLOWED_TYPES) if zpay_available else [],
+        "aifadian_url": "" if zpay_available else aifadian_url,
+        "payment_available": zpay_available or bool(aifadian_url),
         "redeem_available": True,
         "currency": deposit.get("currency") or "CNY",
         "credits_name": deposit.get("credits_name") or "惑梦币",
         "rate_label": deposit.get("rate_label") or "1 CNY = 1000 惑梦币，50 惑梦币约等于 1 次角色回复",
-        "title": deposit.get("title") or "爱发电购买兑换码",
-        "description": deposit.get("description") or "付款后把兑换码输入到这里，额度立即到账并同步到 APK。",
-        "button_text": deposit.get("button_text") or "去爱发电购买",
+        "title": "在线支付自动到账" if zpay_available else (deposit.get("title") or "爱发电购买兑换码"),
+        "description": "选择额度包并完成支付，ZPAY 异步确认后自动到账。" if zpay_available else (deposit.get("description") or "付款后把兑换码输入到这里，额度立即到账并同步到 APK。"),
+        "button_text": "立即支付" if zpay_available else (deposit.get("button_text") or "去爱发电购买"),
         "redeem_button_text": deposit.get("redeem_button_text") or "兑换额度",
         "redeem_placeholder": deposit.get("redeem_placeholder") or "XY-XXXX-XXXX-XXXX-XXXX",
         "packages": deposit.get("packages") or [],
         "subscriptions_title": deposit.get("subscriptions_title") or "月度订阅",
         "subscriptions_note": deposit.get("subscriptions_note") or "订阅为月度额度包，不承诺无限使用；额度用完后可继续兑换积分包。",
         "subscriptions": deposit.get("subscriptions") or [],
-        "steps": deposit.get("steps") or [],
+        "steps": ["选择额度包和支付方式。", "前往 ZPAY 完成支付。", "异步回调确认后惑梦币自动到账。"] if zpay_available else (deposit.get("steps") or []),
         "support_text": deposit.get("support_text") or "如果没有看到购买链接，请联系站长获取兑换码。",
-        "payment_note_available": deposit.get("payment_note_available") or "爱发电购买完成后，使用站长发放的兑换码在本页到账。",
+        "payment_note_available": "支付结果以服务器异步通知为准，返回页面后会自动查询到账状态。" if zpay_available else (deposit.get("payment_note_available") or "爱发电购买完成后，使用站长发放的兑换码在本页到账。"),
         "payment_note_unavailable": deposit.get("payment_note_unavailable") or "暂未配置购买链接，请联系站长获取兑换码。",
         "balance": credit_balance_json(user) if user is not None else None,
     }
@@ -10943,7 +11295,10 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection = True
 
     def log_message(self, fmt: str, *args) -> None:
-        log("%s - %s" % (self.client_address[0], fmt % args))
+        message = fmt % args
+        if "/console/api/web/payments/zpay/" in message:
+            message = re.sub(r"(GET /console/api/web/payments/zpay/(?:notify|return))\?[^ ]+", r"\1?[redacted]", message)
+        log("%s - %s" % (self.client_address[0], message))
 
     def client_ip(self) -> str:
         forwarded = self.headers.get("X-Forwarded-For", "")
@@ -11026,6 +11381,15 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(data)
+        self.wfile.flush()
+        self.close_connection = True
+
+    def send_redirect(self, location: str, status: int = 302) -> None:
+        self.send_response(status)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.send_header("Connection", "close")
+        self.end_headers()
         self.wfile.flush()
         self.close_connection = True
 
@@ -11456,6 +11820,44 @@ class Handler(BaseHTTPRequestHandler):
             log(f"{self.command} {path}" + (f"?{parsed.query}" if parsed.query else "") + f" -> {status}")
             self.send_text(status, "OK")
             return
+        if path == "/console/api/web/payments/zpay/notify":
+            success = False
+            try:
+                if self.command.upper() != "GET":
+                    raise ValueError("method not allowed")
+                params = verify_zpay_callback(parsed.query)
+                order, credited = self.store.fulfill_zpay_payment(params, self.client_ip())
+                success = True
+                log(f"ZPAY notify accepted order={order['order_no']} credited={credited}")
+            except Exception as exc:
+                log(f"ZPAY notify rejected: {type(exc).__name__}: {exc}")
+            self.store.log_request(self.command, path, "", {}, "", 200)
+            self.send_text(200, "success" if success else "fail")
+            return
+        if path == "/console/api/web/payments/zpay/return":
+            order_no = ""
+            state = "failed"
+            try:
+                if self.command.upper() != "GET":
+                    raise ValueError("method not allowed")
+                params = verify_zpay_callback(parsed.query)
+                order_no = str(params.get("out_trade_no") or "").strip()
+                order = self.store.get_payment_order(order_no)
+                if not order:
+                    raise ValueError("payment order not found")
+                if int(order["money_cents"] or 0) != money_to_cents(params.get("money")):
+                    raise ValueError("payment amount mismatch")
+                if str(params.get("type") or "").strip().lower() != str(order["pay_type"] or "").strip().lower():
+                    raise ValueError("payment type mismatch")
+                state = "paid" if str(order["status"] or "") == "paid" else "pending"
+            except Exception as exc:
+                log(f"ZPAY return rejected: {type(exc).__name__}: {exc}")
+            self.store.log_request(self.command, path, "", {}, "", 302)
+            query_params = {"payment": state}
+            if order_no:
+                query_params["order_no"] = order_no
+            self.send_redirect("/app/rewards.html?" + urlencode(query_params))
+            return
         if path == "/media-cache/profile/default-avatar.png":
             avatar_candidates = [
                 DEFAULT_STATE_DIR / "static" / "default_avatar.png",
@@ -11740,15 +12142,18 @@ class Handler(BaseHTTPRequestHandler):
             })
 
         if normalized in ("console/api/ctf/recharge", "go/api/ctf/recharge"):
-            if not PAYMENT_CHANNEL_ENABLED:
-                return error_response("充值通道暂时关闭", 403)
+            if not CTF_DIRECT_RECHARGE_ENABLED:
+                return error_response("direct recharge is disabled", 403)
+            token_user = self.authenticated_token_user()
+            if not token_user:
+                return error_response("unauthorized", 401)
             if isinstance(body, dict):
                 amount = int(body.get("points") or body.get("amount") or 100)
                 product_id = str(body.get("product_id") or "ctf_internal_recharge_100")
             else:
                 amount = 100
                 product_id = "ctf_internal_recharge_100"
-            user, order_id = self.store.create_recharge_order(user["id"], amount, product_id, self.client_address[0])
+            user, order_id = self.store.create_recharge_order(token_user["id"], amount, product_id, self.client_address[0])
             data = {
                 "order_id": order_id,
                 "product_id": product_id,
@@ -12071,6 +12476,53 @@ class Handler(BaseHTTPRequestHandler):
 
         if normalized == "console/api/web/deposit-meta":
             return ok_response(deposit_meta_json(user))
+
+        if normalized == "console/api/web/payments/orders":
+            token_user = self.authenticated_token_user()
+            if not token_user:
+                return error_response("unauthorized", 401)
+            if self.command.upper() != "POST":
+                return error_response("method not allowed", 405)
+            if not PAYMENT_CHANNEL_ENABLED or not zpay_is_configured():
+                return error_response("在线支付通道暂未配置", 503)
+            if not isinstance(body, dict):
+                return error_response("invalid body", 400)
+            plan_id = str(body.get("plan_id") or "").strip()
+            plan = self.store.payment_plan(plan_id)
+            if not plan:
+                return error_response("invalid payment plan", 400)
+            pay_type = str(body.get("pay_type") or ZPAY_PAYMENT_TYPE).strip().lower()
+            if not pay_type or pay_type not in ZPAY_ALLOWED_TYPES:
+                return error_response("unsupported payment type", 400)
+            try:
+                order = self.store.create_payment_order(token_user["id"], plan, pay_type, self.client_ip())
+                payload = payment_order_json(order, token_user)
+                payload.update({
+                    "pay_url": zpay_submit_url(order),
+                })
+            except Exception as exc:
+                log(f"ZPAY order creation failed: {type(exc).__name__}: {exc}")
+                return error_response("payment order creation failed", 500)
+            self.store.log_event(token_user["id"], "payment_order", "创建在线支付订单", {
+                "order_no": order["order_no"],
+                "plan_id": order["plan_id"],
+                "money": cents_to_money(int(order["money_cents"])),
+                "pay_type": pay_type,
+            })
+            return ok_response(payload)
+
+        if normalized.startswith("console/api/web/payments/orders/"):
+            token_user = self.authenticated_token_user()
+            if not token_user:
+                return error_response("unauthorized", 401)
+            if self.command.upper() != "GET":
+                return error_response("method not allowed", 405)
+            order_no = unquote(normalized.rsplit("/", 1)[-1]).strip()
+            order = self.store.get_payment_order(order_no, token_user["id"])
+            if not order:
+                return error_response("payment order not found", 404)
+            current_user = self.store.get_user_by_id(token_user["id"]) or token_user
+            return ok_response(payment_order_json(order, current_user))
 
         if normalized == "console/api/web/redeem-code":
             if self.command.upper() != "POST":

@@ -129,6 +129,11 @@ export const api = {
   },
   credits: () => rawRequest('/console/api/user/credits'),
   depositMeta: () => rawRequest('/console/api/web/deposit-meta'),
+  createPaymentOrder: (planId, payType) => rawRequest('/console/api/web/payments/orders', {
+    method: 'POST',
+    body: { plan_id: planId, pay_type: payType },
+  }),
+  paymentOrder: (orderNo) => rawRequest(`/console/api/web/payments/orders/${encodeURIComponent(orderNo)}`),
   redeemCode: (code) => rawRequest('/console/api/web/redeem-code', { method: 'POST', body: { code } }),
   redemptions: (params = {}) => {
     const qs = new URLSearchParams(params);

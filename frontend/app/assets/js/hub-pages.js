@@ -1,4 +1,4 @@
-import { api, requireAuth, getCachedUser, setCachedUser, clearAuth, ApiError } from '/app/assets/js/app-core.js';
+import { api, requireAuth, getCachedUser, setCachedUser, clearAuth, ApiError } from '/app/assets/js/app-core.js?v=20260713-zpay';
 import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260711-cloak-theme';
 
 async function loadUser(ctx) {
@@ -295,6 +295,7 @@ export function imageChatPage() {
 }
 
 export function rewardsPage() {
+  const pendingOrderKey = 'homer_zpay_pending_order';
   return {
     user: null,
     points: 0,
@@ -306,13 +307,22 @@ export function rewardsPage() {
     message: '',
     messageType: 'info',
     busy: false,
+    selectedPlan: null,
+    payType: '',
+    currentOrder: null,
+    orderPollingTimer: null,
+    orderPollCount: 0,
     siteSettings: null,
     async init() {
       injectLayout('rewards');
       await loadSiteSettings(this);
       if (await loadUser(this)) {
         await Promise.all([this.loadRewards(), this.loadRedemptions()]);
+        await this.restorePaymentOrder();
       }
+    },
+    destroy() {
+      this.stopOrderPolling();
     },
     setMessage(text, type = 'info') {
       this.message = text;
@@ -339,6 +349,8 @@ export function rewardsPage() {
       const r = await api.rewards();
       this.rewards = r?.data || {};
       this.deposit = this.rewards.deposit || null;
+      const payTypes = this.availablePayTypes();
+      if (!payTypes.some(item => item.id === this.payType)) this.payType = payTypes[0]?.id || '';
       this.balance = this.normalizeBalance(this.rewards.balance || this.rewards);
       this.points = this.balance.points;
     },
@@ -346,19 +358,151 @@ export function rewardsPage() {
       const r = await api.redemptions({ page: 1, page_size: 20 }).catch(() => null);
       this.redemptions = r?.data?.list || [];
     },
-    openAifadian(item = null) {
-      const url = item?.purchase_url || this.deposit?.aifadian_url;
-      if (this.paymentAvailable() && url) {
-        window.open(url, '_blank', 'noopener,noreferrer');
-      } else {
-        this.setMessage(this.deposit?.support_text || this.dashboardText('aifadian_missing_text', '充值通道暂时关闭'), 'error');
+    focusPayment() {
+      const firstPlan = (this.deposit?.packages || [])[0] || (this.deposit?.subscriptions || [])[0] || null;
+      if (firstPlan && !this.selectedPlan) this.selectedPlan = firstPlan;
+      this.$nextTick(() => document.getElementById('payment-checkout')?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+    },
+    selectPlan(item) {
+      if (!this.paymentAvailable()) {
+        this.setMessage(this.paymentNote(), 'error');
+        return;
       }
+      this.selectedPlan = item || null;
+      this.focusPayment();
     },
     paymentNote() {
       if (this.paymentAvailable()) {
-        return this.deposit?.payment_note_available || '购买完成后，使用站长发放的兑换码在本页到账。';
+        return this.deposit?.payment_note_available || '选择套餐和支付方式后在线付款，支付成功会自动到账。';
       }
       return this.deposit?.payment_note_unavailable || '充值通道暂时关闭，恢复后会重新开放购买和兑换。';
+    },
+    availablePayTypes() {
+      const labels = { alipay: '支付宝', wxpay: '微信支付' };
+      const raw = Array.isArray(this.deposit?.pay_types) ? this.deposit.pay_types : ['alipay'];
+      return raw.map(item => {
+        const id = String(typeof item === 'string' ? item : (item?.id || item?.type || '')).toLowerCase();
+        return {
+          id,
+          label: typeof item === 'object' && item?.label ? String(item.label) : labels[id],
+          enabled: typeof item !== 'object' || item?.enabled !== false,
+        };
+      }).filter(item => item.enabled && item.label && ['alipay', 'wxpay'].includes(item.id));
+    },
+    safeZpayUrl(value) {
+      try {
+        const url = new URL(String(value || ''));
+        if (url.protocol !== 'https:' || url.hostname.toLowerCase() !== 'zpayz.cn' || (url.port && url.port !== '443')) return '';
+        return url.href;
+      } catch {
+        return '';
+      }
+    },
+    normalizeOrder(data = {}) {
+      const orderNo = String(data.order_no || data.out_trade_no || this.currentOrder?.order_no || '');
+      return {
+        ...(this.currentOrder || {}),
+        ...data,
+        order_no: orderNo,
+        status: String(data.status || this.currentOrder?.status || 'pending').toLowerCase(),
+        amount_cny: data.amount_cny ?? data.money ?? this.currentOrder?.amount_cny ?? null,
+        pay_url: this.safeZpayUrl(data.pay_url) || this.safeZpayUrl(this.currentOrder?.pay_url),
+      };
+    },
+    orderPaid(order = this.currentOrder) {
+      return ['paid', 'success', 'completed', 'trade_success'].includes(String(order?.status || '').toLowerCase());
+    },
+    orderPending(order = this.currentOrder) {
+      return ['pending', 'created', 'paying', 'unpaid', 'waiting'].includes(String(order?.status || 'pending').toLowerCase());
+    },
+    orderStatusText(order = this.currentOrder) {
+      const status = String(order?.status || '').toLowerCase();
+      if (this.orderPaid(order)) return '支付成功，已到账';
+      if (['closed', 'cancelled', 'canceled', 'failed', 'expired'].includes(status)) return '订单已关闭';
+      return '等待支付';
+    },
+    savePendingOrder(order) {
+      try { localStorage.setItem(pendingOrderKey, JSON.stringify(order)); } catch {}
+    },
+    clearPendingOrder() {
+      try { localStorage.removeItem(pendingOrderKey); } catch {}
+    },
+    async createPayment() {
+      if (!this.paymentAvailable() || !this.selectedPlan?.id || this.busy) {
+        if (!this.selectedPlan?.id) this.setMessage('请先选择一个充值套餐', 'error');
+        return;
+      }
+      if (!this.availablePayTypes().some(item => item.id === this.payType)) {
+        this.setMessage('请选择当前可用的支付方式', 'error');
+        return;
+      }
+      this.busy = true;
+      try {
+        const response = await api.createPaymentOrder(this.selectedPlan.id, this.payType);
+        const order = this.normalizeOrder(response?.data || response || {});
+        if (!order.order_no) throw new Error('支付订单创建失败：缺少订单号');
+        if (!order.pay_url) throw new Error('支付地址校验失败，请稍后重试');
+        this.currentOrder = order;
+        this.savePendingOrder(order);
+        this.setMessage('订单已创建，正在前往安全支付页面', 'success');
+        window.location.assign(order.pay_url);
+      } catch (err) {
+        this.setMessage(err.message || '创建支付订单失败', 'error');
+      } finally {
+        this.busy = false;
+      }
+    },
+    async restorePaymentOrder() {
+      const params = new URLSearchParams(location.search);
+      const returnedOrderNo = params.get('order_no') || params.get('out_trade_no') || '';
+      let saved = null;
+      try { saved = JSON.parse(localStorage.getItem(pendingOrderKey) || 'null'); } catch {}
+      const orderNo = returnedOrderNo || saved?.order_no || '';
+      if (!orderNo) return;
+      this.currentOrder = this.normalizeOrder({ ...(saved || {}), order_no: orderNo });
+      await this.refreshPaymentOrder(true);
+      if (this.orderPending()) this.startOrderPolling();
+    },
+    async refreshPaymentOrder(silent = false) {
+      const orderNo = this.currentOrder?.order_no;
+      if (!orderNo) return;
+      try {
+        const response = await api.paymentOrder(orderNo);
+        this.currentOrder = this.normalizeOrder(response?.data || response || {});
+        if (this.orderPaid()) {
+          this.stopOrderPolling();
+          this.clearPendingOrder();
+          await this.loadRewards();
+          this.setMessage('支付成功，惑梦币已自动到账', 'success');
+        } else if (this.orderPending()) {
+          this.savePendingOrder(this.currentOrder);
+          if (!silent) this.setMessage('订单仍在等待支付', 'info');
+        } else {
+          this.stopOrderPolling();
+          this.clearPendingOrder();
+          if (!silent) this.setMessage(this.orderStatusText(), 'error');
+        }
+      } catch (err) {
+        if (!silent) this.setMessage(err.message || '查询订单失败', 'error');
+      }
+    },
+    startOrderPolling() {
+      this.stopOrderPolling();
+      this.orderPollCount = 0;
+      this.orderPollingTimer = setInterval(async () => {
+        this.orderPollCount += 1;
+        await this.refreshPaymentOrder(true);
+        if (this.orderPollCount >= 20) this.stopOrderPolling();
+      }, 3000);
+    },
+    stopOrderPolling() {
+      if (this.orderPollingTimer) clearInterval(this.orderPollingTimer);
+      this.orderPollingTimer = null;
+    },
+    continuePayment() {
+      const url = this.safeZpayUrl(this.currentOrder?.pay_url);
+      if (url) window.location.assign(url);
+      else this.setMessage('原支付链接不可用，请重新选择套餐创建订单', 'error');
     },
     async redeemNow() {
       if (!this.paymentAvailable()) {
@@ -391,6 +535,7 @@ export function rewardsPage() {
     packagePoints(pkg) {
       return Number(pkg?.points || 0).toLocaleString('zh-CN');
     },
+
     dailyPoints() {
       return parseInt(this.rewards?.daily?.points || 10, 10);
     },

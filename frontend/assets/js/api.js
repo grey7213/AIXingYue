@@ -110,6 +110,9 @@ export const api = {
   credits: () => request('/console/api/user/credits'),
   redeemCode: (code) => request('/console/api/web/redeem-code', { method: 'POST', body: { code } }),
   depositMeta: () => request('/console/api/web/deposit-meta'),
+  createPaymentOrder: (planId, payType) =>
+    request('/console/api/web/payments/orders', { method: 'POST', body: { plan_id: planId, pay_type: payType } }),
+  paymentOrder: (orderNo) => request(`/console/api/web/payments/orders/${encodeURIComponent(orderNo)}`),
   recharge: (amount, productId = 'ctf_internal_recharge_100') =>
     request('/console/api/ctf/recharge', { method: 'POST', body: { points: amount, product_id: productId } }),
   claimDaily: () => request('/console/api/ctf/dailyapppoints', { method: 'POST', body: {} }),

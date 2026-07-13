@@ -9,7 +9,7 @@
   <link rel="apple-touch-icon" sizes="180x180" href="/assets/img/apple-touch-icon.png">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="/assets/css/custom.css?v=20260703-fengyue-ui2">
-  <script type="module" src="/assets/js/dashboard-app.js?v=20260703-channels-closed"></script>
+  <script type="module" src="/assets/js/dashboard-app.js?v=20260713-zpay"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
@@ -179,16 +179,16 @@
             <p class="text-sm text-slate-400 mb-4" x-text="depositText('description', '充值和兑换入口暂时关闭，已有余额、每日奖励和聊天功能不受影响。')">充值和兑换入口暂时关闭，已有余额、每日奖励和聊天功能不受影响。</p>
             <template x-if="paymentAvailable()">
               <div>
-                <button @click="openAifadian" class="xy-btn xy-btn-ghost w-full justify-center mb-3">
-                  <span x-text="depositText('button_text', '前往购买')">前往购买</span>
+                <button @click="openPayments" class="xy-btn xy-btn-primary w-full justify-center mb-3">
+                  <span>选择套餐并支付</span>
                 </button>
-                <div class="flex gap-2 mb-3">
-                  <input type="text" x-model="redeemCode" @keydown.enter="redeemNow" class="xy-input flex-1 text-sm uppercase font-mono" :placeholder="depositText('redeem_placeholder', 'XY-XXXX-XXXX-XXXX-XXXX')">
-                </div>
-                <button @click="redeemNow" class="xy-btn xy-btn-primary w-full" :disabled="loading || !redeemCode">
-                  <span x-show="!loading" x-text="depositText('redeem_button_text', '兑换额度')">兑换额度</span>
-                  <span x-show="loading" class="xy-loading"></span>
-                </button>
+                <details class="text-xs text-slate-500">
+                  <summary class="cursor-pointer">备用兑换码入口</summary>
+                  <div class="flex gap-2 mt-3">
+                    <input type="text" x-model="redeemCode" @keydown.enter="redeemNow" class="xy-input flex-1 text-sm uppercase font-mono" :placeholder="depositText('redeem_placeholder', 'XY-XXXX-XXXX-XXXX-XXXX')">
+                    <button @click="redeemNow" class="xy-btn xy-btn-ghost" :disabled="loading || !redeemCode">兑换</button>
+                  </div>
+                </details>
               </div>
             </template>
             <p class="text-[11px] text-slate-500 mt-3 leading-relaxed">
