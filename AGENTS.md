@@ -45,7 +45,7 @@
 - `frontend/app/assets/js/layout.js`: shared Web App shell navigation and admin-managed announcement injection.
 - `frontend/admin.html` + `frontend/assets/js/admin-app.js`: admin console, including user/admin authorization, data charts, model presets, role cards, redeem codes, and site operations settings.
 - Role cards use `local_apps.id` as the internal primary key referenced by conversations, favorites, likes, comments, group chats, memories, and logs. Public short card numbers such as `0001` live in `local_apps.display_id`; do not rewrite primary IDs to short numbers.
-- 惑梦农场入口为 `frontend/app/farm.html`，独立样式/逻辑位于 `frontend/app/assets/css/farm.css`、`frontend/app/assets/js/farm.js`；服务端状态、种植、浇水、收获、NPC 采摘和每日奖励在 `tools/ai_fengyue_local_server.py` 的 `farm_*` 表与 API 中。农场币与惑梦币分离，旧 APK 签到和农场首收共享 `daily_reward_claims`。
+- 惑梦农场入口为 `frontend/app/farm.html`，独立样式/逻辑位于 `frontend/app/assets/css/farm.css`、`frontend/app/assets/js/farm.js`；服务端状态、种植、浇水、收获和每日奖励在 `tools/ai_fengyue_local_server.py` 的 `farm_*` 表与 API 中。农场币与惑梦币分离，旧 APK 签到和农场首收共享 `daily_reward_claims`。2026-07-13 V2 起不再生成系统 NPC/虚构好友，真实好友未接入时 `/farm/friends` 返回空状态，旧采摘接口返回 409。
 
 ## Artifact Hygiene
 
@@ -62,6 +62,11 @@
 - Before committing, check `git status --short` and avoid staging unrelated user changes.
 
 ## Reusable Pitfalls
+
+- Symptom: 用户提供新版 `农场.zip`，直接部署其 React `dist` 看起来能运行，但会重新出现 API Key 绑定、localStorage 造币、硬编码收益和虚构好友/统计。
+  Cause: 压缩包是视觉交互原型，不含真实 API；新版只是“去虚构数据”的 UI 修订，仍不是生产实现，且构建包含 Trae 开发定位属性和 sourcemap。
+  Fix: 只移植新版好友空状态与作物阶段视觉；继续使用站点 Bearer 鉴权、服务端农场状态、幂等动作和 `daily_reward_claims`，不部署原型 dist、不复制 API Key/localStorage 逻辑。
+  Verify: 2026-07-13 V2 线上好友数 0、旧 NPC 采摘 409，种植/收获/旧签到/支付回归通过，390px 无溢出且 console error=0。
 
 - Symptom: 部署脚本重启 `ai-fengyue-backend.service` 后，`systemctl is-active` 已显示 `active`，但紧接着的 `curl http://127.0.0.1:8008/health` 偶发 `Failed to connect`。
   Cause: systemd 已启动 Python 进程，但大型 SQLite 初始化/轻量迁移尚未完成，8008 端口还未开始监听。

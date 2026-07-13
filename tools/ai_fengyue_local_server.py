@@ -607,11 +607,6 @@ FARM_CROPS = {
 FARM_PLOT_UNLOCK_DAYS = (1, 7, 14, 21, 28, 35, 42, 49)
 FARM_ENERGY_MAX = 5
 FARM_ENERGY_RECOVERY_MS = 30 * 60 * 1000
-FARM_NPC_FRIENDS = (
-    {"id": "pixel_momo", "name": "像素桃桃", "crop": "代码胡萝卜", "coins": 20, "xp": 3},
-    {"id": "cloud_aki", "name": "云端阿奇", "crop": "算力小麦", "coins": 35, "xp": 5},
-    {"id": "dream_luna", "name": "梦境露娜", "crop": "灵感莓果", "coins": 55, "xp": 8},
-)
 
 
 def user_id_from_token(value: str | None) -> str | None:
@@ -3698,30 +3693,19 @@ class Store:
 
     def farm_friends(self, user_id: str) -> dict:
         state = self.farm_state(user_id)
-        day = state["date"]
-        with self.lock:
-            stolen = {str(row["friend_id"]): int(row["steal_count"]) for row in self.conn.execute("select friend_id,steal_count from farm_steals where user_id=? and steal_date=?", (user_id, day)).fetchall()}
-        friends = [{**friend, "stolen_today": bool(stolen.get(friend["id"])), "available": not bool(stolen.get(friend["id"]))} for friend in FARM_NPC_FRIENDS]
-        return {"date": day, "list": friends, "steals_used": state["steals_used"], "steals_remaining": state["steals_remaining"]}
+        return {
+            "date": state["date"],
+            "mode": "real_friends_pending",
+            "available": False,
+            "message": "真实好友农场功能准备中，当前不会生成虚构邻居。",
+            "list": [],
+            "friends": [],
+            "steals_used": 0,
+            "steals_remaining": 0,
+        }
 
     def farm_steal(self, user_id: str, friend_id: str, idempotency_key: str) -> dict:
-        friend = next((item for item in FARM_NPC_FRIENDS if item["id"] == str(friend_id or "")), None)
-        if not friend:
-            raise ValueError("friend not found")
-        def apply(profile: dict, ts: int, day: str) -> dict:
-            used = int(self.conn.execute("select coalesce(sum(steal_count),0) from farm_steals where user_id=? and steal_date=?", (user_id, day)).fetchone()[0])
-            if used >= 3:
-                raise ValueError("daily steal limit reached")
-            if self.conn.execute("select 1 from farm_steals where user_id=? and steal_date=? and friend_id=?", (user_id, day, friend["id"])).fetchone():
-                raise ValueError("friend has already been harvested today")
-            if int(profile["energy"]) < 1:
-                raise ValueError("not enough energy")
-            energy_anchor = ts if int(profile["energy"]) >= FARM_ENERGY_MAX else int(profile["energy_updated_at"])
-            self.conn.execute("update farm_profiles set coins=coins+?,xp=xp+?,energy=energy-1,energy_updated_at=?,updated_at=? where user_id=?", (friend["coins"], friend["xp"], energy_anchor, ts, user_id))
-            self.conn.execute("insert into farm_steals(user_id,steal_date,friend_id,steal_count,last_stolen_at) values(?,?,?,?,?)", (user_id, day, friend["id"], 1, ts))
-            self.conn.execute("insert into user_events(user_id,event_type,summary,payload_json,created_at) values(?,?,?,?,?)", (user_id, "farm_steal", "好友农场采摘", json.dumps({"friend_id": friend["id"], "coins": friend["coins"], "xp": friend["xp"]}, ensure_ascii=False), ts))
-            return {"action": "steal", "friend_id": friend["id"], "coins_added": friend["coins"], "xp_added": friend["xp"]}
-        return self._farm_action(user_id, idempotency_key, "steal", f"friend:{friend['id']}", {}, apply)
+        raise ValueError("friend feature unavailable")
 
     def update_user_name(self, user_id: str, name: str) -> sqlite3.Row:
         clean_name = (name or "").strip()
@@ -13683,7 +13667,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 return ok_response(self.store.farm_steal(user["id"], unquote(farm_steal_match.group(1)), idempotency_key))
             except ValueError as exc:
-                status = 404 if str(exc) == "friend not found" else (409 if "Idempotency-Key conflicts" in str(exc) else 400)
+                status = 409 if str(exc) == "friend feature unavailable" or "Idempotency-Key conflicts" in str(exc) else (404 if str(exc) == "friend not found" else 400)
                 return error_response(str(exc), status)
 
         if normalized == "console/api/web/deposit-meta":

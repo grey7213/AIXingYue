@@ -36,8 +36,8 @@
 
 ### `farm_steals`
 
-- 复合主键 `(user_id, steal_date, friend_id)`，保存次数和最近时间。
-- 每日总次数上限 3；目标为固定 NPC，不触碰其他用户数据。
+- 保留历史兼容表，不删除既有记录。
+- 2026-07-13 V2 起停止生成系统 NPC，真实好友关系未接入前不再新增采摘记录。
 
 ## 规则
 
@@ -51,7 +51,7 @@
 - 浇水：每株每次种植最多一次，消耗 1 体力，将剩余成熟时间减少 20%，至少保留 60 秒。
 - 体力：上限 5，每 30 分钟恢复 1 点，服务端惰性结算。
 - 收获：成熟后清空土地并发农场币/XP；再调用 `claim_daily_reward()` 尝试领取当日惑梦币。已由旧签到或其他收获领取时 `points_added=0`。
-- NPC 采摘：每天最多 3 次，每次消耗 1 体力，服务端按 NPC 固定奖励发 20/35/55 农场币和少量 XP；不扣 NPC 或真实用户资产。
+- 好友农场：当前返回真实好友功能准备中的空状态；不生成虚构好友，不发放 NPC 采摘奖励。
 
 ## API
 
@@ -60,7 +60,7 @@
 - `POST /console/api/web/farm/plots/{plot_no}/water`
 - `POST /console/api/web/farm/plots/{plot_no}/harvest`
 - `GET /console/api/web/farm/friends`
-- `POST /console/api/web/farm/friends/{friend_id}/steal`
+- `POST /console/api/web/farm/friends/{friend_id}/steal`：兼容保留，真实好友未开放时返回 409。
 
 动作接口读取 `Idempotency-Key`；响应均返回最新 `state` 或足够前端原子更新的数据。
 
@@ -72,7 +72,7 @@
 
 ## 验证
 
-- Python：语法编译、临时 SQLite 初始化、种植/浇水/成熟/收获、体力恢复、连续天数、NPC 次数、幂等键冲突和同日奖励唯一性。
+- Python：语法编译、临时 SQLite 初始化、种植/浇水/成熟/收获、体力恢复、连续天数、好友空状态、旧 NPC 停用、幂等键冲突和同日奖励唯一性。
 - JavaScript：`node --check`。
 - 浏览器：真实本地服务登录后操作，桌面 1440px 与移动 390px 截图，检查溢出、弹窗、加载/错误/空状态。
 - 线上：部署前备份 DB/backend/frontend；部署后检查 service、Nginx、`/health`、`CONTENT_MODE=local_only`，用临时用户完成农场 E2E 并清理。

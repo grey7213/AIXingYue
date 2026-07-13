@@ -1,4 +1,4 @@
-import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js?v=20260713-farm-v1';
+import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js?v=20260713-farm-v2';
 import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260713-farm-nav';
 
 const BASE_SEEDS = [
@@ -71,13 +71,22 @@ function cropSvg(kind, stage = 4) {
     return '<svg viewBox="0 0 48 48" shape-rendering="crispEdges" aria-hidden="true"><path fill="#4a392b" d="M8 39h32v4H8z"/><path fill="#c9a26a" d="M21 18h7v8h8v7h-8v8h-7v-8h-8v-7h8z"/><path fill="#f1cc82" d="M23 21h3v7h7v3h-7v7h-3v-7h-7v-3h7z"/></svg>';
   }
   if (stage <= 0) {
-    return '<svg viewBox="0 0 48 48" shape-rendering="crispEdges" aria-hidden="true"><path fill="#382b24" d="M13 38h22v6H13z"/><path fill="#765039" d="M17 34h14v6H17z"/><path fill="#d9b36c" d="M22 29h5v5h-5z"/><path fill="#f0cd82" d="M23 30h2v2h-2z"/></svg>';
+    return '<svg class="growth-stage-0" viewBox="0 0 48 48" shape-rendering="crispEdges" aria-hidden="true"><path fill="#382b24" d="M13 38h22v6H13z"/><path fill="#765039" d="M17 34h14v6H17z"/><path fill="#d9b36c" d="M22 29h5v5h-5z"/><path fill="#f0cd82" d="M23 30h2v2h-2z"/></svg>';
   }
   if (stage === 1) {
-    return '<svg viewBox="0 0 48 48" shape-rendering="crispEdges" aria-hidden="true"><path fill="#382b24" d="M11 40h27v5H11z"/><path fill="#2c432e" d="M22 22h6v18h-6zM12 21h11v5h5v7H18v-4h-6zm16-6h10v9h-5v6h-7V20h2z"/><path fill="#62a851" d="M14 23h8v4h4v3h-6v-4h-6zm16-5h6v4h-4v5h-4v-7h2z"/></svg>';
+    return '<svg class="growth-stage-1" viewBox="0 0 48 48" shape-rendering="crispEdges" aria-hidden="true"><path fill="#382b24" d="M11 40h27v5H11z"/><path fill="#2c432e" d="M22 22h6v18h-6zM12 21h11v5h5v7H18v-4h-6zm16-6h10v9h-5v6h-7V20h2z"/><path fill="#62a851" d="M14 23h8v4h4v3h-6v-4h-6zm16-5h6v4h-4v5h-4v-7h2z"/></svg>';
   }
   if (stage === 2) {
-    return `<svg viewBox="0 0 48 48" shape-rendering="crispEdges"><path fill="#382b24" d="M10 41h29v5H10z"/><path fill="#2e4a2f" d="M13 19h6v23h-6zm10-8h6v31h-6zm10 5h6v26h-6z"/><path fill="${kind === 'berry' ? '#579a4d' : '#69a94b'}" d="M7 22h10v5H7zm13-8h10v6H20zm9 10h12v6H29z"/></svg>`;
+    return `<svg class="growth-stage-2" viewBox="0 0 48 48" shape-rendering="crispEdges"><path fill="#382b24" d="M10 41h29v5H10z"/><path fill="#2e4a2f" d="M13 19h6v23h-6zm10-8h6v31h-6zm10 5h6v26h-6z"/><path fill="${kind === 'berry' ? '#579a4d' : '#69a94b'}" d="M7 22h10v5H7zm13-8h10v6H20zm9 10h12v6H29z"/></svg>`;
+  }
+  if (stage === 3) {
+    if (kind === 'wheat') {
+      return '<svg class="growth-stage-3" viewBox="0 0 48 48" shape-rendering="crispEdges" aria-hidden="true"><path fill="#382b24" d="M7 42h35v5H7z"/><path fill="#4c3d29" d="M11 12h7v32h-7zm11-7h7v39h-7zm12 4h7v35h-7z"/><path fill="#76a549" d="M13 14h3v28h-3zm11-7h3v35h-3zm12 4h3v31h-3z"/><path fill="#b5b44b" d="M9 9h11v5H9zm11-7h11v5H20zm12 4h11v5H32z"/></svg>';
+    }
+    if (kind === 'berry') {
+      return '<svg class="growth-stage-3" viewBox="0 0 48 48" shape-rendering="crispEdges" aria-hidden="true"><path fill="#29402c" d="M17 9h15v5h7v7h5v19H5V21h6v-7h6z"/><path fill="#387443" d="M19 12h11v5h7v7h4v13H8V24h6v-7h5z"/><path fill="#5ba451" d="M11 23h11v8H11zm16-7h9v8h-9zm-7 16h13v6H20z"/><path fill="#efe079" d="M14 20h4v4h-4zm18 6h4v4h-4zm-9 5h4v4h-4z"/></svg>';
+    }
+    return '<svg class="growth-stage-3" viewBox="0 0 48 48" shape-rendering="crispEdges" aria-hidden="true"><path fill="#29422d" d="M19 5h11v28h7v7H11v-8h7V13h-8V8h9z"/><path fill="#3d8540" d="M22 8h5v27h-5zM11 11h10v6h6v7H17v-5h-6zm18-2h9v8h-5v8h-7V15h3z"/><path fill="#67b24d" d="M13 12h6v3h-6zm18-1h5v4h-5z"/><path fill="#d85a3c" d="M21 35h7v8h-7z"/><path fill="#fa8d4c" d="M23 35h4v4h-4z"/></svg>';
   }
   if (kind === 'wheat') {
     return '<svg viewBox="0 0 48 48" shape-rendering="crispEdges" aria-hidden="true"><path fill="#55402a" d="M20 10h6v34h-6zM9 17h6v27H9zm23-4h6v31h-6z"/><path fill="#d9992e" d="M21 11h4v30h-4zM10 18h4v23h-4zm23-4h4v27h-4z"/><path fill="#f4c84e" d="M15 6h14v6H15zm0 7h11v6H15zM5 12h13v6H5zM4 19h12v6H4zm25-12h12v6H29zm2 7h12v6H31z"/><path fill="#8f6032" d="M6 41h36v4H6z"/></svg>';
@@ -97,6 +106,8 @@ function farmPage() {
     siteSettings: null,
     plots: [],
     friends: [],
+    friendsMode: 'real_friends_pending',
+    friendsMessage: '',
     seeds: BASE_SEEDS.map(item => ({ ...item })),
     coins: 0,
     xp: 0,
@@ -297,6 +308,8 @@ function farmPage() {
       const data = unwrap(result);
       const items = data.list || data.friends || data.items || (Array.isArray(data) ? data : []);
       this.friends = this.normalizeFriends(items);
+      this.friendsMode = String(data.mode || (this.friends.length ? 'available' : 'real_friends_pending'));
+      this.friendsMessage = String(data.message || '好友关系接入后，这里才会显示真实账号的农场状态。');
       this.stealsLeft = intValue(data.steals_remaining ?? data.steals_left ?? data.stealsLeft ?? data.remaining, this.stealsLeft);
     },
 

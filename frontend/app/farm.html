@@ -7,8 +7,8 @@
   <meta name="theme-color" content="#f3eddb">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
   <link rel="stylesheet" href="/app/assets/css/app.css?v=20260712-theme-safe">
-  <link rel="stylesheet" href="/app/assets/css/farm.css?v=20260713-farm-v1">
-  <script type="module" src="/app/assets/js/farm.js?v=20260713-farm-v1"></script>
+  <link rel="stylesheet" href="/app/assets/css/farm.css?v=20260713-farm-v2">
+  <script type="module" src="/app/assets/js/farm.js?v=20260713-farm-v2"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen farm-page">
@@ -112,19 +112,14 @@
 
             <section class="pixel-panel farm-friends-panel">
               <header class="farm-panel-head">
-                <div class="farm-panel-title"><span>友</span><div><h2>邻居农场</h2><p>系统 NPC，不会转移真实用户资产</p></div></div>
-                <div class="farm-steal-quota">今日还可采摘 <b x-text="stealsLeft"></b> 次</div>
+                <div class="farm-panel-title"><span>友</span><div><h2>好友农场</h2><p>只展示真实站点好友，不生成虚构邻居</p></div></div>
+                <div class="farm-friends-status">真实好友 · 准备中</div>
               </header>
-              <div class="farm-friends" x-show="friends.length">
-                <template x-for="friend in friends" :key="friend.id">
-                  <article class="farm-friend">
-                    <div class="farm-friend__head"><span :style="`--friend-color:${friend.color}`" x-text="friend.name.slice(0, 1)"></span><p><b x-text="friend.name"></b><small>系统邻居 · Lv.<em x-text="friend.level"></em></small></p></div>
-                    <div class="farm-friend__crop"><span x-html="cropSprite({ cropKind: friend.cropKind, stage: 4 })"></span><p><b x-text="friend.cropName"></b><small>可得约 <em>◆ <span x-text="friend.rewardCoins"></span></em></small></p></div>
-                    <button type="button" @click="stealFrom(friend)" :disabled="busy || stealsLeft < 1 || !friend.available"><span x-text="friend.available ? '采摘一点' : '今日已采摘'"></span></button>
-                  </article>
-                </template>
+              <div class="farm-friends-empty">
+                <span class="farm-friends-empty__icon" aria-hidden="true">友</span>
+                <div><h3>还没有可访问的好友农场</h3><p x-text="friendsMessage || '好友关系接入后，这里才会显示真实账号的农场状态。'"></p></div>
+                <a href="/app/me.html">查看我的账号</a>
               </div>
-              <div class="farm-empty-friends" x-show="!friends.length">邻居们还在整理农场，稍后再来看看。</div>
             </section>
           </div>
         </template>
