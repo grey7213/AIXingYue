@@ -6,7 +6,8 @@ const NAV_ITEMS = [
   { key: 'me', label: '我的', href: '/app/me.html', icon: 'M16 7a4 4 0 11-8 0 4 4 0 018 0zM4 21a8 8 0 0116 0' },
   { key: 'favorites', label: '我的收藏', href: '/app/favorites.html', icon: 'M11.48 3.5l.52 1.06.52-1.06a5.5 5.5 0 017.78 7.78L12 20.08l-8.8-8.8a5.5 5.5 0 017.78-7.78z' },
   { key: 'image', label: '图片聊天', href: '/app/image-chat.html', icon: 'M4 16l4-4 3 3 5-6 4 7M4 6h16v12H4z' },
-  { key: 'rewards', label: '每日奖励', href: '/app/rewards.html', icon: 'M12 8c-1.7 0-3-.9-3-2s1.3-2 3-2 3 .9 3 2-1.3 2-3 2zm0 0v12m-7-8h14' },
+  { key: 'farm', label: '惑梦农场', href: '/app/farm.html', icon: 'M4 20h16M6 20V9l6-5 6 5v11M9 20v-6h6v6M3 10l9-7 9 7' },
+  { key: 'rewards', label: '充值兑换', href: '/app/rewards.html', icon: 'M12 8c-1.7 0-3-.9-3-2s1.3-2 3-2 3 .9 3 2-1.3 2-3 2zm0 0v12m-7-8h14' },
   { key: 'logs', label: '操作记录', href: '/app/logs.html', icon: 'M7 8h10M7 12h10M7 16h6M5 4h14v16H5z' },
   { key: 'info', label: '信息中心', href: '/app/info.html', icon: 'M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z' },
 ];

@@ -1193,7 +1193,7 @@
                   <div class="flex items-center justify-between gap-3 mb-5">
                     <div>
                       <h2 class="font-semibold text-white">用户中心 / 我的页</h2>
-                      <p class="text-xs text-slate-500 mt-1">余额、签到、账户信息、人设与模型连接器说明</p>
+                      <p class="text-xs text-slate-500 mt-1">余额、农场入口、账户信息、人设与模型连接器说明</p>
                     </div>
                     <div class="flex gap-3 text-sm">
                       <a href="/dashboard.html" target="_blank" class="xy-link">用户中心 →</a>
@@ -1530,14 +1530,14 @@
                 <section class="xy-glass p-6">
                   <div class="flex items-center justify-between gap-3 mb-5">
                     <div>
-                      <h2 class="font-semibold text-white">每日奖励</h2>
-                      <p class="text-xs text-slate-500 mt-1">签到额度会同时影响新版奖励页和旧版 APK 签到接口</p>
+                      <h2 class="font-semibold text-white">农场每日奖励</h2>
+                      <p class="text-xs text-slate-500 mt-1">每日首次有效收获奖励；同时兼容旧版 APK 签到接口，共享每日唯一领取记录</p>
                     </div>
                     <button type="button" @click="addRewardTask" class="xy-btn xy-btn-ghost text-sm">添加任务</button>
                   </div>
                   <div class="grid md:grid-cols-3 gap-4 mb-4">
                     <div>
-                      <label class="xy-label">每日签到积分</label>
+                      <label class="xy-label">每日首次收获惑梦币</label>
                       <input type="number" min="1" max="100000" class="xy-input" x-model.number="siteForm.rewards.daily_points">
                     </div>
                     <div>

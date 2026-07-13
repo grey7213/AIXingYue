@@ -75,11 +75,6 @@ function dashboard() {
       return String(template || '').replace(/\{(\w+)\}/g, (_, key) => values[key] ?? '');
     },
 
-    dailyCheckinSubtitle() {
-      const points = parseInt(this.siteSettings?.rewards?.daily_points || 10, 10);
-      return this.formatTemplate(this.dashboardText('daily_points_template', '+{points} 积分'), { points });
-    },
-
     paymentNote() {
       return this.paymentAvailable()
         ? this.depositText('payment_note_available', '兑换码只能使用一次，请确认当前登录账号。')
@@ -267,29 +262,6 @@ function dashboard() {
       }
     },
 
-    async doDailyCheckin() {
-      this.loading = true;
-      try {
-        const result = await api.claimDaily();
-        const points = result.points || result.data?.points;
-        if (points !== undefined) {
-          this.points = parseInt(points, 10);
-          this.lastRefreshed = Date.now();
-        }
-        await this.refreshPoints();
-        const added = parseInt(result.data?.points_added || 0, 10);
-        this.showToast(
-          added > 0
-            ? this.formatTemplate(this.dashboardText('checkin_success_template', '签到成功 +{points} 积分'), { points: added })
-            : this.dashboardText('checkin_repeat_text', '今日已经签到过了'),
-          added > 0 ? 'success' : 'info',
-        );
-      } catch (err) {
-        this.showToast(err.message || this.dashboardText('checkin_failed_text', '签到失败'), 'error');
-      } finally {
-        this.loading = false;
-      }
-    },
   };
 }
 

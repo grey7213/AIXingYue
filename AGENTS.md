@@ -45,6 +45,7 @@
 - `frontend/app/assets/js/layout.js`: shared Web App shell navigation and admin-managed announcement injection.
 - `frontend/admin.html` + `frontend/assets/js/admin-app.js`: admin console, including user/admin authorization, data charts, model presets, role cards, redeem codes, and site operations settings.
 - Role cards use `local_apps.id` as the internal primary key referenced by conversations, favorites, likes, comments, group chats, memories, and logs. Public short card numbers such as `0001` live in `local_apps.display_id`; do not rewrite primary IDs to short numbers.
+- 惑梦农场入口为 `frontend/app/farm.html`，独立样式/逻辑位于 `frontend/app/assets/css/farm.css`、`frontend/app/assets/js/farm.js`；服务端状态、种植、浇水、收获、NPC 采摘和每日奖励在 `tools/ai_fengyue_local_server.py` 的 `farm_*` 表与 API 中。农场币与惑梦币分离，旧 APK 签到和农场首收共享 `daily_reward_claims`。
 
 ## Artifact Hygiene
 
@@ -61,6 +62,16 @@
 - Before committing, check `git status --short` and avoid staging unrelated user changes.
 
 ## Reusable Pitfalls
+
+- Symptom: 农场种子弹窗显示正常，但点击种植返回 `invalid crop_kind`。
+  Cause: 前端展示枚举使用 `carrot/wheat/berry`，后端权威枚举使用 `code_carrot/compute_wheat/inspiration_berry`。
+  Fix: `farm.js` 的种子同时保存 `kind` 与 `apiKind`，渲染使用短枚举，API 请求只发送服务端枚举；浏览器不能自行提交奖励、价格或成熟时间。
+  Verify: 本地浏览器验收捕获种植请求 `crop_kind=code_carrot`，线上真实种植成功并扣除 50 农场币。
+
+- Symptom: 农场收获与旧签到并发时可能难以保证成长、每日账本和惑梦币余额原子一致。
+  Cause: 旧 `claim_daily_reward()` 自己提交事务，不能安全嵌入农场收获事务；旧实现遇到唯一键冲突也缺少统一 rollback 边界。
+  Fix: 使用显式 `BEGIN IMMEDIATE`，拆出不提交的 `_claim_daily_reward_locked()`，由旧签到或农场动作的外层事务统一 commit/rollback；`farm_actions` 用 `(user_id,idempotency_key)` 回放结果并拒绝同键不同请求。
+  Verify: 本地 16 路幂等/每日奖励并发通过；线上首收 +10 后旧 `dailyapppoints` 返回 `points_added=0`，SQLite `quick_check=ok`。
 
 - Symptom: 升级为签名 token 后，已有浏览器会在 `/app/` 与登录页之间循环，或停在“正在读取你的历史会话”。
   Cause: 旧 token 已失效，但登录页只判断 localStorage 中是否存在 token 就直接跳转；共享 API 收到 401 时也未清理旧凭证。

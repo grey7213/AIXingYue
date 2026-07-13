@@ -25,6 +25,7 @@ import time
 import uuid
 import zipfile
 import zlib
+from datetime import date
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -596,6 +597,21 @@ def business_date() -> str:
     return time.strftime("%Y-%m-%d", time.gmtime(time.time() + 8 * 3600))
 
 
+FARM_CROPS = {
+    "code_carrot": {"name": "代码胡萝卜", "cost": 50, "grow_seconds": 3 * 3600, "coins": 90, "xp": 10},
+    "compute_wheat": {"name": "算力小麦", "cost": 100, "grow_seconds": 9 * 3600, "coins": 190, "xp": 22},
+    "inspiration_berry": {"name": "灵感莓果", "cost": 180, "grow_seconds": 18 * 3600, "coins": 340, "xp": 40},
+}
+FARM_PLOT_UNLOCK_DAYS = (1, 7, 14, 21, 28, 35, 42, 49)
+FARM_ENERGY_MAX = 5
+FARM_ENERGY_RECOVERY_MS = 30 * 60 * 1000
+FARM_NPC_FRIENDS = (
+    {"id": "pixel_momo", "name": "像素桃桃", "crop": "代码胡萝卜", "coins": 20, "xp": 3},
+    {"id": "cloud_aki", "name": "云端阿奇", "crop": "算力小麦", "coins": 35, "xp": 5},
+    {"id": "dream_luna", "name": "梦境露娜", "crop": "灵感莓果", "coins": 55, "xp": 8},
+)
+
+
 def user_id_from_token(value: str | None) -> str | None:
     token = (value or "").strip()
     if token.lower().startswith("bearer "):
@@ -863,7 +879,7 @@ def site_settings_defaults() -> dict:
             "features_subtitle": "为每一位创作者打造的 AI 角色扮演体验",
             "feature_cards": [
                 {"title": "多角色对话", "description": "海量预设角色，覆盖动漫、游戏、原创人设。可自定义性格、背景、说话风格。"},
-                {"title": "每日奖励", "description": "注册即赠 500 惑梦币，约 10 次角色回复；每日签到获得额外额度，已有额度网页与客户端共用。"},
+                {"title": "惑梦农场", "description": "注册即赠 500 惑梦币，约 10 次角色回复；农场每日首次有效收获可获得额外额度，网页与客户端余额共用。"},
                 {"title": "安全可靠", "description": "邮箱验证码注册，账号安全有保障。本地化数据存储，隐私不外泄。"},
                 {"title": "高速响应", "description": "专属服务器节点，低延迟流式输出，沉浸式体验毫无卡顿。"},
                 {"title": "智能创作", "description": "长上下文记忆，故事连贯发展。剧情自由分支，每次对话都是独一无二的体验。"},
@@ -879,7 +895,7 @@ def site_settings_defaults() -> dict:
             "faq_title": "常见问题",
             "faq_items": [
                 {"q": "如何注册账号？", "a": "打开 Web App 后选择「注册」，输入邮箱获取验证码，填写昵称和密码即可完成注册。注册成功后会自动登录并赠送 500 惑梦币，约 10 次角色回复。"},
-                {"q": "积分是做什么用的？", "a": "积分用于消耗调用 AI 模型生成内容。不同模型每次对话消耗不同积分。每日签到可获得额外积分，也可通过充值获取更多积分。"},
+                {"q": "积分是做什么用的？", "a": "积分用于消耗调用 AI 模型生成内容。不同模型每次对话消耗不同积分。农场每日首次有效收获可获得额外积分，也可通过充值获取更多积分。"},
                 {"q": "安装时提示风险怎么办？", "a": "由于本应用为定制版本未上架应用商店，部分系统会提示来源未知。请在系统「安全设置」中允许浏览器或文件管理器安装应用，并按提示安装即可。"},
                 {"q": "忘记密码怎么办？", "a": "在登录页点击「忘记密码」，输入注册邮箱获取验证码后即可设置新密码。验证码 10 分钟内有效。"},
                 {"q": "账号信息存储在哪里？", "a": "账号数据存储在我们位于专用服务器的私有数据库中，仅用于身份验证和积分记录，不会用于任何第三方用途。"},
@@ -900,7 +916,8 @@ def site_settings_defaults() -> dict:
                 "me": "我的",
                 "favorites": "我的收藏",
                 "image": "图片聊天",
-                "rewards": "每日奖励",
+                "farm": "惑梦农场",
+                "rewards": "充值兑换",
                 "logs": "操作记录",
                 "deposit": "积分充值",
                 "info": "信息中心",
@@ -1036,7 +1053,7 @@ def site_settings_defaults() -> dict:
             "balance_free_label": "免费",
             "balance_paid_label": "充值",
             "balance_reward_label": "奖励",
-            "daily_checkin_title": "每日签到",
+            "daily_checkin_title": "惑梦农场",
             "download_title": "打开 Web App",
             "download_subtitle": "客户端渠道维护中",
             "admin_card_title": "管理后台",
@@ -1048,7 +1065,7 @@ def site_settings_defaults() -> dict:
             "api_note": "如果你在使用 惑梦（Homer） APP 时遇到节点不可用问题，请检查 APP 的服务器配置是否指向 patcher.villainy.top。",
             "unnamed_user": "未命名用户",
             "purchase_section_label": "购买与兑换",
-            "daily_points_template": "+{points} 积分",
+            "daily_points_template": "每日首收 +{points} 惑梦币",
             "points_failed_text": "获取积分失败",
             "redeem_empty_text": "请输入兑换码",
             "redeem_success_template": "兑换成功 +{points} 惑梦币",
@@ -1102,7 +1119,7 @@ def site_settings_defaults() -> dict:
             "custom_openai_name": "自定义 OpenAI-compatible",
             "custom_anthropic_name": "自定义 Anthropic-compatible",
             "new_model_name_template": "我的模型 {index}",
-            "daily_checkin_template": "每日签到 +{points}",
+            "daily_checkin_template": "惑梦农场 · 首收 +{points}",
         },
         "my_apps": {
             "topbar_title": "我的角色",
@@ -1428,8 +1445,8 @@ def site_settings_defaults() -> dict:
         },
         "rewards": {
             "daily_points": 10,
-            "daily_title": "每日奖励",
-            "daily_description": "免费额度自动归入总余额。",
+            "daily_title": "农场每日奖励",
+            "daily_description": "每日第一次有效收获的免费额度自动归入总余额。",
             "page_title": "积分充值",
             "credits_eyebrow": "当前余额",
             "balance_suffix": "余额，网页与 APK 共用。",
@@ -1658,6 +1675,8 @@ def sanitize_site_settings(data: dict | None) -> dict:
     out["app"]["announcement_link_href"] = clean_url(app.get("announcement_link_href"), defaults["app"]["announcement_link_href"])
     out["app"]["nav_labels"] = clean_text_map(app.get("nav_labels"), defaults["app"]["nav_labels"], limit=24)
     out["app"]["mobile_nav_labels"] = clean_text_map(app.get("mobile_nav_labels"), defaults["app"]["mobile_nav_labels"], limit=12)
+    if out["app"]["nav_labels"].get("rewards") == "每日奖励":
+        out["app"]["nav_labels"]["rewards"] = "充值兑换"
     for key, limit in {
         "shell_profile_title": 40,
         "shell_guest_name": 40,
@@ -1798,6 +1817,10 @@ def sanitize_site_settings(data: dict | None) -> dict:
         "aifadian_missing_text": 120,
     }.items():
         out["dashboard"][key] = clean_text(dashboard.get(key), defaults["dashboard"][key], limit)
+    if out["dashboard"].get("daily_checkin_title") == "每日签到":
+        out["dashboard"]["daily_checkin_title"] = "惑梦农场"
+    if out["dashboard"].get("daily_points_template") == "+{points} 积分":
+        out["dashboard"]["daily_points_template"] = "每日首收 +{points} 惑梦币"
 
     for key, limit in {
         "topbar_title": 30,
@@ -1842,6 +1865,8 @@ def sanitize_site_settings(data: dict | None) -> dict:
         "daily_checkin_template": 60,
     }.items():
         out["account"][key] = clean_text(account.get(key), defaults["account"][key], limit)
+    if out["account"].get("daily_checkin_template") == "每日签到 +{points}":
+        out["account"]["daily_checkin_template"] = "惑梦农场 · 首收 +{points}"
 
     for key, limit in {
         "topbar_title": 40,
@@ -2191,6 +2216,10 @@ def sanitize_site_settings(data: dict | None) -> dict:
         "redemptions_refresh_text": 30,
     }.items():
         out["rewards"][key] = clean_text(rewards.get(key), defaults["rewards"][key], limit)
+    if out["rewards"].get("daily_title") == "每日奖励":
+        out["rewards"]["daily_title"] = "农场每日奖励"
+    if out["rewards"].get("daily_description") == "免费额度自动归入总余额。":
+        out["rewards"]["daily_description"] = "每日第一次有效收获的免费额度自动归入总余额。"
     task_items = rewards.get("tasks")
     clean_tasks: list[dict] = []
     if isinstance(task_items, list):
@@ -2676,6 +2705,48 @@ class Store:
                 );
                 create index if not exists idx_daily_reward_claims_user
                     on daily_reward_claims(user_id, claim_date desc);
+                create table if not exists farm_profiles (
+                    user_id text primary key,
+                    coins integer not null default 300,
+                    xp integer not null default 0,
+                    energy integer not null default 5,
+                    energy_updated_at integer not null,
+                    streak_days integer not null default 0,
+                    last_active_date text,
+                    harvest_count integer not null default 0,
+                    created_at integer not null,
+                    updated_at integer not null
+                );
+                create table if not exists farm_plots (
+                    user_id text not null,
+                    plot_no integer not null check(plot_no between 1 and 8),
+                    crop_kind text,
+                    planted_at integer,
+                    ready_at integer,
+                    watered_at integer,
+                    primary key(user_id, plot_no)
+                );
+                create table if not exists farm_actions (
+                    user_id text not null,
+                    idempotency_key text not null,
+                    action_type text not null,
+                    request_fingerprint text not null,
+                    response_json text not null,
+                    created_at integer not null,
+                    primary key(user_id, idempotency_key)
+                );
+                create index if not exists idx_farm_actions_created
+                    on farm_actions(created_at);
+                create table if not exists farm_steals (
+                    user_id text not null,
+                    steal_date text not null,
+                    friend_id text not null,
+                    steal_count integer not null default 0,
+                    last_stolen_at integer not null,
+                    primary key(user_id, steal_date, friend_id)
+                );
+                create index if not exists idx_farm_steals_user_date
+                    on farm_steals(user_id, steal_date);
                 create table if not exists redeem_codes (
                     code text primary key,
                     points integer not null,
@@ -3339,52 +3410,302 @@ class Store:
         ts = now_ms()
         with self.lock:
             try:
-                self.conn.execute(
-                    "insert into daily_reward_claims(user_id,claim_date,points,created_at) values(?,?,?,?)",
-                    (user_id, day, points, ts),
-                )
-            except sqlite3.IntegrityError:
-                user = self.get_user_by_id(user_id) or self.current_user()
-                return {
-                    "claimed": True,
-                    "already_claimed": True,
-                    "points_added": 0,
-                    "points": int(self.credit_balance(user)["points"]),
-                    "balance": self.credit_balance(user),
-                    "date": day,
-                }
+                self.conn.execute("begin immediate")
+                payload = self._claim_daily_reward_locked(user_id, points, day, ts)
+                self.conn.commit()
+                return payload
+            except Exception:
+                self.conn.rollback()
+                raise
+
+    def _claim_daily_reward_locked(self, user_id: str, points: int, day: str, ts: int) -> dict:
+        """Claim while Store.lock is held; caller owns commit/rollback."""
+        points = max(1, min(int(points or 10), 10000))
+        try:
             self.conn.execute(
-                """
-                update users
-                set free_points=max(0, coalesce(free_points,0)+?),
-                    updated_at=?
-                where id=?
-                """,
-                (points, ts, user_id),
+                "insert into daily_reward_claims(user_id,claim_date,points,created_at) values(?,?,?,?)",
+                (user_id, day, points, ts),
             )
-            self.conn.execute(
-                """
-                update users
-                set points=max(0, coalesce(free_points,0)+coalesce(paid_points,0)+coalesce(reward_points,0)),
-                    updated_at=?
-                where id=?
-                """,
-                (ts, user_id),
-            )
-            self.conn.execute(
-                "insert into user_events(user_id,event_type,summary,payload_json,created_at) values(?,?,?,?,?)",
-                (user_id, "reward_daily", "领取每日奖励", json.dumps({"date": day, "points": points}, ensure_ascii=False), ts),
-            )
-            self.conn.commit()
+        except sqlite3.IntegrityError:
             user = self.get_user_by_id(user_id) or self.current_user()
             return {
                 "claimed": True,
-                "already_claimed": False,
-                "points_added": points,
+                "already_claimed": True,
+                "points_added": 0,
                 "points": int(self.credit_balance(user)["points"]),
                 "balance": self.credit_balance(user),
                 "date": day,
             }
+        self.conn.execute(
+            """
+            update users
+            set free_points=max(0, coalesce(free_points,0)+?),
+                updated_at=?
+            where id=?
+            """,
+            (points, ts, user_id),
+        )
+        self.conn.execute(
+            """
+            update users
+            set points=max(0, coalesce(free_points,0)+coalesce(paid_points,0)+coalesce(reward_points,0)),
+                updated_at=?
+            where id=?
+            """,
+            (ts, user_id),
+        )
+        self.conn.execute(
+            "insert into user_events(user_id,event_type,summary,payload_json,created_at) values(?,?,?,?,?)",
+            (user_id, "reward_daily", "领取每日奖励", json.dumps({"date": day, "points": points}, ensure_ascii=False), ts),
+        )
+        user = self.get_user_by_id(user_id) or self.current_user()
+        return {
+            "claimed": True,
+            "already_claimed": False,
+            "points_added": points,
+            "points": int(self.credit_balance(user)["points"]),
+            "balance": self.credit_balance(user),
+            "date": day,
+        }
+
+    @staticmethod
+    def _farm_request_fingerprint(action_type: str, resource: str, body: object) -> str:
+        raw = json.dumps(
+            {"action": action_type, "resource": resource, "body": body if isinstance(body, dict) else {}},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _validate_farm_idempotency_key(value: str) -> str:
+        key = str(value or "").strip()
+        if not key:
+            raise ValueError("Idempotency-Key is required")
+        if len(key) > 128 or not re.fullmatch(r"[A-Za-z0-9._:-]+", key):
+            raise ValueError("invalid Idempotency-Key")
+        return key
+
+    def _settle_farm_energy_locked(self, profile: sqlite3.Row | dict, ts: int) -> dict:
+        data = dict(profile)
+        energy = max(0, min(FARM_ENERGY_MAX, int(data.get("energy") or 0)))
+        updated_at = int(data.get("energy_updated_at") or ts)
+        if energy >= FARM_ENERGY_MAX:
+            updated_at = ts
+        elif ts > updated_at:
+            recovered = min(FARM_ENERGY_MAX - energy, (ts - updated_at) // FARM_ENERGY_RECOVERY_MS)
+            if recovered:
+                energy += int(recovered)
+                updated_at += int(recovered) * FARM_ENERGY_RECOVERY_MS
+                if energy >= FARM_ENERGY_MAX:
+                    updated_at = ts
+        if energy != int(data.get("energy") or 0) or updated_at != int(data.get("energy_updated_at") or 0):
+            self.conn.execute(
+                "update farm_profiles set energy=?,energy_updated_at=?,updated_at=? where user_id=?",
+                (energy, updated_at, ts, data["user_id"]),
+            )
+        data["energy"] = energy
+        data["energy_updated_at"] = updated_at
+        return data
+
+    def _ensure_farm_profile_locked(self, user_id: str, ts: int, day: str) -> dict:
+        row = self.conn.execute("select * from farm_profiles where user_id=?", (user_id,)).fetchone()
+        if not row:
+            self.conn.execute(
+                "insert into farm_profiles(user_id,coins,xp,energy,energy_updated_at,streak_days,last_active_date,harvest_count,created_at,updated_at) values(?,300,0,5,?,1,?,0,?,?)",
+                (user_id, ts, day, ts, ts),
+            )
+            self.conn.executemany(
+                "insert into farm_plots(user_id,plot_no) values(?,?)",
+                [(user_id, plot_no) for plot_no in range(1, 9)],
+            )
+            row = self.conn.execute("select * from farm_profiles where user_id=?", (user_id,)).fetchone()
+        data = dict(row)
+        last_day = str(data.get("last_active_date") or "")
+        streak = max(1, int(data.get("streak_days") or 1))
+        if last_day != day:
+            try:
+                gap = (date.fromisoformat(day) - date.fromisoformat(last_day)).days
+            except ValueError:
+                gap = 999
+            streak = streak + 1 if gap == 1 else 1
+            self.conn.execute(
+                "update farm_profiles set streak_days=?,last_active_date=?,updated_at=? where user_id=?",
+                (streak, day, ts, user_id),
+            )
+            data["streak_days"] = streak
+            data["last_active_date"] = day
+        return self._settle_farm_energy_locked(data, ts)
+
+    def _farm_state_locked(self, user_id: str, ts: int, day: str) -> dict:
+        profile = self._ensure_farm_profile_locked(user_id, ts, day)
+        streak = int(profile["streak_days"])
+        plots = []
+        for row in self.conn.execute("select * from farm_plots where user_id=? order by plot_no", (user_id,)).fetchall():
+            item = dict(row)
+            plot_no = int(item["plot_no"])
+            required_days = FARM_PLOT_UNLOCK_DAYS[plot_no - 1]
+            crop_kind = str(item.get("crop_kind") or "")
+            ready_at = int(item.get("ready_at") or 0)
+            item.update({
+                "unlocked": streak >= required_days,
+                "unlock_days": required_days,
+                "crop": ({"kind": crop_kind, **FARM_CROPS[crop_kind]} if crop_kind in FARM_CROPS else None),
+                "ready": bool(crop_kind and ready_at <= ts),
+                "remaining_seconds": max(0, math.ceil((ready_at - ts) / 1000)) if crop_kind else 0,
+                "watered": bool(item.get("watered_at")),
+            })
+            plots.append(item)
+        steals_used = int(self.conn.execute(
+            "select coalesce(sum(steal_count),0) from farm_steals where user_id=? and steal_date=?",
+            (user_id, day),
+        ).fetchone()[0])
+        next_energy_at = None
+        if int(profile["energy"]) < FARM_ENERGY_MAX:
+            next_energy_at = int(profile["energy_updated_at"]) + FARM_ENERGY_RECOVERY_MS
+        return {
+            "server_time": ts,
+            "date": day,
+            "profile": {
+                "coins": int(profile["coins"]),
+                "xp": int(profile["xp"]),
+                "energy": int(profile["energy"]),
+                "energy_max": FARM_ENERGY_MAX,
+                "next_energy_at": next_energy_at,
+                "streak_days": streak,
+                "harvest_count": int(profile["harvest_count"]),
+                "unlocked_plots": sum(1 for required in FARM_PLOT_UNLOCK_DAYS if streak >= required),
+            },
+            "plots": plots,
+            "crops": [{"kind": kind, **config} for kind, config in FARM_CROPS.items()],
+            "steals_used": steals_used,
+            "steals_remaining": max(0, 3 - steals_used),
+        }
+
+    def farm_state(self, user_id: str) -> dict:
+        ts, day = now_ms(), business_date()
+        with self.lock:
+            state = self._farm_state_locked(user_id, ts, day)
+            self.conn.commit()
+            return state
+
+    def _farm_action(self, user_id: str, idempotency_key: str, action_type: str, resource: str, body: object, callback) -> dict:
+        key = self._validate_farm_idempotency_key(idempotency_key)
+        fingerprint = self._farm_request_fingerprint(action_type, resource, body)
+        with self.lock:
+            try:
+                self.conn.execute("begin immediate")
+                existing = self.conn.execute(
+                    "select request_fingerprint,response_json from farm_actions where user_id=? and idempotency_key=?",
+                    (user_id, key),
+                ).fetchone()
+                if existing:
+                    if str(existing["request_fingerprint"]) != fingerprint:
+                        raise ValueError("Idempotency-Key conflicts with another request")
+                    response = json.loads(str(existing["response_json"]))
+                    self.conn.commit()
+                    return response
+                ts, day = now_ms(), business_date()
+                profile = self._ensure_farm_profile_locked(user_id, ts, day)
+                result = callback(profile, ts, day)
+                result["state"] = self._farm_state_locked(user_id, ts, day)
+                self.conn.execute(
+                    "insert into farm_actions(user_id,idempotency_key,action_type,request_fingerprint,response_json,created_at) values(?,?,?,?,?,?)",
+                    (user_id, key, action_type, fingerprint, json.dumps(result, ensure_ascii=False, separators=(",", ":")), ts),
+                )
+                self.conn.commit()
+                return result
+            except Exception:
+                self.conn.rollback()
+                raise
+
+    def farm_plant(self, user_id: str, plot_no: int, crop_kind: str, idempotency_key: str) -> dict:
+        crop_kind = str(crop_kind or "").strip()
+        if crop_kind not in FARM_CROPS:
+            raise ValueError("invalid crop_kind")
+        if plot_no < 1 or plot_no > 8:
+            raise ValueError("invalid plot_no")
+        crop = FARM_CROPS[crop_kind]
+        def apply(profile: dict, ts: int, day: str) -> dict:
+            row = self.conn.execute("select * from farm_plots where user_id=? and plot_no=?", (user_id, plot_no)).fetchone()
+            if not row or int(profile["streak_days"]) < FARM_PLOT_UNLOCK_DAYS[plot_no - 1]:
+                raise ValueError("plot is locked")
+            if row["crop_kind"]:
+                raise ValueError("plot is not empty")
+            if int(profile["coins"]) < int(crop["cost"]):
+                raise ValueError("not enough farm coins")
+            ready_at = ts + int(crop["grow_seconds"]) * 1000
+            self.conn.execute("update farm_profiles set coins=coins-?,updated_at=? where user_id=?", (crop["cost"], ts, user_id))
+            self.conn.execute("update farm_plots set crop_kind=?,planted_at=?,ready_at=?,watered_at=null where user_id=? and plot_no=?", (crop_kind, ts, ready_at, user_id, plot_no))
+            return {"action": "plant", "plot_no": plot_no, "crop_kind": crop_kind, "ready_at": ready_at}
+        return self._farm_action(user_id, idempotency_key, "plant", f"plot:{plot_no}", {"crop_kind": crop_kind}, apply)
+
+    def farm_water(self, user_id: str, plot_no: int, idempotency_key: str) -> dict:
+        if plot_no < 1 or plot_no > 8:
+            raise ValueError("invalid plot_no")
+        def apply(profile: dict, ts: int, day: str) -> dict:
+            row = self.conn.execute("select * from farm_plots where user_id=? and plot_no=?", (user_id, plot_no)).fetchone()
+            if not row or not row["crop_kind"]:
+                raise ValueError("plot is empty")
+            if row["watered_at"]:
+                raise ValueError("crop has already been watered")
+            if int(row["ready_at"] or 0) <= ts:
+                raise ValueError("crop is already ready")
+            if int(profile["energy"]) < 1:
+                raise ValueError("not enough energy")
+            remaining = int(row["ready_at"]) - ts
+            ready_at = ts + max(60_000, math.ceil(remaining * 0.8))
+            energy_anchor = ts if int(profile["energy"]) >= FARM_ENERGY_MAX else int(profile["energy_updated_at"])
+            self.conn.execute("update farm_profiles set energy=energy-1,energy_updated_at=?,updated_at=? where user_id=?", (energy_anchor, ts, user_id))
+            self.conn.execute("update farm_plots set ready_at=?,watered_at=? where user_id=? and plot_no=?", (ready_at, ts, user_id, plot_no))
+            return {"action": "water", "plot_no": plot_no, "ready_at": ready_at}
+        return self._farm_action(user_id, idempotency_key, "water", f"plot:{plot_no}", {}, apply)
+
+    def farm_harvest(self, user_id: str, plot_no: int, idempotency_key: str, daily_points: int) -> dict:
+        if plot_no < 1 or plot_no > 8:
+            raise ValueError("invalid plot_no")
+        def apply(profile: dict, ts: int, day: str) -> dict:
+            row = self.conn.execute("select * from farm_plots where user_id=? and plot_no=?", (user_id, plot_no)).fetchone()
+            crop_kind = str(row["crop_kind"] or "") if row else ""
+            if crop_kind not in FARM_CROPS:
+                raise ValueError("plot is empty")
+            if int(row["ready_at"] or 0) > ts:
+                raise ValueError("crop is not ready")
+            crop = FARM_CROPS[crop_kind]
+            self.conn.execute("update farm_profiles set coins=coins+?,xp=xp+?,harvest_count=harvest_count+1,updated_at=? where user_id=?", (crop["coins"], crop["xp"], ts, user_id))
+            self.conn.execute("update farm_plots set crop_kind=null,planted_at=null,ready_at=null,watered_at=null where user_id=? and plot_no=?", (user_id, plot_no))
+            daily = self._claim_daily_reward_locked(user_id, daily_points, day, ts)
+            self.conn.execute("insert into user_events(user_id,event_type,summary,payload_json,created_at) values(?,?,?,?,?)", (user_id, "farm_harvest", "农场收获", json.dumps({"plot_no": plot_no, "crop_kind": crop_kind, "coins": crop["coins"], "xp": crop["xp"], "points_added": daily["points_added"]}, ensure_ascii=False), ts))
+            return {"action": "harvest", "plot_no": plot_no, "crop_kind": crop_kind, "coins_added": crop["coins"], "xp_added": crop["xp"], "daily_reward": daily}
+        return self._farm_action(user_id, idempotency_key, "harvest", f"plot:{plot_no}", {}, apply)
+
+    def farm_friends(self, user_id: str) -> dict:
+        state = self.farm_state(user_id)
+        day = state["date"]
+        with self.lock:
+            stolen = {str(row["friend_id"]): int(row["steal_count"]) for row in self.conn.execute("select friend_id,steal_count from farm_steals where user_id=? and steal_date=?", (user_id, day)).fetchall()}
+        friends = [{**friend, "stolen_today": bool(stolen.get(friend["id"])), "available": not bool(stolen.get(friend["id"]))} for friend in FARM_NPC_FRIENDS]
+        return {"date": day, "list": friends, "steals_used": state["steals_used"], "steals_remaining": state["steals_remaining"]}
+
+    def farm_steal(self, user_id: str, friend_id: str, idempotency_key: str) -> dict:
+        friend = next((item for item in FARM_NPC_FRIENDS if item["id"] == str(friend_id or "")), None)
+        if not friend:
+            raise ValueError("friend not found")
+        def apply(profile: dict, ts: int, day: str) -> dict:
+            used = int(self.conn.execute("select coalesce(sum(steal_count),0) from farm_steals where user_id=? and steal_date=?", (user_id, day)).fetchone()[0])
+            if used >= 3:
+                raise ValueError("daily steal limit reached")
+            if self.conn.execute("select 1 from farm_steals where user_id=? and steal_date=? and friend_id=?", (user_id, day, friend["id"])).fetchone():
+                raise ValueError("friend has already been harvested today")
+            if int(profile["energy"]) < 1:
+                raise ValueError("not enough energy")
+            energy_anchor = ts if int(profile["energy"]) >= FARM_ENERGY_MAX else int(profile["energy_updated_at"])
+            self.conn.execute("update farm_profiles set coins=coins+?,xp=xp+?,energy=energy-1,energy_updated_at=?,updated_at=? where user_id=?", (friend["coins"], friend["xp"], energy_anchor, ts, user_id))
+            self.conn.execute("insert into farm_steals(user_id,steal_date,friend_id,steal_count,last_stolen_at) values(?,?,?,?,?)", (user_id, day, friend["id"], 1, ts))
+            self.conn.execute("insert into user_events(user_id,event_type,summary,payload_json,created_at) values(?,?,?,?,?)", (user_id, "farm_steal", "好友农场采摘", json.dumps({"friend_id": friend["id"], "coins": friend["coins"], "xp": friend["xp"]}, ensure_ascii=False), ts))
+            return {"action": "steal", "friend_id": friend["id"], "coins_added": friend["coins"], "xp_added": friend["xp"]}
+        return self._farm_action(user_id, idempotency_key, "steal", f"friend:{friend['id']}", {}, apply)
 
     def update_user_name(self, user_id: str, name: str) -> sqlite3.Row:
         clean_name = (name or "").strip()
@@ -11720,7 +12041,8 @@ def public_site_settings_json(settings: dict) -> dict:
     if isinstance(feature_cards, list):
         for item in feature_cards:
             if isinstance(item, dict) and ("注册即赠" in str(item.get("description") or "") or str(item.get("title") or "") == "每日奖励"):
-                item["description"] = "注册即赠 500 惑梦币，约 10 次角色回复；每日签到获得额外额度，已有额度网页与客户端共用。"
+                item["title"] = "惑梦农场"
+                item["description"] = "注册即赠 500 惑梦币，约 10 次角色回复；农场每日首次有效收获可获得额外额度，网页与客户端余额共用。"
     faq_items = home.get("faq_items")
     if isinstance(faq_items, list):
         for item in faq_items:
@@ -11740,7 +12062,7 @@ def public_site_settings_json(settings: dict) -> dict:
                     continue
                 question = str(item.get("q") or "")
                 if "积分" in question:
-                    item["a"] = "积分用于消耗调用 AI 模型生成内容。每日签到可获得额外积分，充值通道维护期间暂不开放购买和兑换。"
+                    item["a"] = "积分用于消耗调用 AI 模型生成内容。农场每日首次有效收获可获得额外积分，充值通道维护期间暂不开放购买和兑换。"
                 if "安装" in question or "风险" in question:
                     item["a"] = "APK 下载渠道暂时关闭，请先使用 Web App。"
                 if "忘记密码" in question or "密码" in question:
@@ -11761,8 +12083,8 @@ def public_site_settings_json(settings: dict) -> dict:
                 title = str(item.get("title") or "")
                 description = str(item.get("description") or "")
                 if "积分" in title or "充值" in description:
-                    item["title"] = "每日奖励"
-                    item["description"] = "注册即赠 500 惑梦币，约 10 次角色回复；每日签到获得额外额度，已有额度网页与客户端共用。"
+                    item["title"] = "惑梦农场"
+                    item["description"] = "注册即赠 500 惑梦币，约 10 次角色回复；农场每日首次有效收获可获得额外额度，网页与客户端余额共用。"
         deposit = public.setdefault("deposit", {})
         deposit.update({
             "aifadian_url": "",
@@ -11991,7 +12313,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(204)
         self.send_cors_headers()
         self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, Idempotency-Key")
         self.send_header("Access-Control-Max-Age", "86400")
         self.send_header("Content-Length", "0")
         self.end_headers()
@@ -12081,7 +12403,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "close")
         self.send_cors_headers()
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, Idempotency-Key")
         self.end_headers()
         self.wfile.write(data)
         self.wfile.flush()
@@ -12121,7 +12443,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "close")
         self.send_cors_headers()
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, Idempotency-Key")
         self.send_header("Content-Length", str(len(raw)))
         self.end_headers()
         self.wfile.write(raw)
@@ -12135,7 +12457,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.send_header("X-Accel-Buffering", "no")
         self.send_cors_headers()
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, Idempotency-Key")
         self.end_headers()
 
     def write_sse_event(self, event: str, data: object) -> None:
@@ -13214,7 +13536,7 @@ class Handler(BaseHTTPRequestHandler):
                     "points": daily_points,
                     "claimed": claimed,
                     "date": today,
-                    "title": settings.get("rewards", {}).get("daily_title") or "每日奖励",
+                    "title": settings.get("rewards", {}).get("daily_title") or "农场每日奖励",
                     "description": settings.get("rewards", {}).get("daily_description") or "",
                 },
                 "tasks": settings.get("rewards", {}).get("tasks") or [],
@@ -13226,6 +13548,49 @@ class Handler(BaseHTTPRequestHandler):
         if normalized == "console/api/web/rewards/daily":
             daily_points = clean_int(self.store.site_settings().get("rewards", {}).get("daily_points"), 10, 1, 100000)
             return ok_response(self.store.claim_daily_reward(user["id"], daily_points))
+
+        if normalized == "console/api/web/farm/state":
+            if self.command.upper() != "GET":
+                return error_response("method not allowed", 405)
+            return ok_response(self.store.farm_state(user["id"]))
+
+        if normalized == "console/api/web/farm/friends":
+            if self.command.upper() != "GET":
+                return error_response("method not allowed", 405)
+            return ok_response(self.store.farm_friends(user["id"]))
+
+        farm_plot_match = re.fullmatch(r"console/api/web/farm/plots/(\d+)/(plant|water|harvest)", normalized)
+        if farm_plot_match:
+            if self.command.upper() != "POST":
+                return error_response("method not allowed", 405)
+            plot_no = int(farm_plot_match.group(1))
+            action = farm_plot_match.group(2)
+            idempotency_key = self.headers.get("Idempotency-Key") or self.headers.get("idempotency-key") or ""
+            try:
+                if action == "plant":
+                    if not isinstance(body, dict):
+                        return error_response("invalid body", 400)
+                    payload = self.store.farm_plant(user["id"], plot_no, str(body.get("crop_kind") or ""), idempotency_key)
+                elif action == "water":
+                    payload = self.store.farm_water(user["id"], plot_no, idempotency_key)
+                else:
+                    daily_points = clean_int(self.store.site_settings().get("rewards", {}).get("daily_points"), 10, 1, 100000)
+                    payload = self.store.farm_harvest(user["id"], plot_no, idempotency_key, daily_points)
+                return ok_response(payload)
+            except ValueError as exc:
+                status = 409 if "Idempotency-Key conflicts" in str(exc) else 400
+                return error_response(str(exc), status)
+
+        farm_steal_match = re.fullmatch(r"console/api/web/farm/friends/([^/]+)/steal", normalized)
+        if farm_steal_match:
+            if self.command.upper() != "POST":
+                return error_response("method not allowed", 405)
+            idempotency_key = self.headers.get("Idempotency-Key") or self.headers.get("idempotency-key") or ""
+            try:
+                return ok_response(self.store.farm_steal(user["id"], unquote(farm_steal_match.group(1)), idempotency_key))
+            except ValueError as exc:
+                status = 404 if str(exc) == "friend not found" else (409 if "Idempotency-Key conflicts" in str(exc) else 400)
+                return error_response(str(exc), status)
 
         if normalized == "console/api/web/deposit-meta":
             return ok_response(deposit_meta_json(user))

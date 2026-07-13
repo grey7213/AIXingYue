@@ -75,7 +75,7 @@
           </aside>
         </div>
 
-        <!-- 套餐/订阅 + 每日奖励 -->
+        <!-- 套餐/订阅 + 农场每日奖励 -->
         <div class="rw-grid">
           <div class="rw-maincol">
             <div class="ws-panel" x-show="onlinePaymentAvailable()">
@@ -156,12 +156,15 @@
             </div>
           </div>
 
-          <aside class="ws-panel rw-daily">
+          <aside class="ws-panel rw-daily rw-farm-entry">
             <div class="ws-panel__head">
-              <h3 x-text="rewards?.daily?.title || '每日奖励'">每日奖励</h3>
-              <button class="xy-btn xy-btn-primary text-sm" @click="claimDaily" :disabled="busy || rewards?.daily?.claimed" x-text="dailyClaimText()"></button>
+              <h3>惑梦农场</h3>
+              <a class="xy-btn xy-btn-primary text-sm" href="/app/farm.html">进入农场</a>
             </div>
-            <p class="rw-daily__copy" x-text="rewards?.daily?.description || '免费额度自动归入总余额。'"></p>
+            <p class="rw-daily__copy">每日第一次有效收获，可领取 <b x-text="rewards?.daily?.points || siteSettings?.rewards?.daily_points || 10"></b> 惑梦币。历史签到记录继续有效，不会重复发放。</p>
+            <div class="rw-farm-entry__art" aria-hidden="true">
+              <span>🌱</span><span>🥕</span><span>🌾</span>
+            </div>
             <div class="rw-rows">
               <template x-for="task in (rewards?.tasks || [])" :key="task.key">
                 <div class="rw-row">

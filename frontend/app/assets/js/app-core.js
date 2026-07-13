@@ -159,6 +159,28 @@ export const api = {
   },
   rewards: () => rawRequest('/console/api/web/rewards'),
   claimDailyReward: () => rawRequest('/console/api/web/rewards/daily', { method: 'POST', body: {} }),
+  farmState: () => rawRequest('/console/api/web/farm/state'),
+  farmFriends: () => rawRequest('/console/api/web/farm/friends'),
+  farmPlant: (plotNo, cropKind, idempotencyKey) => rawRequest(`/console/api/web/farm/plots/${encodeURIComponent(plotNo)}/plant`, {
+    method: 'POST',
+    headers: { 'Idempotency-Key': idempotencyKey },
+    body: { crop_kind: cropKind },
+  }),
+  farmWater: (plotNo, idempotencyKey) => rawRequest(`/console/api/web/farm/plots/${encodeURIComponent(plotNo)}/water`, {
+    method: 'POST',
+    headers: { 'Idempotency-Key': idempotencyKey },
+    body: {},
+  }),
+  farmHarvest: (plotNo, idempotencyKey) => rawRequest(`/console/api/web/farm/plots/${encodeURIComponent(plotNo)}/harvest`, {
+    method: 'POST',
+    headers: { 'Idempotency-Key': idempotencyKey },
+    body: {},
+  }),
+  farmSteal: (friendId, idempotencyKey) => rawRequest(`/console/api/web/farm/friends/${encodeURIComponent(friendId)}/steal`, {
+    method: 'POST',
+    headers: { 'Idempotency-Key': idempotencyKey },
+    body: {},
+  }),
   imageChat: (payload) => rawRequest('/console/api/web/image-chat', { method: 'POST', body: payload }),
   myApps: (params = {}) => {
     const qs = new URLSearchParams(params);

@@ -160,11 +160,6 @@ function mePage() {
       return !!(this.deposit?.payment_available && this.deposit?.mode !== 'closed');
     },
 
-    dailyCheckinText() {
-      const points = parseInt(this.siteSettings?.rewards?.daily_points || 10, 10);
-      return this.formatTemplate(this.accountText('daily_checkin_template', '每日签到 +{points}'), { points });
-    },
-
     paymentNote() {
       return this.paymentAvailable()
         ? this.depositText('payment_note_available', '兑换码只可使用一次，请确认登录的是当前账号。')
@@ -204,25 +199,6 @@ function mePage() {
       } else {
         this.showToast(this.depositText('support_text', this.dashboardText('payment_missing_text', '充值通道暂时关闭')), 'error');
       }
-    },
-
-    async doDailyCheckin() {
-      this.loading = true;
-      try {
-        const r = await api.claimDaily();
-        const p = r.points || r.data?.points;
-        if (p !== undefined) this.points = parseInt(p, 10);
-        await this.refreshPoints();
-        const added = parseInt(r.data?.points_added || 0, 10);
-        this.showToast(
-          added > 0
-            ? this.formatTemplate(this.dashboardText('checkin_success_template', '签到成功 +{points} 积分'), { points: added })
-            : this.dashboardText('checkin_repeat_text', '今日已经签到过了'),
-          added > 0 ? 'success' : 'info',
-        );
-      } catch (err) {
-        this.showToast(err.message || this.dashboardText('checkin_failed_text', '签到失败'), 'error');
-      } finally { this.loading = false; }
     },
 
     async redeemNow() {

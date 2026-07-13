@@ -8,7 +8,7 @@
   <link rel="icon" href="/favicon.ico">
   <script src="/assets/vendor/tailwindcss-browser.js?v=20260713-local"></script>
   <link rel="stylesheet" href="/app/assets/css/app.css?v=20260712-theme-safe">
-  <script type="module" src="/app/assets/js/me.js?v=20260713-zpay"></script>
+  <script type="module" src="/app/assets/js/me.js?v=20260713-farm-entry"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen profile-center-page">
@@ -64,7 +64,7 @@
         </details>
 
         <section class="profile-secondary-grid">
-          <button @click="doDailyCheckin" :disabled="loading"><span>每日签到</span><small x-text="dailyCheckinText()"></small><b>›</b></button>
+          <a href="/app/farm.html"><span>惑梦农场</span><small>种植收获 · 每日奖励</small><b>›</b></a>
           <a href="/app/favorites.html"><span>我的收藏</span><small>查看收藏角色</small><b>›</b></a>
           <a href="/app/histories.html"><span>历史对话</span><small>继续最近会话</small><b>›</b></a>
           <a href="/app/logs.html"><span>操作记录</span><small>积分与账户记录</small><b>›</b></a>
