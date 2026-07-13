@@ -142,6 +142,8 @@ SITE_SETTINGS_KEY = "site_settings"
 GLOBAL_PROMPT_PRESET_KEY = "global_prompt_preset"
 GLOBAL_PROMPT_PRESETS_KEY = "global_prompt_presets"
 GLOBAL_REGEX_PRESETS_KEY = "global_regex_presets"
+GALGAME_PROMPT_IDENTIFIER = "21837143-741e-4cc8-8107-b26acacfdee6"
+GALGAME_PROMPT_NAME = "梦境选项 - 正常推进"
 IMAGE_MODEL_SETTINGS_KEY = "image_model_settings"
 MEMORY_SETTINGS_KEY = "memory_settings"
 ACTIVE_STORE = None
@@ -2464,6 +2466,7 @@ class Store:
                     app_icon text,
                     title text,
                     last_message text,
+                    galgame_enabled integer not null default 0,
                     created_at integer not null,
                     updated_at integer not null
                 );
@@ -2782,6 +2785,7 @@ class Store:
         self.ensure_user_admin_column()
         self.ensure_local_apps_columns()
         self.ensure_messages_columns()
+        self.ensure_conversation_columns()
         self.ensure_chat_memory_columns()
         self.ensure_user_model_preset_columns()
         self.ensure_default_user()
@@ -2896,6 +2900,18 @@ class Store:
             for name, column_type in wanted.items():
                 if name not in columns:
                     self.conn.execute(f"alter table messages add column {name} {column_type}")
+            self.conn.commit()
+
+    def ensure_conversation_columns(self) -> None:
+        with self.lock:
+            columns = {
+                row["name"]
+                for row in self.conn.execute("pragma table_info(conversations)").fetchall()
+            }
+            if "galgame_enabled" not in columns:
+                self.conn.execute(
+                    "alter table conversations add column galgame_enabled integer not null default 0"
+                )
             self.conn.commit()
 
     def ensure_chat_memory_columns(self) -> None:
@@ -4341,7 +4357,31 @@ class Store:
                 "select * from conversations where id=? and user_id=?",
                 (conv_id, user_id),
             ).fetchone()
-            return dict(row) if row else None
+            if not row:
+                return None
+            item = dict(row)
+            item["galgame_enabled"] = bool(item.get("galgame_enabled"))
+            return item
+
+    def set_conversation_galgame(self, conv_id: str, user_id: str, enabled: bool) -> dict | None:
+        with self.lock:
+            row = self.conn.execute(
+                "select * from conversations where id=? and user_id=?",
+                (conv_id, user_id),
+            ).fetchone()
+            if not row:
+                return None
+            self.conn.execute(
+                "update conversations set galgame_enabled=? where id=? and user_id=?",
+                (1 if enabled else 0, conv_id, user_id),
+            )
+            self.conn.commit()
+            updated = dict(self.conn.execute(
+                "select * from conversations where id=? and user_id=?",
+                (conv_id, user_id),
+            ).fetchone())
+            updated["galgame_enabled"] = bool(updated.get("galgame_enabled"))
+            return updated
 
     def append_message(self, conv_id: str, user_id: str, role: str, content: str, swipes: list | None = None) -> sqlite3.Row:
         with self.lock:
@@ -4390,6 +4430,7 @@ class Store:
             item["like_count"] = int(item.get("app_like_count") or 0)
             item["favorited"] = bool(item.get("favorited"))
             item["liked"] = bool(item.get("liked"))
+            item["galgame_enabled"] = bool(item.get("galgame_enabled"))
             item["user_tags"] = self.list_user_app_tags(user_id, str(item.get("app_id") or ""))
             item.pop("current_app_name", None)
             item.pop("current_app_icon", None)
@@ -4654,8 +4695,8 @@ class Store:
             title = (base_title + " 副本")[:80]
             self.conn.execute(
                 """
-                insert into conversations(id,user_id,app_id,app_name,app_icon,title,last_message,created_at,updated_at)
-                values(?,?,?,?,?,?,?,?,?)
+                insert into conversations(id,user_id,app_id,app_name,app_icon,title,last_message,galgame_enabled,created_at,updated_at)
+                values(?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     new_id,
@@ -4665,6 +4706,7 @@ class Store:
                     source.get("app_icon") or "",
                     title,
                     source.get("last_message") or "",
+                    1 if source.get("galgame_enabled") else 0,
                     ts,
                     ts,
                 ),
@@ -4759,8 +4801,7 @@ class Store:
                     (user_id, "conversation", new_id, v.get("name") or "", v.get("value_json") or "null", ts),
                 )
             self.conn.commit()
-            copied = self.conn.execute("select * from conversations where id=?", (new_id,)).fetchone()
-            return dict(copied) if copied else None
+            return self.get_conversation(new_id, user_id)
 
     def _memory_to_dict(self, row) -> dict:
         d = dict(row) if row else {}
@@ -5105,6 +5146,11 @@ class Store:
             "user_message": content,
             "memory_settings": policy,
         }
+        conversation = self.get_conversation(conv_id, user_id) if conv_id else None
+        if conversation and bool(conversation.get("galgame_enabled")):
+            base_context["conversation_settings"] = {
+                "galgame_enabled": True,
+            }
         out = dict(base_context)
         out.update(self.template_context(user_id, app_id, conv_id, base_context))
         return out
@@ -9408,18 +9454,59 @@ def normalize_full_prompt_preset(value: object, index: int = 0) -> dict:
     return raw
 
 
-def prompt_preset_runtime_blocks(value: object) -> list[dict]:
+def _normalized_prompt_entry_name(value: object) -> str:
+    return re.sub(r"[\s\-‐‑‒–—―−－]+", "", str(value or "")).casefold()
+
+
+def _is_galgame_prompt_entry(item: dict) -> bool:
+    identifier = str(item.get("identifier") or "").strip()
+    if identifier == GALGAME_PROMPT_IDENTIFIER:
+        return True
+    return _normalized_prompt_entry_name(item.get("name")) == _normalized_prompt_entry_name(GALGAME_PROMPT_NAME)
+
+
+def galgame_prompt_runtime_status(value: object, *, override_enabled: bool = False) -> dict:
+    preset = normalize_full_prompt_preset(value)
+    prompts = preset.get("prompts") if isinstance(preset.get("prompts"), list) else []
+    target = next(
+        (
+            item
+            for item in sorted(
+                (p for p in prompts if p.get("in_order")),
+                key=lambda p: int(p.get("order") or 0),
+            )
+            if _is_galgame_prompt_entry(item)
+        ),
+        None,
+    )
+    preset_enabled = bool(preset.get("enabled"))
+    original_enabled = bool(target.get("order_enabled")) if target else False
+    effective_enabled = bool(preset_enabled and target and (override_enabled or original_enabled))
+    return {
+        "entry_found": bool(target),
+        "preset_enabled": preset_enabled,
+        "original_enabled": original_enabled,
+        "effective_enabled": effective_enabled,
+    }
+
+
+def prompt_preset_runtime_blocks(value: object, *, galgame_enabled: bool | None = None) -> list[dict]:
     preset = normalize_full_prompt_preset(value)
     prompts = preset.get("prompts") if isinstance(preset.get("prompts"), list) else []
     if not prompts:
         return normalize_global_prompt_blocks(preset.get("blocks") or [])
     after_history = False
     blocks: list[dict] = []
+    galgame_override_applied = False
     for item in sorted((p for p in prompts if p.get("in_order")), key=lambda p: int(p.get("order") or 0)):
         identifier = str(item.get("identifier") or "")
         if identifier == "chatHistory":
             after_history = True
-        if not item.get("order_enabled"):
+        runtime_enabled = bool(item.get("order_enabled"))
+        if galgame_enabled is not None and not galgame_override_applied and _is_galgame_prompt_entry(item):
+            runtime_enabled = bool(galgame_enabled)
+            galgame_override_applied = True
+        if not runtime_enabled:
             continue
         content = str(item.get("content") or "")
         marker = _preset_bool(item.get("marker"), False) or (not content.strip() and _preset_bool(item.get("system_prompt"), False))
@@ -10320,10 +10407,10 @@ def prompt_block_texts(extras: dict, position: str, *, char_name: str = "", user
     return out
 
 
-def global_prompt_messages(preset: object, position: str, *, char_name: str = "", user_name: str = "", max_chars: int = 40000, template_context: dict | None = None) -> list[dict]:
+def global_prompt_messages(preset: object, position: str, *, char_name: str = "", user_name: str = "", max_chars: int = 40000, template_context: dict | None = None, galgame_enabled: bool | None = None) -> list[dict]:
     if isinstance(preset, dict) and isinstance(preset.get("prompts"), list):
         config = dict(preset)
-        config["blocks"] = prompt_preset_runtime_blocks(preset)
+        config["blocks"] = prompt_preset_runtime_blocks(preset, galgame_enabled=galgame_enabled)
     else:
         config = normalize_global_prompt_preset(preset)
     if not config.get("enabled"):
@@ -11014,6 +11101,10 @@ def build_user_llm_request(app: dict, content: str, messages: list[dict] | None 
     apply_initial_template_variables(extras.get("world_info") or [], template_context, char_name=char_name, user_name=user_name)
     global_preset = settings.get("global_prompt_preset") if isinstance(settings, dict) else None
     global_regex_preset = settings.get("global_regex_preset") if isinstance(settings, dict) else None
+    conversation_settings = context.get("conversation_settings") if isinstance(context, dict) else None
+    galgame_enabled = None
+    if isinstance(conversation_settings, dict) and "galgame_enabled" in conversation_settings:
+        galgame_enabled = bool(conversation_settings.get("galgame_enabled"))
     system_prompt = build_system_prompt(app, persona, recent_text, template_context=template_context)
     global_before = global_prompt_messages(
         global_preset,
@@ -11021,6 +11112,7 @@ def build_user_llm_request(app: dict, content: str, messages: list[dict] | None 
         char_name=char_name,
         user_name=user_name,
         template_context=template_context,
+        galgame_enabled=galgame_enabled,
     )
     global_after = global_prompt_messages(
         global_preset,
@@ -11028,6 +11120,7 @@ def build_user_llm_request(app: dict, content: str, messages: list[dict] | None 
         char_name=char_name,
         user_name=user_name,
         template_context=template_context,
+        galgame_enabled=galgame_enabled,
     )
     if global_before or global_after:
         system_prompt = "\n\n".join(
@@ -11075,6 +11168,7 @@ def build_user_llm_request(app: dict, content: str, messages: list[dict] | None 
         char_name=char_name,
         user_name=user_name,
         template_context=template_context,
+        galgame_enabled=galgame_enabled,
     ))
     extras_for_phi = app_extras(app)
     if isinstance(extras_for_phi, dict):
@@ -14155,6 +14249,9 @@ class Handler(BaseHTTPRequestHandler):
             parts = normalized.split("/")
             if len(parts) >= 5:
                 conv_id = parts[4]
+                conversation = self.store.get_conversation(conv_id, user["id"])
+                if not conversation:
+                    return error_response("conversation not found", 404)
                 limit = parse_query_int(query, "limit", 80, 1, 200)
                 before = parse_query_int(query, "before", 0, 0, 9999999999999)
                 msgs = self.store.list_messages(conv_id, user["id"], limit=limit, before_created_at=before or None)
@@ -14173,7 +14270,34 @@ class Handler(BaseHTTPRequestHandler):
                     "returned": len(msgs),
                     "has_more": older_count > 0,
                     "next_before": first_created or None,
+                    "conversation": conversation,
                 })
+
+        if normalized.startswith("console/api/web/conversations/") and normalized.endswith("/galgame"):
+            parts = normalized.split("/")
+            conv_id = parts[4] if len(parts) >= 6 else ""
+            if self.command.upper() != "POST":
+                return error_response("method not allowed", 405)
+            if not isinstance(body, dict) or not isinstance(body.get("enabled"), bool):
+                return error_response("enabled must be a boolean", 400)
+            conversation = self.store.set_conversation_galgame(
+                conv_id,
+                user["id"],
+                bool(body["enabled"]),
+            )
+            if not conversation:
+                return error_response("conversation not found", 404)
+            runtime_status = galgame_prompt_runtime_status(
+                self.store.global_prompt_preset(),
+                override_enabled=bool(conversation.get("galgame_enabled")),
+            )
+            return ok_response({
+                "conversation_id": conv_id,
+                "galgame_enabled": bool(conversation.get("galgame_enabled")),
+                "preset_entry_identifier": GALGAME_PROMPT_IDENTIFIER,
+                "preset_entry_name": GALGAME_PROMPT_NAME,
+                **runtime_status,
+            })
 
         if normalized.startswith("console/api/web/conversations/") and normalized.endswith("/summary"):
             parts = normalized.split("/")
@@ -14250,6 +14374,7 @@ class Handler(BaseHTTPRequestHandler):
                 "app_id": app_id,
                 "app_name": app_name,
                 "app_icon": app_icon,
+                "galgame_enabled": False,
                 "messages": messages,
             })
 

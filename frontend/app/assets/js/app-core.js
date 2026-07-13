@@ -211,6 +211,10 @@ export const api = {
   },
   conversationSummary: (convId) => rawRequest(`/console/api/web/conversations/${encodeURIComponent(convId)}/summary`),
   saveConversationSummary: (convId, payload) => rawRequest(`/console/api/web/conversations/${encodeURIComponent(convId)}/summary`, { method: 'POST', body: payload }),
+  setConversationGalgame: (convId, enabled) => rawRequest(`/console/api/web/conversations/${encodeURIComponent(convId)}/galgame`, {
+    method: 'POST',
+    body: { enabled: !!enabled },
+  }),
   sendChat: (payload) => rawRequest('/console/api/web/chat', { method: 'POST', body: payload }),
   sendChatStream: (payload, handlers, options) => sseRequest('/console/api/web/chat/stream', payload, handlers, options),
   continueChatStream: (payload, handlers, options) => sseRequest('/console/api/web/chat/continue/stream', payload, handlers, options),

@@ -63,6 +63,11 @@
 
 ## Reusable Pitfalls
 
+- Symptom: 部署脚本重启 `ai-fengyue-backend.service` 后，`systemctl is-active` 已显示 `active`，但紧接着的 `curl http://127.0.0.1:8008/health` 偶发 `Failed to connect`。
+  Cause: systemd 已启动 Python 进程，但大型 SQLite 初始化/轻量迁移尚未完成，8008 端口还未开始监听。
+  Fix: 重启后对 `/health` 做短时轮询，并同时检查 `systemctl status`、`journalctl` 和 `ss -ltnp`；不要仅凭第一次即时 curl 判定部署失败或立刻回滚。
+  Verify: 2026-07-13 Galgame 会话选项部署时首次即时 curl 失败，随后服务持续 active、8008 正常监听、内外 `/health` 均为 OK，数据库 `quick_check=ok`。
+
 - Symptom: 农场种子弹窗显示正常，但点击种植返回 `invalid crop_kind`。
   Cause: 前端展示枚举使用 `carrot/wheat/berry`，后端权威枚举使用 `code_carrot/compute_wheat/inspiration_berry`。
   Fix: `farm.js` 的种子同时保存 `kind` 与 `apiKind`，渲染使用短枚举，API 请求只发送服务端枚举；浏览器不能自行提交奖励、价格或成熟时间。

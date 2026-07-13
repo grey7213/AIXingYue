@@ -1,4 +1,4 @@
-import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js?v=20260710-web-reliability';
+import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js?v=20260713-galgame-option';
 import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-channels-closed';
 
 const STATUS_LABELS = {
@@ -1068,6 +1068,8 @@ function chatPage() {
     appHero: '',
     appFavorited: false,
     favoriteBusy: false,
+    galgameEnabled: false,
+    galgameBusy: false,
     quickReplies: [],
     editingId: '',
     editingText: '',
@@ -1568,7 +1570,10 @@ function chatPage() {
     async loadConversations() {
       try {
         const r = await api.conversations();
-        this.conversations = (r?.data?.list || r?.list || []);
+        this.conversations = (r?.data?.list || r?.list || []).map(item => ({
+          ...item,
+          galgame_enabled: !!item?.galgame_enabled,
+        }));
       } catch {
         this.conversations = [];
       }
@@ -1608,6 +1613,7 @@ function chatPage() {
     async newChat() {
       if (!this.appId) return;
       this.busy = true;
+      this.galgameEnabled = false;
       try {
         const r = await api.startConversation({ app_id: this.appId, app_name: this.appName, app_icon: this.appIcon });
         const data = r?.data || r;
@@ -1617,7 +1623,9 @@ function chatPage() {
           app_name: this.appName || data.app_name,
           app_icon: this.appIcon || data.app_icon,
           title: this.appName || this.chatText('new_chat_title', '新对话'),
+          galgame_enabled: !!data.galgame_enabled,
         };
+        this.galgameEnabled = !!data.galgame_enabled;
         this.messages = (data.messages || []).map(this.normMsg);
         this.messageTotal = this.messages.length;
         this.hasOlderMessages = false;
@@ -1657,6 +1665,7 @@ function chatPage() {
       this.cancelActiveGeneration();
       const loadSeq = ++this._conversationLoadSeq;
       this.conversation = c;
+      this.galgameEnabled = !!c?.galgame_enabled;
       this.appId = c.app_id;
       this.appName = c.app_name || c.title || this.chatText('conversation_fallback_title', '对话');
       this.appIcon = c.app_icon || '';
@@ -1686,6 +1695,17 @@ function chatPage() {
         const r = await api.messages(c.id, { limit: this.messageLimit });
         if (loadSeq !== this._conversationLoadSeq || this.conversation?.id !== c.id) return;
         const data = r?.data || r || {};
+        if (data.conversation) {
+          const authoritative = {
+            ...this.conversation,
+            ...data.conversation,
+            galgame_enabled: !!data.conversation.galgame_enabled,
+          };
+          this.conversation = authoritative;
+          this.galgameEnabled = authoritative.galgame_enabled;
+          const convIndex = this.conversations.findIndex(item => item.id === authoritative.id);
+          if (convIndex >= 0) this.conversations.splice(convIndex, 1, { ...this.conversations[convIndex], ...authoritative });
+        }
         const list = data.list || [];
         this.messages = list.map(this.normMsg);
         const total = parseInt(data.total ?? list.length, 10);
@@ -1697,6 +1717,29 @@ function chatPage() {
         this.messages = [];
         this.messageTotal = 0;
         this.hasOlderMessages = false;
+      }
+    },
+
+    async toggleGalgame() {
+      const convId = this.conversation?.id;
+      if (!convId || this.galgameBusy) return;
+      const nextEnabled = !this.galgameEnabled;
+      this.galgameBusy = true;
+      try {
+        const r = await api.setConversationGalgame(convId, nextEnabled);
+        if (this.conversation?.id !== convId) return;
+        const data = r?.data || r || {};
+        const enabled = !!data.galgame_enabled;
+        this.galgameEnabled = enabled;
+        this.conversation = { ...this.conversation, galgame_enabled: enabled };
+        const convIndex = this.conversations.findIndex(item => item.id === convId);
+        if (convIndex >= 0) {
+          this.conversations.splice(convIndex, 1, { ...this.conversations[convIndex], galgame_enabled: enabled });
+        }
+      } catch (err) {
+        alert(err?.message || 'Galgame 选项切换失败');
+      } finally {
+        this.galgameBusy = false;
       }
     },
 
