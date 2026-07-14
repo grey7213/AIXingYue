@@ -469,8 +469,12 @@ function sanitizeAdvancedHtml(raw, options = {}) {
   const source = String(raw || '').trim();
   const allowScripts = options.allowScripts !== false;
   const hasExplicitHead = /<head\b/i.test(source);
+  const isFullDocument = /<!doctype\s+html\b|<html\b|<head\b|<body\b/i.test(source);
+  const documentStart = source.search(/<!doctype\s+html\b|<html\b|<head\b|<body\b/i);
+  const hasOuterDocumentWrapper = documentStart > 0
+    && /^<(?:div|section|article|main)\b/i.test(source.slice(0, documentStart).trim());
   if (typeof DOMParser === 'undefined') {
-    return { head: '', body: source, bodyAttrs: '' };
+    return { head: '', body: source, bodyAttrs: '', isFullDocument };
   }
   const doc = new DOMParser().parseFromString(source, 'text/html');
   doc.querySelectorAll('base, iframe, object, embed, link[rel], script[src], script[data-src]').forEach(el => el.remove());
@@ -502,12 +506,19 @@ function sanitizeAdvancedHtml(raw, options = {}) {
       });
     }
   });
+  if (isFullDocument && hasOuterDocumentWrapper && doc.body?.children.length === 1) {
+    const wrapper = doc.body.firstElementChild;
+    if (wrapper && /^(?:DIV|SECTION|ARTICLE|MAIN)$/.test(wrapper.tagName)) {
+      wrapper.replaceWith(...Array.from(wrapper.childNodes));
+    }
+  }
   const parsedHead = doc.head ? doc.head.innerHTML : '';
   const parsedBody = doc.body ? doc.body.innerHTML : source;
   return {
     head: hasExplicitHead ? parsedHead : '',
     body: hasExplicitHead ? parsedBody : `${parsedHead}${parsedBody}`,
     bodyAttrs: serializeSafeAttrs(doc.body),
+    isFullDocument,
   };
 }
 
@@ -539,7 +550,13 @@ function buildTavoBridgeScript() {
         return Math.ceil(Math.max(root.scrollHeight, body ? body.scrollHeight : 0, 260));
       };
       const resize = () => {
-        try { parent.postMessage({ type: 'xy-tavo-resize', height: height() }, '*'); } catch (e) {}
+        try {
+          parent.postMessage({
+            type: 'xy-tavo-resize',
+            height: height(),
+            layout: document.body?.dataset.xyLayout || 'fragment',
+          }, '*');
+        } catch (e) {}
       };
       const clone = value => {
         try { return JSON.parse(JSON.stringify(value)); } catch (e) { return value; }
@@ -726,7 +743,7 @@ function buildSandboxSrcdoc(raw, options = {}) {
     }
   `;
   const resizeScript = `
-    (()=>{let last=0;const send=()=>{const root=document.documentElement;const body=document.body;root.style.setProperty('--xy-frame-width',Math.round(innerWidth||root.clientWidth||0)+'px');const h=Math.ceil(Math.max(root.scrollHeight,body?body.scrollHeight:0,260));if(Math.abs(h-last)>4){last=h;parent.postMessage({type:'xy-tavo-resize',height:h},'*');}};addEventListener('load',send);addEventListener('resize',send);addEventListener('orientationchange',()=>setTimeout(send,120));addEventListener('message',event=>{if(event&&event.data&&event.data.type==='xy-tavo-parent-resize'){try{dispatchEvent(new Event('resize'));}catch(e){}setTimeout(send,20);}});try{new ResizeObserver(send).observe(document.documentElement);if(document.body)new ResizeObserver(send).observe(document.body);}catch(e){}setTimeout(send,80);setTimeout(send,600);})();
+    (()=>{let last=0;const send=()=>{const root=document.documentElement;const body=document.body;root.style.setProperty('--xy-frame-width',Math.round(innerWidth||root.clientWidth||0)+'px');const h=Math.ceil(Math.max(root.scrollHeight,body?body.scrollHeight:0,260));if(Math.abs(h-last)>4){last=h;parent.postMessage({type:'xy-tavo-resize',height:h,layout:body?.dataset.xyLayout||'fragment'},'*');}};addEventListener('load',send);addEventListener('resize',send);addEventListener('orientationchange',()=>setTimeout(send,120));addEventListener('message',event=>{if(event&&event.data&&event.data.type==='xy-tavo-parent-resize'){try{dispatchEvent(new Event('resize'));}catch(e){}setTimeout(send,20);}});try{new ResizeObserver(send).observe(document.documentElement);if(document.body)new ResizeObserver(send).observe(document.body);}catch(e){}setTimeout(send,80);setTimeout(send,600);})();
   `;
   const bridge = allowScripts ? `<script>${buildTavoBridgeScript()}<\/script>` : '';
   const resize = allowScripts ? `<script>${resizeScript}<\/script>` : '';
@@ -734,8 +751,11 @@ function buildSandboxSrcdoc(raw, options = {}) {
     ? ''
     : `<textarea id="raw-data-store" hidden aria-hidden="true">${escapeHtml(sanitized.body)}</textarea>`;
   const pluginBody = pluginHtml ? `<div class="tavo-plugin-fragments" data-plugin-fragments="true">${pluginHtml}</div>` : '';
-  const compatBody = `<div id="chat" class="chat chat-messages"><div class="mes message assistant" data-role="assistant"><div id="message-content" class="mes_text mes-text message-content markdown-body tavo-content">${pluginBody}${sanitized.body}</div></div></div>`;
-  return `<!doctype html><html style="${escapeAttr(tavoThemeVars)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta http-equiv="Content-Security-Policy" content="${escapeAttr(csp)}"><style>${baseStyle}</style>${bridge}${sanitized.head}</head><body${sanitized.bodyAttrs}>${rawStore}${compatBody}${resize}</body></html>`;
+  const compatBody = sanitized.isFullDocument
+    ? `${pluginBody}${sanitized.body}`
+    : `<div id="chat" class="chat chat-messages"><div class="mes message assistant" data-role="assistant"><div id="message-content" class="mes_text mes-text message-content markdown-body tavo-content">${pluginBody}${sanitized.body}</div></div></div>`;
+  const layoutMode = sanitized.isFullDocument ? 'document' : 'fragment';
+  return `<!doctype html><html style="${escapeAttr(tavoThemeVars)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta http-equiv="Content-Security-Policy" content="${escapeAttr(csp)}"><style>${baseStyle}</style>${bridge}${sanitized.head}</head><body${sanitized.bodyAttrs} data-xy-layout="${layoutMode}">${rawStore}${compatBody}${resize}</body></html>`;
 }
 
 function renderAdvancedSourcePreview(code) {
@@ -1016,7 +1036,8 @@ function bindTavoFrameResizeListener() {
   window.addEventListener('message', (event) => {
     const data = event?.data || {};
     if (data.type !== 'xy-tavo-resize') return;
-    const height = Math.max(260, Math.min(parseInt(data.height, 10) || 0, 860));
+    const maxHeight = data.layout === 'document' ? 1200 : 860;
+    const height = Math.max(260, Math.min(parseInt(data.height, 10) || 0, maxHeight));
     if (!height) return;
     document.querySelectorAll('iframe.tavo-frame').forEach(frame => {
       if (frame.contentWindow === event.source) frame.style.height = `${height}px`;

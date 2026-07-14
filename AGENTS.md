@@ -63,6 +63,11 @@
 
 ## Reusable Pitfalls
 
+- Symptom: 完整 HTML 角色卡的开场可视化只显示上半段，底部出现大块黑色；父 iframe 显示 860px，但卡内 `body` 只显示 680px，真实内容高度却超过 1900px。
+  Cause: `buildSandboxSrcdoc()` 把完整 `<!DOCTYPE html><html>...` 也塞进 `#chat > .mes > .mes_text` 片段兼容壳，破坏卡片 `.app { height:100% }` 的百分比高度链；后端 Regex 还可能把整份文档套进单层 `<div>`，再次形成无高度包装；父端又把所有 resize 统一硬封顶为 860px。
+  Fix: 2026-07-15 `frontend/app/assets/js/chat.js` 区分完整文档与 HTML 片段：完整文档 body 直接挂载，片段才保留 `.mes_text` 兼容壳；完整文档若被 Regex 单层块元素包裹则安全解包；resize 消息携带 layout，document 上限为 1200、fragment 保持 860，sandbox/CSP 不变。
+  Verify: 目标卡 `user-aabbe6cbfd2c41c3` 线上桌面与 390px 均为 `iframe=body=app=680px`、`scrollHeight=680`，截图无底部黑块；`verify_tavo_advanced_render_browser.py`、`verify_tavo_sandbox_browser.py` 线上均 console/page error=0，DB `quick_check=ok`。
+
 - Symptom: 给单个会话关闭全局预设后，全局 Prompt 不再出现，但全局 Regex 仍处理输出或流式仍被缓冲；也可能让旧 `source=upstream` 角色意外切回 upstream proxy 路径。
   Cause: 只在 `build_user_llm_request()` 关闭 Prompt，没有同步回复后处理/缓冲判断；或在模型路由判断前直接修改 effective settings，改变了原有 provider 选择条件。
   Fix: 会话设置使用 `global_preset_enabled` 默认 1；先用原始 settings 保持模型/provider 路由，再在取得真实普通会话 context 后浅复制 runtime settings，同时禁用 `global_prompt_preset` 与 `global_regex_preset`。blocking、SSE send、continue、regenerate、new swipe 都要覆盖，群聊不传该会话设置。

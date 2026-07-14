@@ -54,6 +54,7 @@
 | WC44 | 在线支付方式与订单列表体验优化 | Done | 默认支付宝、浅蓝支付方式卡片、单一 `确认支付 ¥xx.xx` 按钮、当前用户分页订单列表；线上 pending 订单/余额不变/敏感字段隔离验证通过，1440 与 390px 无横向溢出和 console error；测试数据已清理 |
 | WC45 | 48 个对话模型与延迟优化 | Done | 2026-07-15 公开模型 `48/48` 唯一，三组各 16，minimal 为推荐默认；同提示线上 minimal `18.7s`、max `38.5s`，buffered 模式约 `2.1s` 发出模型已响应状态；backend/Nginx/health/DB/browser 回归通过 |
 | WC46 | 单会话关闭全局预设 | Done | 2026-07-15 线上 Prompt `28 -> 0`、全局 Regex disabled、A/B 会话隔离和 Galgame 恢复通过；390px 设置区 3×2 无溢出、console error=0，临时数据清零 |
+| WC47 | 完整 HTML 开场可视化裁切修复 | Done | 2026-07-15 完整 HTML 文档直接挂载到 sandbox body，仅片段保留 `.mes_text` 兼容壳；剥离 Regex 套在完整文档外的单层格式包装，document iframe 高度上限放宽至 1200。目标卡 `蛊真人v2.0` 桌面/390px 线上实测 iframe/body/app 均为 680px，黑块消失；Tavo 高级渲染、sandbox/CSP 回归通过，临时用户/会话清零 |
 
 ## 本轮完成记录
 
