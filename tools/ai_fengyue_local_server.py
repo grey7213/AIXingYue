@@ -291,7 +291,11 @@ def split_model_names(value: object) -> list[str]:
 
 
 def model_selection_id(preset_id: str, model: str) -> str:
-    slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(model or "")).strip("-")
+    raw_model = str(model or "").strip()
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", raw_model).strip("-")
+    if any(ord(ch) > 127 for ch in raw_model):
+        digest = hashlib.sha1(raw_model.encode("utf-8")).hexdigest()[:8]
+        slug = f"{slug}-{digest}" if slug else digest
     return f"{preset_id}::{slug or hashlib.sha1(str(model).encode('utf-8')).hexdigest()[:10]}"
 
 
@@ -6631,9 +6635,11 @@ class Store:
                     "protocol": p.get("protocol") or "openai",
                     "model": model,
                     "enabled": bool(p.get("enabled")),
-                    "is_default": p["id"] == default_id and idx == 0,
+                    "is_default": p["id"] == default_id and model == default_model,
                 }
-                for idx, model in enumerate(split_model_names(p.get("models") or p.get("model")) or [p.get("model") or ""])
+                for models in [split_model_names(p.get("models") or p.get("model")) or [p.get("model") or ""]]
+                for default_model in [str(p.get("model") or "") if str(p.get("model") or "") in models else models[0]]
+                for model in models
             ]
         ]
         if not visible and presets:
@@ -9803,7 +9809,8 @@ _CHAT_REPLY_PHRASES = [
 
 def build_chat_reply(content: str, app_name: str) -> str:
     role = (app_name or "Ta").strip() or "Ta"
-    q = content.strip().splitlines()[0][:60]
+    lines = str(content or "").strip().splitlines()
+    q = (lines[0] if lines else "继续").strip()[:60] or "继续"
     template = _CHAT_REPLY_PHRASES[abs(hash(content)) % len(_CHAT_REPLY_PHRASES)]
     return template.format(role=role, q=q)
 
@@ -11039,6 +11046,34 @@ def process_model_reply(app: dict, reply: object, *, char_name: str = "", user_n
     rendered = apply_regex_scripts(rendered, app or {})
     rendered = apply_global_regex_scripts(rendered, global_regex_preset, placement=2, stage="render", depth=0)
     return normalize_visible_chat_reply(rendered)
+
+
+def stream_reply_requires_buffering(app: dict, global_regex_preset: object = None) -> bool:
+    """Keep full-reply transforms off the wire until their final output is ready."""
+    if enabled_regex_scripts(app or {}):
+        return True
+    if isinstance(global_regex_preset, dict) and global_regex_preset.get("enabled"):
+        scripts = global_regex_preset.get("scripts") if isinstance(global_regex_preset.get("scripts"), list) else []
+        for index, raw in enumerate(scripts):
+            if not isinstance(raw, dict):
+                continue
+            script = normalize_full_regex_script(raw, index)
+            if script.get("disabled") or not str(script.get("findRegex") or "").strip():
+                continue
+            placements = script.get("placement") or [2]
+            if 2 not in placements:
+                continue
+            if script.get("promptOnly") and not script.get("markdownOnly"):
+                continue
+            return True
+    extras = app_extras(app or {})
+    for entry in extras.get("world_info") or []:
+        if not isinstance(entry, dict) or not entry.get("enabled", True):
+            continue
+        content = str(entry.get("content") or "").lower()
+        if "[render:" in content or "@@render_" in content:
+            return True
+    return False
 
 
 def build_user_llm_request(app: dict, content: str, messages: list[dict] | None = None, settings: dict | None = None, persona: dict | None = None, context: dict | None = None) -> dict:
@@ -12670,6 +12705,7 @@ class Handler(BaseHTTPRequestHandler):
         user_message_id = ""
         reply_message_id = ""
         charged = False
+        generation_started = time.perf_counter()
         try:
             self.send_sse_headers(200)
             self.write_sse_event("start", {"conversation_id": conv_id, "app_id": app_id})
@@ -12715,24 +12751,57 @@ class Handler(BaseHTTPRequestHandler):
                 app = dict(app_row) if app_row else app
                 chunks = chunk_text(str(reply or ""))
             if app:
-                raw_reply = "".join(str(chunk) for chunk in chunks if chunk)
+                global_regex_preset = settings.get("global_regex_preset") if isinstance(settings, dict) else None
+                buffered_reply = stream_reply_requires_buffering(app, global_regex_preset)
+                raw_parts: list[str] = []
+                first_delta_ms = None
+                upstream_started = time.perf_counter()
+                for chunk in chunks:
+                    if not chunk:
+                        continue
+                    text_chunk = str(chunk)
+                    if first_delta_ms is None:
+                        first_delta_ms = round((time.perf_counter() - generation_started) * 1000, 1)
+                        self.write_sse_event("status", {
+                            "phase": "postprocessing" if buffered_reply else "streaming",
+                            "first_delta_ms": first_delta_ms,
+                            "buffered": buffered_reply,
+                        })
+                    raw_parts.append(text_chunk)
+                    if not buffered_reply:
+                        reply_parts.append(text_chunk)
+                        self.write_sse_event("delta", {"content": text_chunk})
+                    if self.client_connection_closed():
+                        raise ConnectionAbortedError("client disconnected")
+                upstream_total_ms = round((time.perf_counter() - upstream_started) * 1000, 1)
+                raw_reply = "".join(raw_parts)
                 if not raw_reply.strip():
                     raise RuntimeError("模型没有返回有效内容，请重试")
+                postprocess_started = time.perf_counter()
                 reply_text = process_model_reply(
                     app,
                     raw_reply,
                     char_name=str(app.get("name") or app_name or "Ta"),
                     user_name=str((persona or {}).get("name") or "你"),
                     template_context=context,
-                    global_regex_preset=settings.get("global_regex_preset") if isinstance(settings, dict) else None,
+                    global_regex_preset=global_regex_preset,
                 )
+                postprocess_ms = round((time.perf_counter() - postprocess_started) * 1000, 1)
                 if not str(reply_text or "").strip():
                     raise RuntimeError("模型回复处理后为空，请重试")
                 if self.client_connection_closed():
                     raise ConnectionAbortedError("client disconnected")
-                for chunk in chunk_text(reply_text):
-                    reply_parts.append(str(chunk))
-                    self.write_sse_event("delta", {"content": str(chunk)})
+                if buffered_reply:
+                    for chunk in chunk_text(reply_text):
+                        reply_parts.append(str(chunk))
+                        self.write_sse_event("delta", {"content": str(chunk)})
+                log(
+                    "llm timing mode=chat "
+                    f"app={app_id} model={settings.get('model') or ''} buffered={int(buffered_reply)} "
+                    f"first_delta_ms={first_delta_ms if first_delta_ms is not None else -1} "
+                    f"upstream_total_ms={upstream_total_ms} postprocess_ms={postprocess_ms} "
+                    f"total_ms={round((time.perf_counter() - generation_started) * 1000, 1)}"
+                )
             else:
                 for chunk in chunks:
                     if not chunk:
@@ -12840,6 +12909,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         reply_message_id = ""
         charged = False
+        generation_started = time.perf_counter()
         try:
             self.send_sse_headers(200)
             self.write_sse_event("start", {"conversation_id": conv_id, "app_id": app_id, "mode": "continue"})
@@ -12854,29 +12924,49 @@ class Handler(BaseHTTPRequestHandler):
             )
             context = self.store.chat_context(user["id"], app_id, conv_id, instruction, history)
             settings = self.store.effective_llm_settings(app, user_id=user["id"])
-            raw_reply = "".join(
-                str(chunk)
-                for chunk in stream_user_llm_chunks(
-                    app,
-                    instruction,
-                    history,
-                    settings,
-                    persona,
-                    context,
-                    strict=True,
-                )
-                if chunk
-            )
+            global_regex_preset = settings.get("global_regex_preset") if isinstance(settings, dict) else None
+            buffered_reply = stream_reply_requires_buffering(app, global_regex_preset)
+            raw_parts: list[str] = []
+            first_delta_ms = None
+            upstream_started = time.perf_counter()
+            for chunk in stream_user_llm_chunks(
+                app,
+                instruction,
+                history,
+                settings,
+                persona,
+                context,
+                strict=True,
+            ):
+                if not chunk:
+                    continue
+                text_chunk = str(chunk)
+                if first_delta_ms is None:
+                    first_delta_ms = round((time.perf_counter() - generation_started) * 1000, 1)
+                    self.write_sse_event("status", {
+                        "phase": "postprocessing" if buffered_reply else "streaming",
+                        "first_delta_ms": first_delta_ms,
+                        "buffered": buffered_reply,
+                    })
+                raw_parts.append(text_chunk)
+                if not buffered_reply:
+                    self.write_sse_event("delta", {"content": text_chunk})
+                if self.client_connection_closed():
+                    raise ConnectionAbortedError("client disconnected")
+            upstream_total_ms = round((time.perf_counter() - upstream_started) * 1000, 1)
+            raw_reply = "".join(raw_parts)
             if not raw_reply.strip():
                 raise RuntimeError("模型没有返回有效续写，请重试")
+            postprocess_started = time.perf_counter()
             reply_text = process_model_reply(
                 app,
                 raw_reply,
                 char_name=str(app.get("name") or conversation.get("app_name") or "Ta"),
                 user_name=str((persona or {}).get("name") or "你"),
                 template_context=context,
-                global_regex_preset=settings.get("global_regex_preset") if isinstance(settings, dict) else None,
+                global_regex_preset=global_regex_preset,
             )
+            postprocess_ms = round((time.perf_counter() - postprocess_started) * 1000, 1)
             reply_text = str(reply_text or "").strip()
             if not reply_text:
                 raise RuntimeError("模型续写处理后为空，请重试")
@@ -12884,8 +12974,16 @@ class Handler(BaseHTTPRequestHandler):
                 raise RuntimeError("模型重复了上一条回复，请重试")
             if self.client_connection_closed():
                 raise ConnectionAbortedError("client disconnected")
-            for chunk in chunk_text(reply_text):
-                self.write_sse_event("delta", {"content": str(chunk)})
+            if buffered_reply:
+                for chunk in chunk_text(reply_text):
+                    self.write_sse_event("delta", {"content": str(chunk)})
+            log(
+                "llm timing mode=continue "
+                f"app={app_id} model={settings.get('model') or ''} buffered={int(buffered_reply)} "
+                f"first_delta_ms={first_delta_ms if first_delta_ms is not None else -1} "
+                f"upstream_total_ms={upstream_total_ms} postprocess_ms={postprocess_ms} "
+                f"total_ms={round((time.perf_counter() - generation_started) * 1000, 1)}"
+            )
             if self.client_connection_closed(0.05):
                 raise ConnectionAbortedError("client disconnected")
             reply_row = self.store.append_message(conv_id, user["id"], "assistant", reply_text)

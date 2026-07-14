@@ -63,6 +63,16 @@
 
 ## Reusable Pitfalls
 
+- Symptom: 后台加入 `假流式/`、`流式抗截断/` 等中文前缀模型后，公开模型数量看似增加，但不同前缀的同名模型选择 ID 重复，实际只能选中第一项；默认推荐项也可能错误落在模型列表第一行。
+  Cause: `model_selection_id()` 只保留 ASCII slug，中文前缀和 `/` 被剥离；`public_model_presets()` 又固定把默认 preset 的第一项标为默认，没有按 preset 的真实 `model` 字段判断。
+  Fix: 含非 ASCII 的模型选择 ID 在 slug 后加原模型名 SHA-1 短后缀，纯 ASCII 旧 ID 保持兼容；公开默认项按 preset `model` 精确匹配。合并重复 preset 后迁移仍引用旧 preset ID 的角色卡。
+  Verify: 2026-07-15 线上普通/假流式/流式抗截断三组各 16，共 48 个模型，`unique_ids=48`、`unique_models=48`，minimal 为唯一推荐默认，公开响应无 API Key。
+
+- Symptom: 聊天页长期显示“已思考 20–50 秒”，即使上游模型早已开始返回 SSE delta，用户仍看不到任何进度。
+  Cause: `/console/api/web/chat/stream` 和 continue 入口先 `join` 完整上游流，再执行 Prompt Template/世界书/Regex，最后才向浏览器发送分块；同时线上默认使用较慢的 `gemini-2.5-pro-max-cli`，CelestiAI 还存在 429/500/timeout 波动。
+  Fix: 默认模型改为实测更快的 `gemini-2.5-pro-minimal-cli`；记录首 delta/上游总耗时/后处理耗时；需要全文 Regex 时首 delta 到达即发 `postprocessing` 状态，安全无全文变换时逐 delta 真流式。不要为了追求首字速度直接暴露 Regex/Tavo 处理前文本。
+  Verify: 2026-07-15 相同临时角色线上 minimal 总耗时约 18.7 秒、max 约 38.5 秒；buffered 请求约 2.1 秒收到“模型已响应，正在整理角色回复”，积分扣费、message_end、清理和 DB quick_check 正常。
+
 - Symptom: 用户提供新版 `农场.zip`，直接部署其 React `dist` 看起来能运行，但会重新出现 API Key 绑定、localStorage 造币、硬编码收益和虚构好友/统计。
   Cause: 压缩包是视觉交互原型，不含真实 API；新版只是“去虚构数据”的 UI 修订，仍不是生产实现，且构建包含 Trae 开发定位属性和 sourcemap。
   Fix: 只移植新版好友空状态与作物阶段视觉；继续使用站点 Bearer 鉴权、服务端农场状态、幂等动作和 `daily_reward_claims`，不部署原型 dist、不复制 API Key/localStorage 逻辑。

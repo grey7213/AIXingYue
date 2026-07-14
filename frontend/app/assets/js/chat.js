@@ -1100,6 +1100,7 @@ function chatPage() {
     generationStartedAt: 0,
     generationElapsedSeconds: 0,
     generationMode: '',
+    generationPhase: '',
     tavoPluginFragments: [],
     _typeTimer: null,
     _generationTimer: null,
@@ -1284,6 +1285,7 @@ function chatPage() {
       if (this._generationTimer) clearInterval(this._generationTimer);
       this.replying = true;
       this.generationMode = mode;
+      this.generationPhase = 'thinking';
       this.generationStartedAt = Date.now();
       this.generationElapsedSeconds = 0;
       this._generationTimer = setInterval(() => {
@@ -1301,6 +1303,7 @@ function chatPage() {
       this.generationStartedAt = 0;
       this.generationElapsedSeconds = 0;
       this.generationMode = '';
+      this.generationPhase = '';
       const shouldRefresh = this._refreshAfterGeneration;
       this._refreshAfterGeneration = false;
       return shouldRefresh;
@@ -1316,6 +1319,7 @@ function chatPage() {
       this.generationStartedAt = 0;
       this.generationElapsedSeconds = 0;
       this.generationMode = '';
+      this.generationPhase = '';
       this._refreshAfterGeneration = false;
     },
 
@@ -1334,6 +1338,12 @@ function chatPage() {
         swipe: this.chatText('swipe_generating_text', '生成新回复中'),
       };
       const action = modeMap[this.generationMode] || this.chatText('generating_text', '生成中');
+      if (this.generationPhase === 'postprocessing') {
+        return `${action} · 模型已响应，正在整理角色回复 · ${this.generationElapsedSeconds || 0} 秒`;
+      }
+      if (this.generationPhase === 'streaming') {
+        return `${action} · 正在接收回复 · ${this.generationElapsedSeconds || 0} 秒`;
+      }
       return `${action} · ${this.chatText('thinking_elapsed_prefix', '已思考')} ${this.generationElapsedSeconds || 0} ${this.chatText('thinking_elapsed_suffix', '秒')}`;
     },
 
@@ -2007,6 +2017,7 @@ function chatPage() {
           },
           onDelta: (chunk) => {
             if (!this.isGenerationActive(generationSeq, initialConversationId)) return;
+            this.generationPhase = 'streaming';
             replyMsg.content += chunk;
             this.touchMessage(replyMsg);
             this.scrollToBottom();
@@ -2019,6 +2030,12 @@ function chatPage() {
             this.updatePointsFromPayload(event);
             replyMsg._typing = false;
             this.touchMessage(replyMsg);
+          },
+          onEvent: (event, payload) => {
+            if (!this.isGenerationActive(generationSeq, initialConversationId)) return;
+            if (event === 'status' && ['thinking', 'streaming', 'postprocessing'].includes(payload?.phase)) {
+              this.generationPhase = payload.phase;
+            }
           },
         }, { signal });
         if (!this.isGenerationActive(generationSeq, initialConversationId)) return;
@@ -2065,6 +2082,7 @@ function chatPage() {
         }, {
           onDelta: (chunk) => {
             if (!this.isGenerationActive(generationSeq, conversationId)) return;
+            this.generationPhase = 'streaming';
             replyMsg.content += chunk;
             this.touchMessage(replyMsg);
             this.scrollToBottom();
@@ -2077,6 +2095,12 @@ function chatPage() {
             replyMsg._typing = false;
             this.updatePointsFromPayload(event);
             this.touchMessage(replyMsg);
+          },
+          onEvent: (event, payload) => {
+            if (!this.isGenerationActive(generationSeq, conversationId)) return;
+            if (event === 'status' && ['thinking', 'streaming', 'postprocessing'].includes(payload?.phase)) {
+              this.generationPhase = payload.phase;
+            }
           },
         }, { signal });
         if (!this.isGenerationActive(generationSeq, conversationId)) return;
