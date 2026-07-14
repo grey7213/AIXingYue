@@ -4,6 +4,7 @@
 - 2026-07-12 QQ 验证码与空角色修复：邮件改为惑梦品牌发件名及 HTML/纯文本双格式；线上 2778582531@qq.com 的 5 次邮件经 Resend 均为 delivered，后续仍需补 DMARC 以改善 QQ 入箱分类。`local_only` 标签零结果不再回退旧探索缓存，标签改为 JSON 精确匹配，已删除角色详情返回 404 而不是“本地角色”占位卡。
 - 2026-07-13 正式开放注册与鉴权加固：`BETA_MAX_REGISTERED_USERS=0`、新用户 `500` 惑梦币（约 10 次回复）；token 升级为 30 天 HMAC 签名格式，旧 token 失效并由前端清理后引导重新登录；匿名私有接口返回真实 HTTP 401，私有/草稿角色匿名返回 404；注册、聊天和支付回归通过。
 - 2026-07-15 对话模型目录与延迟优化：CelestiAI 模型补齐为普通/假流式/流式抗截断三组共 48 个，中文前缀选择 ID 唯一；默认从 max 改为实测更快的 minimal。后端记录首 delta/上游/后处理耗时，需要全文 Regex 时约 2 秒即可显示“模型已响应，正在整理角色回复”，安全场景支持真流式。
+- 2026-07-15 单会话全局预设开关：对话设置新增“关闭全局预设”，仅当前普通会话同时停用后台全局 Prompt 与全局 Regex；角色提示词、世界书、角色 Regex、长期记忆和群聊不受影响。刷新/切换/复制保持，发送/续写/重生成/new swipe 共用设置。
 
 | ID | 任务 | 状态 | 验证 |
 |----|------|------|------|
@@ -52,6 +53,7 @@
 | WC43 | Tavo `.tpg` 插件导入和安全运行时贡献 | Done | 2026-07-10 新增 `specs/tavo-plugin-integration-*`；后端新增 `tavo_plugins` 表、`.tpg/.zip` 包解析和 manifest 校验，限制包大小/展开大小/文件数/路径越界，保存原始包和 manifest/contributes；后台新增“Tavo 插件”Tab，支持上传、查看 manifest、启用/停用、删除；Web 新增 `/console/api/web/tavo-plugins/runtime-contributions`，聊天高级渲染加载已启用插件 HTML fragments 并以无脚本模式二次清洗后注入 sandbox。MCP 不接入生产公网：当前无本地 7347/Tavo token，且 MCP 是高权限本地远控。验证：`py_compile`、`node --check`、`verify_tavo_plugin_local.py`、`verify_tavo_plugin_browser.py` 均通过，浏览器导入并启用测试插件，console error 0。 |
 | WC44 | 在线支付方式与订单列表体验优化 | Done | 默认支付宝、浅蓝支付方式卡片、单一 `确认支付 ¥xx.xx` 按钮、当前用户分页订单列表；线上 pending 订单/余额不变/敏感字段隔离验证通过，1440 与 390px 无横向溢出和 console error；测试数据已清理 |
 | WC45 | 48 个对话模型与延迟优化 | Done | 2026-07-15 公开模型 `48/48` 唯一，三组各 16，minimal 为推荐默认；同提示线上 minimal `18.7s`、max `38.5s`，buffered 模式约 `2.1s` 发出模型已响应状态；backend/Nginx/health/DB/browser 回归通过 |
+| WC46 | 单会话关闭全局预设 | Done | 2026-07-15 线上 Prompt `28 -> 0`、全局 Regex disabled、A/B 会话隔离和 Galgame 恢复通过；390px 设置区 3×2 无溢出、console error=0，临时数据清零 |
 
 ## 本轮完成记录
 

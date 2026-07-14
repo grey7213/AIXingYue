@@ -215,6 +215,10 @@ export const api = {
     method: 'POST',
     body: { enabled: !!enabled },
   }),
+  setConversationGlobalPreset: (convId, enabled) => rawRequest(`/console/api/web/conversations/${encodeURIComponent(convId)}/global-preset`, {
+    method: 'POST',
+    body: { enabled: !!enabled },
+  }),
   sendChat: (payload) => rawRequest('/console/api/web/chat', { method: 'POST', body: payload }),
   sendChatStream: (payload, handlers, options) => sseRequest('/console/api/web/chat/stream', payload, handlers, options),
   continueChatStream: (payload, handlers, options) => sseRequest('/console/api/web/chat/continue/stream', payload, handlers, options),

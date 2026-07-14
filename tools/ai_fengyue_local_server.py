@@ -2466,6 +2466,7 @@ class Store:
                     title text,
                     last_message text,
                     galgame_enabled integer not null default 0,
+                    global_preset_enabled integer not null default 1,
                     created_at integer not null,
                     updated_at integer not null
                 );
@@ -2910,6 +2911,10 @@ class Store:
             if "galgame_enabled" not in columns:
                 self.conn.execute(
                     "alter table conversations add column galgame_enabled integer not null default 0"
+                )
+            if "global_preset_enabled" not in columns:
+                self.conn.execute(
+                    "alter table conversations add column global_preset_enabled integer not null default 1"
                 )
             self.conn.commit()
 
@@ -4349,6 +4354,7 @@ class Store:
                 return None
             item = dict(row)
             item["galgame_enabled"] = bool(item.get("galgame_enabled"))
+            item["global_preset_enabled"] = bool(item.get("global_preset_enabled", 1))
             return item
 
     def set_conversation_galgame(self, conv_id: str, user_id: str, enabled: bool) -> dict | None:
@@ -4369,6 +4375,28 @@ class Store:
                 (conv_id, user_id),
             ).fetchone())
             updated["galgame_enabled"] = bool(updated.get("galgame_enabled"))
+            updated["global_preset_enabled"] = bool(updated.get("global_preset_enabled", 1))
+            return updated
+
+    def set_conversation_global_preset(self, conv_id: str, user_id: str, enabled: bool) -> dict | None:
+        with self.lock:
+            row = self.conn.execute(
+                "select * from conversations where id=? and user_id=?",
+                (conv_id, user_id),
+            ).fetchone()
+            if not row:
+                return None
+            self.conn.execute(
+                "update conversations set global_preset_enabled=? where id=? and user_id=?",
+                (1 if enabled else 0, conv_id, user_id),
+            )
+            self.conn.commit()
+            updated = dict(self.conn.execute(
+                "select * from conversations where id=? and user_id=?",
+                (conv_id, user_id),
+            ).fetchone())
+            updated["galgame_enabled"] = bool(updated.get("galgame_enabled"))
+            updated["global_preset_enabled"] = bool(updated.get("global_preset_enabled", 1))
             return updated
 
     def append_message(self, conv_id: str, user_id: str, role: str, content: str, swipes: list | None = None) -> sqlite3.Row:
@@ -4419,6 +4447,7 @@ class Store:
             item["favorited"] = bool(item.get("favorited"))
             item["liked"] = bool(item.get("liked"))
             item["galgame_enabled"] = bool(item.get("galgame_enabled"))
+            item["global_preset_enabled"] = bool(item.get("global_preset_enabled", 1))
             item["user_tags"] = self.list_user_app_tags(user_id, str(item.get("app_id") or ""))
             item.pop("current_app_name", None)
             item.pop("current_app_icon", None)
@@ -4683,8 +4712,8 @@ class Store:
             title = (base_title + " 副本")[:80]
             self.conn.execute(
                 """
-                insert into conversations(id,user_id,app_id,app_name,app_icon,title,last_message,galgame_enabled,created_at,updated_at)
-                values(?,?,?,?,?,?,?,?,?,?)
+                insert into conversations(id,user_id,app_id,app_name,app_icon,title,last_message,galgame_enabled,global_preset_enabled,created_at,updated_at)
+                values(?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     new_id,
@@ -4695,6 +4724,7 @@ class Store:
                     title,
                     source.get("last_message") or "",
                     1 if source.get("galgame_enabled") else 0,
+                    1 if source.get("global_preset_enabled", 1) else 0,
                     ts,
                     ts,
                 ),
@@ -5135,10 +5165,13 @@ class Store:
             "memory_settings": policy,
         }
         conversation = self.get_conversation(conv_id, user_id) if conv_id else None
-        if conversation and bool(conversation.get("galgame_enabled")):
-            base_context["conversation_settings"] = {
-                "galgame_enabled": True,
+        if conversation:
+            conversation_settings = {
+                "global_preset_enabled": bool(conversation.get("global_preset_enabled", 1)),
             }
+            if bool(conversation.get("galgame_enabled")):
+                conversation_settings["galgame_enabled"] = True
+            base_context["conversation_settings"] = conversation_settings
         out = dict(base_context)
         out.update(self.template_context(user_id, app_id, conv_id, base_context))
         return out
@@ -11048,6 +11081,21 @@ def process_model_reply(app: dict, reply: object, *, char_name: str = "", user_n
     return normalize_visible_chat_reply(rendered)
 
 
+def apply_conversation_global_preset_override(settings: dict | None, context: dict | None = None) -> dict:
+    """Disable site-wide prompt/regex presets for one ordinary conversation only."""
+    source = settings if isinstance(settings, dict) else {}
+    conversation_settings = context.get("conversation_settings") if isinstance(context, dict) else None
+    if not isinstance(conversation_settings, dict) or bool(conversation_settings.get("global_preset_enabled", True)):
+        return source
+    runtime = dict(source)
+    for key in ("global_prompt_preset", "global_regex_preset"):
+        preset = runtime.get(key)
+        disabled = dict(preset) if isinstance(preset, dict) else {}
+        disabled["enabled"] = False
+        runtime[key] = disabled
+    return runtime
+
+
 def stream_reply_requires_buffering(app: dict, global_regex_preset: object = None) -> bool:
     """Keep full-reply transforms off the wire until their final output is ready."""
     if enabled_regex_scripts(app or {}):
@@ -11077,7 +11125,7 @@ def stream_reply_requires_buffering(app: dict, global_regex_preset: object = Non
 
 
 def build_user_llm_request(app: dict, content: str, messages: list[dict] | None = None, settings: dict | None = None, persona: dict | None = None, context: dict | None = None) -> dict:
-    settings = settings or {}
+    settings = apply_conversation_global_preset_override(settings or {}, context)
     enabled = bool(settings.get("enabled", True))
     app_model = str(app.get("llm_model") or "").strip()
     protocol = normalize_llm_protocol(settings.get("protocol"), base_url=settings.get("base_url"))
@@ -11313,13 +11361,14 @@ def build_user_llm_request(app: dict, content: str, messages: list[dict] | None 
 
 
 def call_user_llm(app: dict, content: str, messages: list[dict] | None = None, settings: dict | None = None, persona: dict | None = None, context: dict | None = None) -> str:
-    request_info = build_user_llm_request(app, content, messages, settings, persona, context)
+    runtime_settings = apply_conversation_global_preset_override(settings or {}, context)
+    request_info = build_user_llm_request(app, content, messages, runtime_settings, persona, context)
     char_name = str(app.get("name") or "Ta").strip() or "Ta"
     user_name = str((persona or {}).get("name") or "").strip() or "你"
     template_context = dict(context) if isinstance(context, dict) else {}
     template_context.setdefault("app", app)
     template_context.setdefault("app_id", str(app.get("id") or ""))
-    global_regex_preset = settings.get("global_regex_preset") if isinstance(settings, dict) else None
+    global_regex_preset = runtime_settings.get("global_regex_preset")
     if not request_info.get("enabled"):
         fallback = str(request_info.get("fallback") or build_chat_reply(content, char_name))
         return process_model_reply(app, fallback, char_name=char_name, user_name=user_name, template_context=template_context, global_regex_preset=global_regex_preset)
@@ -12730,14 +12779,19 @@ class Handler(BaseHTTPRequestHandler):
                 app["llm_model"] = model_override
                 settings = self.store.effective_llm_settings(app, user_id=user["id"])
             global_runtime_active = bool((settings.get("global_prompt_preset") or {}).get("enabled") or (settings.get("global_regex_preset") or {}).get("enabled"))
+            runtime_settings = settings
             if app and (model_override or app.get("source") in ("user", "admin") or global_runtime_active):
                 try:
                     history = [dict(row) for row in self.store.list_messages(conv_id, user["id"], limit=100)]
                 except Exception:
                     history = []
                 context = self.store.chat_context(user["id"], app_id, conv_id, content, history)
-                chunks = stream_user_llm_chunks(app, content, history, settings, persona, context, strict=True)
+                runtime_settings = apply_conversation_global_preset_override(settings, context)
+                chunks = stream_user_llm_chunks(app, content, history, runtime_settings, persona, context, strict=True)
             else:
+                if app:
+                    context = self.store.chat_context(user["id"], app_id, conv_id, content, [])
+                    runtime_settings = apply_conversation_global_preset_override(settings, context)
                 app_row, reply = chat_reply_for_app(
                     self.store,
                     user["id"],
@@ -12751,7 +12805,7 @@ class Handler(BaseHTTPRequestHandler):
                 app = dict(app_row) if app_row else app
                 chunks = chunk_text(str(reply or ""))
             if app:
-                global_regex_preset = settings.get("global_regex_preset") if isinstance(settings, dict) else None
+                global_regex_preset = runtime_settings.get("global_regex_preset") if isinstance(runtime_settings, dict) else None
                 buffered_reply = stream_reply_requires_buffering(app, global_regex_preset)
                 raw_parts: list[str] = []
                 first_delta_ms = None
@@ -12924,7 +12978,8 @@ class Handler(BaseHTTPRequestHandler):
             )
             context = self.store.chat_context(user["id"], app_id, conv_id, instruction, history)
             settings = self.store.effective_llm_settings(app, user_id=user["id"])
-            global_regex_preset = settings.get("global_regex_preset") if isinstance(settings, dict) else None
+            runtime_settings = apply_conversation_global_preset_override(settings, context)
+            global_regex_preset = runtime_settings.get("global_regex_preset")
             buffered_reply = stream_reply_requires_buffering(app, global_regex_preset)
             raw_parts: list[str] = []
             first_delta_ms = None
@@ -12933,7 +12988,7 @@ class Handler(BaseHTTPRequestHandler):
                 app,
                 instruction,
                 history,
-                settings,
+                runtime_settings,
                 persona,
                 context,
                 strict=True,
@@ -14355,6 +14410,36 @@ class Handler(BaseHTTPRequestHandler):
                     "conversation": conversation,
                 })
 
+        if normalized.startswith("console/api/web/conversations/") and normalized.endswith("/global-preset"):
+            parts = normalized.split("/")
+            conv_id = parts[4] if len(parts) >= 6 else ""
+            if self.command.upper() != "POST":
+                return error_response("method not allowed", 405)
+            if not isinstance(body, dict) or not isinstance(body.get("enabled"), bool):
+                return error_response("enabled must be a boolean", 400)
+            conversation = self.store.set_conversation_global_preset(
+                conv_id,
+                user["id"],
+                bool(body["enabled"]),
+            )
+            if not conversation:
+                return error_response("conversation not found", 404)
+            enabled = bool(conversation.get("global_preset_enabled", 1))
+            prompt_preset = self.store.global_prompt_preset()
+            regex_preset = self.store.global_regex_preset()
+            galgame_status = galgame_prompt_runtime_status(
+                prompt_preset,
+                override_enabled=bool(conversation.get("galgame_enabled")),
+            )
+            return ok_response({
+                "conversation_id": conv_id,
+                "global_preset_enabled": enabled,
+                "global_prompt_effective_enabled": bool(enabled and prompt_preset.get("enabled")),
+                "global_regex_effective_enabled": bool(enabled and regex_preset.get("enabled")),
+                "galgame_enabled": bool(conversation.get("galgame_enabled")),
+                "galgame_effective_enabled": bool(enabled and galgame_status.get("effective_enabled")),
+            })
+
         if normalized.startswith("console/api/web/conversations/") and normalized.endswith("/galgame"):
             parts = normalized.split("/")
             conv_id = parts[4] if len(parts) >= 6 else ""
@@ -14373,9 +14458,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.store.global_prompt_preset(),
                 override_enabled=bool(conversation.get("galgame_enabled")),
             )
+            global_preset_enabled = bool(conversation.get("global_preset_enabled", 1))
+            runtime_status["effective_enabled"] = bool(global_preset_enabled and runtime_status.get("effective_enabled"))
             return ok_response({
                 "conversation_id": conv_id,
                 "galgame_enabled": bool(conversation.get("galgame_enabled")),
+                "global_preset_enabled": global_preset_enabled,
                 "preset_entry_identifier": GALGAME_PROMPT_IDENTIFIER,
                 "preset_entry_name": GALGAME_PROMPT_NAME,
                 **runtime_status,
@@ -14457,6 +14545,7 @@ class Handler(BaseHTTPRequestHandler):
                 "app_name": app_name,
                 "app_icon": app_icon,
                 "galgame_enabled": False,
+                "global_preset_enabled": True,
                 "messages": messages,
             })
 

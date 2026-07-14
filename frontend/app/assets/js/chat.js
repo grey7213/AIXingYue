@@ -1,4 +1,4 @@
-import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js?v=20260713-galgame-option';
+import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js?v=20260715-conversation-global-preset';
 import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-channels-closed';
 
 const STATUS_LABELS = {
@@ -1070,6 +1070,8 @@ function chatPage() {
     favoriteBusy: false,
     galgameEnabled: false,
     galgameBusy: false,
+    globalPresetEnabled: true,
+    globalPresetBusy: false,
     quickReplies: [],
     editingId: '',
     editingText: '',
@@ -1583,6 +1585,7 @@ function chatPage() {
         this.conversations = (r?.data?.list || r?.list || []).map(item => ({
           ...item,
           galgame_enabled: !!item?.galgame_enabled,
+          global_preset_enabled: item?.global_preset_enabled !== false,
         }));
       } catch {
         this.conversations = [];
@@ -1624,6 +1627,7 @@ function chatPage() {
       if (!this.appId) return;
       this.busy = true;
       this.galgameEnabled = false;
+      this.globalPresetEnabled = true;
       try {
         const r = await api.startConversation({ app_id: this.appId, app_name: this.appName, app_icon: this.appIcon });
         const data = r?.data || r;
@@ -1634,8 +1638,10 @@ function chatPage() {
           app_icon: this.appIcon || data.app_icon,
           title: this.appName || this.chatText('new_chat_title', '新对话'),
           galgame_enabled: !!data.galgame_enabled,
+          global_preset_enabled: data.global_preset_enabled !== false,
         };
         this.galgameEnabled = !!data.galgame_enabled;
+        this.globalPresetEnabled = data.global_preset_enabled !== false;
         this.messages = (data.messages || []).map(this.normMsg);
         this.messageTotal = this.messages.length;
         this.hasOlderMessages = false;
@@ -1676,6 +1682,7 @@ function chatPage() {
       const loadSeq = ++this._conversationLoadSeq;
       this.conversation = c;
       this.galgameEnabled = !!c?.galgame_enabled;
+      this.globalPresetEnabled = c?.global_preset_enabled !== false;
       this.appId = c.app_id;
       this.appName = c.app_name || c.title || this.chatText('conversation_fallback_title', '对话');
       this.appIcon = c.app_icon || '';
@@ -1710,9 +1717,11 @@ function chatPage() {
             ...this.conversation,
             ...data.conversation,
             galgame_enabled: !!data.conversation.galgame_enabled,
+            global_preset_enabled: data.conversation.global_preset_enabled !== false,
           };
           this.conversation = authoritative;
           this.galgameEnabled = authoritative.galgame_enabled;
+          this.globalPresetEnabled = authoritative.global_preset_enabled;
           const convIndex = this.conversations.findIndex(item => item.id === authoritative.id);
           if (convIndex >= 0) this.conversations.splice(convIndex, 1, { ...this.conversations[convIndex], ...authoritative });
         }
@@ -1750,6 +1759,29 @@ function chatPage() {
         alert(err?.message || 'Galgame 选项切换失败');
       } finally {
         this.galgameBusy = false;
+      }
+    },
+
+    async toggleGlobalPreset() {
+      const convId = this.conversation?.id;
+      if (!convId || this.globalPresetBusy) return;
+      const nextEnabled = !this.globalPresetEnabled;
+      this.globalPresetBusy = true;
+      try {
+        const r = await api.setConversationGlobalPreset(convId, nextEnabled);
+        if (this.conversation?.id !== convId) return;
+        const data = r?.data || r || {};
+        const enabled = data.global_preset_enabled !== false;
+        this.globalPresetEnabled = enabled;
+        this.conversation = { ...this.conversation, global_preset_enabled: enabled };
+        const convIndex = this.conversations.findIndex(item => item.id === convId);
+        if (convIndex >= 0) {
+          this.conversations.splice(convIndex, 1, { ...this.conversations[convIndex], global_preset_enabled: enabled });
+        }
+      } catch (err) {
+        alert(err?.message || '全局预设切换失败');
+      } finally {
+        this.globalPresetBusy = false;
       }
     },
 

@@ -63,6 +63,11 @@
 
 ## Reusable Pitfalls
 
+- Symptom: 给单个会话关闭全局预设后，全局 Prompt 不再出现，但全局 Regex 仍处理输出或流式仍被缓冲；也可能让旧 `source=upstream` 角色意外切回 upstream proxy 路径。
+  Cause: 只在 `build_user_llm_request()` 关闭 Prompt，没有同步回复后处理/缓冲判断；或在模型路由判断前直接修改 effective settings，改变了原有 provider 选择条件。
+  Fix: 会话设置使用 `global_preset_enabled` 默认 1；先用原始 settings 保持模型/provider 路由，再在取得真实普通会话 context 后浅复制 runtime settings，同时禁用 `global_prompt_preset` 与 `global_regex_preset`。blocking、SSE send、continue、regenerate、new swipe 都要覆盖，群聊不传该会话设置。
+  Verify: 2026-07-15 线上 A 会话 Prompt `28 -> 0`、global Regex disabled，B 会话仍开启；角色 Regex/世界书和群聊不受影响，Galgame 在恢复全局预设后重新生效，DB quick_check=ok。
+
 - Symptom: 后台加入 `假流式/`、`流式抗截断/` 等中文前缀模型后，公开模型数量看似增加，但不同前缀的同名模型选择 ID 重复，实际只能选中第一项；默认推荐项也可能错误落在模型列表第一行。
   Cause: `model_selection_id()` 只保留 ASCII slug，中文前缀和 `/` 被剥离；`public_model_presets()` 又固定把默认 preset 的第一项标为默认，没有按 preset 的真实 `model` 字段判断。
   Fix: 含非 ASCII 的模型选择 ID 在 slug 后加原模型名 SHA-1 短后缀，纯 ASCII 旧 ID 保持兼容；公开默认项按 preset `model` 精确匹配。合并重复 preset 后迁移仍引用旧 preset ID 的角色卡。
