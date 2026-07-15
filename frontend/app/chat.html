@@ -1476,7 +1476,7 @@
       .generation-status__dot { animation: none !important; transition: none !important; }
     }
   </style>
-  <script type="module" src="/app/assets/js/chat.js?v=20260715-full-document-render"></script>
+  <script type="module" src="/app/assets/js/chat.js?v=20260716-card-experience"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
@@ -1799,7 +1799,7 @@
             <h3 x-text="group.label"></h3>
             <template x-for="preset in group.list" :key="preset.id">
               <button type="button" class="model-picker-item" :class="{ 'is-current': currentModelId === preset.id }" @click="selectModel(preset.id)">
-                <span class="model-picker-item__main"><b class="model-picker-item__status"></b><span><strong x-text="preset.model || preset.name"></strong><small x-text="preset.name !== preset.model ? preset.name : modelProviderLabel(group.key)"></small><em x-show="preset.is_default">推荐模型</em><em class="is-current-label" x-show="currentModelId === preset.id">当前模型</em></span></span>
+                <span class="model-picker-item__main"><b class="model-picker-item__status"></b><span><strong x-text="preset.model || preset.name"></strong><small x-text="`${preset.name !== preset.model ? preset.name : '站点模型'} · ${preset.price_label || '50 惑梦币/次'}`"></small><em x-show="preset.is_default">推荐模型</em><em class="is-current-label" x-show="currentModelId === preset.id">当前模型</em></span></span>
                 <span class="model-picker-item__side"><small>可用</small><i></i></span>
               </button>
             </template>
@@ -1809,6 +1809,7 @@
       </div>
       <footer class="model-picker-sheet__foot"><span>绿色表示站点已启用；不代表实时延迟</span><button type="button" @click="closeModelPicker">完成</button></footer>
     </section>
+    <div id="card-experience-root" x-ignore aria-live="polite"></div>
   </div>
 </body>
 </html>

@@ -9,7 +9,8 @@
   <script src="/assets/vendor/tailwindcss-browser.js?v=20260713-local"></script>
   <link rel="stylesheet" href="/app/assets/css/app.css?v=20260712-preview-fix">
   <link rel="stylesheet" href="/app/assets/css/worldbook-editor.css?v=20260713">
-  <script type="module" src="/app/assets/js/create.js?v=20260713-role-voice"></script>
+  <link rel="stylesheet" href="/app/assets/css/card-experience-editor.css?v=20260716">
+  <script type="module" src="/app/assets/js/create.js?v=20260716-card-maker"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen creator-editor-page">
@@ -63,7 +64,7 @@
           </template>
           <span x-text="form.is_public ? creatorText('public_text', '公开') : creatorText('private_text', '私密')"></span>
         </button>
-        <button class="editor-toolbar__primary" @click="submit" :disabled="loading || uploading || uploadingBg">
+        <button class="editor-toolbar__primary" @click="submit" :disabled="loading || uploading || uploadingBg || uploadingMedia">
           <template x-if="!loading">
             <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 21v-8H7v8M7 3v5h8M5 21h14a2 2 0 002-2V7l-5-5H5a2 2 0 00-2 2v15a2 2 0 002 2z"/></svg>
           </template>
@@ -328,6 +329,7 @@
           </div>
           <div class="editor-group__body" x-show="expand.worldinfo">
             <div class="editor-group__hint" x-text="creatorText('world_hint', '设定条目支持关键词、常驻、模板变量和全局注入标记，如 [GENERATE:BEFORE]、[GENERATE:AFTER]、@@if、@INJECT。')"></div>
+            <div class="experience-guide" x-show="platformWorldbookApplied"><strong>平台安全规则</strong><span>反扒世界书由服务端自动应用，正文已隐藏，不计入下方作者世界书数量，也不可编辑或删除。</span></div>
             <template x-for="(e, i) in form.world_info" :key="e.id || i">
               <details class="world-entry-card" :open="i === 0">
                 <summary class="world-entry-card__summary"><button type="button" class="world-entry-switch" :class="{ 'is-on': e.enabled }" @click.prevent.stop="e.enabled=!e.enabled"><i></i></button><span class="world-entry-card__main"><strong x-text="e.name || `世界书条目 ${i+1}`"></strong><small x-text="(e.keysText || (e.constant ? '常驻条目' : '未配置关键词')) + ' · ' + (e.position === 'depth' ? '@Depth' : (e.position === 'post_history' ? '历史后' : '↑ Char'))"></small></span><span class="world-entry-card__prob" x-text="`${e.probability ?? 100}%`"></span><span class="world-entry-card__chevron">›</span></summary>
@@ -348,6 +350,24 @@
                 <input class="xy-input text-sm" x-model="form.world_info[i].keysText" :placeholder="creatorText('world_keys_placeholder', '触发关键词，用逗号分隔（例：苏妲己，狐狸）')">
                 <input class="xy-input text-sm" x-model="form.world_info[i].secondaryKeysText" :placeholder="creatorText('world_secondary_keys_placeholder', '二级关键词，可选；启用选择性触发时需同时命中')">
                 <textarea class="xy-input text-sm" style="min-height:80px" x-model="form.world_info[i].content" :placeholder="creatorText('world_content_placeholder', '命中时注入的设定内容。可用 @@if getvar(&quot;flag&quot;)、[GENERATE:BEFORE] 或 @INJECT pos=0,role=system。')"></textarea>
+                <section class="world-media-panel" x-show="canUseAdvancedCreation()">
+                  <div class="world-media-panel__head"><div><strong>关联素材</strong><small>把角色立绘、地点背景或剧情 BGM 绑定到这个设定条目</small></div><span x-show="uploadingMedia">上传中…</span></div>
+                  <div class="world-media-panel__actions">
+                    <template x-for="kind in ['portrait', 'background', 'bgm']" :key="kind">
+                      <div class="world-media-action">
+                        <strong x-text="kind === 'portrait' ? '角色立绘' : (kind === 'background' ? '地点背景' : '条目 BGM')"></strong>
+                        <select class="xy-input text-sm" :disabled="uploadingMedia" @change="bindAssetToWorld(i, kind, $event.target.value); $event.target.value = ''">
+                          <option value="">从素材库选择</option>
+                          <template x-for="asset in assetsByKind(kind)" :key="asset.id"><option :value="asset.id" x-text="asset.name"></option></template>
+                        </select>
+                        <label class="experience-upload"><input type="file" :accept="kind === 'bgm' ? '.mp3,audio/mpeg' : '.png,.jpg,.jpeg,.webp,.gif,image/*'" :disabled="uploadingMedia" @change="onWorldAssetChange($event, i, kind)"><span x-text="kind === 'bgm' ? '上传 MP3 并关联' : '上传图片并关联'"></span></label>
+                      </div>
+                    </template>
+                  </div>
+                  <div class="world-media-panel__bound" x-show="worldAssetBindings(i).length">
+                    <template x-for="binding in worldAssetBindings(i)" :key="binding.id"><span><b x-text="binding.kind === 'portrait' ? '立绘' : (binding.kind === 'background' ? '背景' : 'BGM')"></b><em x-text="binding.asset.name"></em><button type="button" @click="removeWorldAssetBinding(i, binding.id)" aria-label="解除关联">×</button></span></template>
+                  </div>
+                </section>
                 <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
                   <label class="text-xs text-violet-200/70"><span x-text="creatorText('world_priority_label', '优先级')"></span>
                     <input class="xy-input text-sm mt-1" type="number" x-model.number="form.world_info[i].priority">
@@ -385,6 +405,60 @@
               </details>
             </template>
             <button type="button" class="xy-btn xy-btn-ghost w-full justify-center" @click="addWorldEntry" x-text="creatorText('add_world_text', '＋ 添加世界书条目')"></button>
+          </div>
+        </div>
+
+        <!-- 互动界面（折叠，不改变原有编辑流程） -->
+        <div class="editor-group" id="creator-experience" :class="{ 'is-open': expand.experience }">
+          <div class="editor-group__head" @click="expand.experience = !expand.experience">
+            <div class="editor-group__title"><span class="editor-group__title-mark"></span><span>互动界面</span><span class="text-xs text-violet-300/60 font-normal">BGM · 弹窗 · 悬浮窗 · 侧栏</span></div>
+            <svg class="editor-group__chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M6 9l6 6 6-6"/></svg>
+          </div>
+          <div class="editor-group__body experience-editor" x-show="expand.experience">
+            <div class="experience-guide" x-show="!canUseAdvancedCreation()"><strong>高级创作未开放</strong><span x-text="advancedCreationHint()"></span></div>
+            <fieldset :disabled="!canUseAdvancedCreation()" style="display:contents" :style="!canUseAdvancedCreation() ? 'opacity:.55' : ''">
+            <div class="experience-guide"><strong>怎么触发？</strong><span>让模型回复类似 <code>[POPUP:notice]</code> 的标记，再用下方正则匹配。标记会从正文隐藏。卡内只支持声明式按钮，不执行作者 JavaScript。</span></div>
+
+            <section class="experience-section">
+              <div class="experience-section__head"><div><strong>① 素材库与 BGM</strong><small>文件经过大小、SHA-256 和真实格式校验后绑定当前卡。</small></div></div>
+              <div class="experience-upload-row">
+                <label class="experience-upload"><input type="file" accept=".mp3,audio/mpeg" :disabled="uploadingMedia" @change="onAssetLibraryChange($event, 'bgm')"><span>＋ 上传 MP3</span></label>
+                <label class="experience-upload"><input type="file" accept=".png,.jpg,.jpeg,.webp,.gif,image/*" :disabled="uploadingMedia" @change="onAssetLibraryChange($event, 'portrait')"><span>＋ 上传立绘</span></label>
+                <label class="experience-upload"><input type="file" accept=".png,.jpg,.jpeg,.webp,.gif,image/*" :disabled="uploadingMedia" @change="onAssetLibraryChange($event, 'background')"><span>＋ 上传背景</span></label>
+              </div>
+              <div class="experience-bgm-grid">
+                <label class="editor-checkbox"><input type="checkbox" x-model="form.card_experience.bgm.enabled"><div class="editor-checkbox__text"><div class="editor-checkbox__title">启用卡片 BGM</div><div class="editor-checkbox__hint">首次用户交互后播放，遵守手机浏览器策略</div></div></label>
+                <label><span>默认 BGM</span><select class="xy-input text-sm" x-model="form.card_experience.bgm.default_asset_id"><option value="">不设置</option><template x-for="asset in assetsByKind('bgm')" :key="asset.id"><option :value="asset.id" x-text="asset.name"></option></template></select></label>
+                <label><span>音量</span><input class="xy-input text-sm" type="range" min="0" max="1" step="0.05" x-model.number="form.card_experience.bgm.volume"></label>
+                <label class="editor-checkbox"><input type="checkbox" x-model="form.card_experience.bgm.loop"><div class="editor-checkbox__text"><div class="editor-checkbox__title">循环播放</div></div></label>
+                <label class="editor-checkbox"><input type="checkbox" x-model="form.card_experience.bgm.show_floating_player"><div class="editor-checkbox__text"><div class="editor-checkbox__title">显示迷你播放器</div></div></label>
+              </div>
+              <div class="experience-assets" x-show="form.media_assets.length">
+                <template x-for="asset in form.media_assets" :key="asset.id"><div><span class="experience-assets__kind" x-text="asset.kind === 'bgm' ? 'BGM' : (asset.kind === 'portrait' ? '立绘' : '背景')"></span><strong x-text="asset.name"></strong><small x-text="asset.size_bytes ? `${(asset.size_bytes / 1048576).toFixed(1)} MB` : ''"></small><button type="button" @click="removeMediaAsset(asset.id)">删除</button></div></template>
+              </div>
+            </section>
+
+            <section class="experience-section">
+              <div class="experience-section__head"><div><strong>② 正则界面规则</strong><small>命中最终角色回复后打开界面、切歌或切换世界书场景。</small></div><button type="button" class="editor-toolbar__btn" @click="addUiRule('open_popup')">＋ 添加规则</button></div>
+              <template x-for="(rule, i) in form.card_experience.ui_rules" :key="rule.id">
+                <details class="experience-card" :open="i === 0">
+                  <summary><span x-text="rule.name || `界面规则 ${i + 1}`"></span><small x-text="rule.action"></small></summary>
+                  <div class="experience-card__body">
+                    <div class="experience-card__toolbar"><label class="editor-checkbox"><input type="checkbox" x-model="rule.enabled"><div class="editor-checkbox__text"><div class="editor-checkbox__title">启用</div></div></label><button type="button" class="editor-toolbar__btn is-danger" @click="removeUiRule(i)">删除</button></div>
+                    <div class="editor-row-2"><input class="xy-input text-sm" x-model="rule.name" placeholder="规则名称"><select class="xy-input text-sm" x-model="rule.action"><option value="open_popup">打开弹窗</option><option value="show_floating">显示悬浮窗</option><option value="switch_bgm">切换 BGM</option><option value="open_sidebar">打开侧栏</option><option value="set_scene">切换世界书场景</option></select></div>
+                    <div class="experience-pattern"><input class="xy-input text-sm" x-model="rule.pattern" placeholder="正则，例如 \[POPUP:notice\]"><input class="xy-input text-sm" x-model="rule.flags" placeholder="flags，如 i"></div>
+                    <label x-show="['switch_bgm','open_sidebar','set_scene'].includes(rule.action)"><span>目标 ID</span><select class="xy-input text-sm" x-show="rule.action === 'switch_bgm'" x-model="rule.target_id"><option value="">选择 BGM</option><template x-for="asset in assetsByKind('bgm')" :key="asset.id"><option :value="asset.id" x-text="asset.name"></option></template></select><select class="xy-input text-sm" x-show="rule.action === 'open_sidebar'" x-model="rule.target_id"><option value="">选择侧栏</option><template x-for="bar in form.card_experience.sidebars" :key="bar.id"><option :value="bar.id" x-text="bar.name"></option></template></select><select class="xy-input text-sm" x-show="rule.action === 'set_scene'" x-model="rule.target_id"><option value="">选择世界书条目</option><template x-for="entry in form.world_info" :key="entry.id"><option :value="entry.id" x-text="entry.name"></option></template></select></label>
+                    <template x-if="['open_popup','show_floating'].includes(rule.action)"><div class="experience-code-grid"><label><span>HTML 内容</span><textarea class="xy-input text-sm" x-model="rule.template_html" placeholder="可用 {{message}}、{{character}}；按钮可写 data-card-action=&quot;toggle-bgm&quot;"></textarea></label><label><span>局部 CSS</span><textarea class="xy-input text-sm" x-model="rule.scoped_css" placeholder="只作用于本卡界面，不支持脚本和外链"></textarea></label></div></template>
+                  </div>
+                </details>
+              </template>
+            </section>
+
+            <section class="experience-section">
+              <div class="experience-section__head"><div><strong>③ 自定义侧栏</strong><small>可设置位置、宽度、正则、静态 HTML 或世界书内容。</small></div><button type="button" class="editor-toolbar__btn" @click="addExperienceSidebar">＋ 添加侧栏</button></div>
+              <template x-for="(bar, i) in form.card_experience.sidebars" :key="bar.id"><details class="experience-card"><summary><span x-text="bar.name || `侧栏 ${i + 1}`"></span><small x-text="`${bar.position === 'left' ? '左侧' : '右侧'} · ${bar.width}px`"></small></summary><div class="experience-card__body"><div class="experience-card__toolbar"><label class="editor-checkbox"><input type="checkbox" x-model="bar.enabled"><div class="editor-checkbox__text"><div class="editor-checkbox__title">启用</div></div></label><button type="button" class="editor-toolbar__btn is-danger" @click="removeExperienceSidebar(i)">删除</button></div><div class="editor-row-2"><input class="xy-input text-sm" x-model="bar.name" placeholder="侧栏名称"><input class="xy-input text-sm" x-model="bar.trigger_label" placeholder="边缘按钮文字"></div><div class="experience-sidebar-grid"><label><span>位置</span><select class="xy-input text-sm" x-model="bar.position"><option value="left">左侧</option><option value="right">右侧</option></select></label><label><span>宽度（240–720px）</span><input class="xy-input text-sm" type="number" min="240" max="720" x-model.number="bar.width"></label><label><span>内容来源</span><select class="xy-input text-sm" x-model="bar.content_mode"><option value="static">自定义 HTML</option><option value="worldbook">世界书条目</option></select></label><label x-show="bar.content_mode === 'worldbook'"><span>世界书条目</span><select class="xy-input text-sm" x-model="bar.world_entry_id"><option value="">请选择</option><template x-for="entry in form.world_info" :key="entry.id"><option :value="entry.id" x-text="entry.name"></option></template></select></label></div><div class="experience-pattern"><input class="xy-input text-sm" x-model="bar.open_pattern" placeholder="打开正则，例如 \[SIDEBAR:info1\]"><input class="xy-input text-sm" x-model="bar.flags" placeholder="flags，如 i"></div><div class="experience-code-grid" x-show="bar.content_mode === 'static'"><label><span>HTML 内容</span><textarea class="xy-input text-sm" x-model="bar.content_html"></textarea></label><label><span>局部 CSS</span><textarea class="xy-input text-sm" x-model="bar.scoped_css"></textarea></label></div></div></details></template>
+            </section>
+            </fieldset>
           </div>
         </div>
 
@@ -467,10 +541,27 @@
                 <template x-if="modelPresets.length === 0">
                   <option value="" x-text="creatorText('default_model_option', '站点默认模型')"></option>
                 </template>
-                <template x-for="preset in modelPresets" :key="preset.id">
-                  <option :value="preset.id" x-text="`${preset.group || '模型'} · ${preset.label || preset.name} · ${preset.model}${preset.is_default ? ' · 默认' : ''}`"></option>
+                <template x-for="group in modelPresetGroups()" :key="group.key">
+                  <optgroup :label="group.label">
+                    <template x-for="preset in group.list" :key="preset.id">
+                      <option :value="preset.id" x-text="`${preset.label || preset.model || preset.name} · ${preset.price_label || '50 惑梦币/次'}${preset.is_default ? ' · 默认' : ''}`"></option>
+                    </template>
+                  </optgroup>
                 </template>
               </select>
+            </div>
+            <div class="editor-field form-panel !p-3" style="display:grid;gap:10px">
+              <input x-ref="cardPresetInput" type="file" accept=".json,application/json" hidden @change="onCardPresetImport">
+              <div class="flex items-center justify-between gap-3">
+                <div><label class="editor-field__label">本卡预设</label><div class="editor-field__hint">导入本角色专用的 SillyTavern Prompt Preset。它与站点全局预设独立，关闭全局预设时仍可生效。</div></div>
+                <label class="editor-checkbox" style="padding:4px 0;border:none;background:none"><input type="checkbox" x-model="form.card_prompt_preset.enabled" :disabled="cardPresetEntryCount() === 0 || !canUseAdvancedCreation()"><div class="editor-checkbox__text"><div class="editor-checkbox__title text-sm" x-text="form.card_prompt_preset.enabled ? '本卡预设已启用' : '本卡预设未启用'"></div></div></label>
+              </div>
+              <div class="flex flex-wrap items-center gap-2">
+                <button type="button" class="editor-toolbar__btn" @click="triggerCardPresetImport" :disabled="!canUseAdvancedCreation()">导入预设 JSON</button>
+                <button type="button" class="editor-toolbar__btn is-danger" x-show="cardPresetEntryCount()" @click="clearCardPromptPreset" :disabled="!canUseAdvancedCreation()">清除</button>
+                <span class="text-xs text-violet-200/70" x-show="cardPresetEntryCount()" x-text="`${form.card_prompt_preset.name || '本卡预设'} · ${cardPresetEntryCount()} 条 · 导入后默认关闭`"></span>
+              </div>
+              <div class="editor-field__hint" x-show="!canUseAdvancedCreation()" x-text="advancedCreationHint()"></div>
             </div>
             <div class="numfield-row">
               <div class="numfield-cell">

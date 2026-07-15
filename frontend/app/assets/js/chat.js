@@ -1,5 +1,6 @@
 import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js?v=20260715-conversation-global-preset';
 import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-channels-closed';
+import { cleanCardExperienceText, consumeCardExperienceText, mountCardExperience } from '/app/assets/js/card-experience-runtime.mjs?v=20260716';
 
 const STATUS_LABELS = {
   name: '姓名',
@@ -1447,6 +1448,7 @@ function chatPage() {
         const total = parseInt(data.total ?? list.length, 10);
         this.messageTotal = Number.isNaN(total) ? list.length : total;
         this.hasOlderMessages = !!data.has_more || this.messages.length < this.messageTotal;
+        this.syncCardExperience();
         await this.loadConversations();
         this.$nextTick(() => {
           const area = this.$refs.messageArea;
@@ -1473,11 +1475,18 @@ function chatPage() {
     },
 
     renderMessageContent(content, role = '') {
-      return renderMessageContent(content, role, this.advancedRenderOptions());
+      const visible = role === 'assistant' ? cleanCardExperienceText(content) : content;
+      return renderMessageContent(visible, role, this.advancedRenderOptions());
     },
 
     messageRenderKind(content, role = '') {
-      return messageRenderKind(content, role, this.advancedRenderOptions());
+      const visible = role === 'assistant' ? cleanCardExperienceText(content) : content;
+      return messageRenderKind(visible, role, this.advancedRenderOptions());
+    },
+
+    syncCardExperience(message = null) {
+      const target = message || [...this.messages].reverse().find(item => item.role === 'assistant' && item.content);
+      if (target?.content) consumeCardExperienceText(target.content, { messageId: target.id || target._localKey });
     },
 
     rowClass(m) {
@@ -1523,7 +1532,8 @@ function chatPage() {
     modelOptionLabel(preset) {
       const name = preset?.name || preset?.model || preset?.id || '';
       const model = preset?.model || '';
-      return model && model !== name ? `${name} · ${model}` : name;
+      const base = model && model !== name ? `${name} · ${model}` : name;
+      return `${base} · ${preset?.price_label || '50 惑梦币/次'}`;
     },
 
     async loadTtsVoices() {
@@ -1626,12 +1636,14 @@ function chatPage() {
         this.appHero = data?.bg_url || data?.cover || data?.cover_url || data?.banner || data?.background || '';
         this.appFavorited = !!data?.favorited;
         this.quickReplies = Array.isArray(data?.quick_replies) ? data.quick_replies.filter(q => q.enabled !== false && q.message) : [];
+        mountCardExperience(data);
         if (data?.tts_voice_id && this.ttsVoices.some(v => v.id === data.tts_voice_id)) this.currentTtsVoice = data.tts_voice_id;
         this.restoreModelSelection();
       } catch {
         this.appName = this.chatText('new_role_name', '新角色');
         this.quickReplies = [];
         this.appFavorited = false;
+        mountCardExperience({});
         this.restoreModelSelection();
       }
       // 已有该角色的会话 → 直接进入最近一个
@@ -1664,6 +1676,7 @@ function chatPage() {
         this.galgameEnabled = !!data.galgame_enabled;
         this.globalPresetEnabled = data.global_preset_enabled !== false;
         this.messages = (data.messages || []).map(this.normMsg);
+        this.syncCardExperience();
         this.messageTotal = this.messages.length;
         this.hasOlderMessages = false;
         try { localStorage.setItem('ai_xingyue_last_conversation_id', data.conversation_id); } catch { /* ignore */ }
@@ -1724,10 +1737,12 @@ function chatPage() {
         if (!this.appIcon) this.appIcon = data?.icon || data?.cover || '';
         this.appFavorited = !!data?.favorited;
         this.quickReplies = Array.isArray(data?.quick_replies) ? data.quick_replies.filter(q => q.enabled !== false && q.message) : [];
+        mountCardExperience(data);
         if (data?.tts_voice_id && this.ttsVoices.some(v => v.id === data.tts_voice_id)) this.currentTtsVoice = data.tts_voice_id;
       } catch {
         if (loadSeq !== this._conversationLoadSeq || this.conversation?.id !== c.id) return;
         this.appHero = ''; this.quickReplies = []; this.appFavorited = false;
+        mountCardExperience({});
       }
       try {
         const r = await api.messages(c.id, { limit: this.messageLimit });
@@ -1751,6 +1766,7 @@ function chatPage() {
         const total = parseInt(data.total ?? list.length, 10);
         this.messageTotal = Number.isNaN(total) ? list.length : total;
         this.hasOlderMessages = !!data.has_more || this.messages.length < this.messageTotal;
+        this.syncCardExperience();
         await this.loadMemoryContext();
         this.restoreMessageScroll({ defaultToBottom: true, forceBottom });
       } catch (err) {
@@ -2095,6 +2111,7 @@ function chatPage() {
         replyMsg._typing = false;
         if (typeof data?.reply === 'string') replyMsg.content = data.reply;
         this.touchMessage(replyMsg);
+        this.syncCardExperience(replyMsg);
         this.updatePointsFromPayload(data);
         this.loadConversations();
       } catch (err) {
@@ -2160,6 +2177,7 @@ function chatPage() {
         if (typeof data?.reply === 'string') replyMsg.content = data.reply;
         replyMsg._typing = false;
         this.touchMessage(replyMsg);
+        this.syncCardExperience(replyMsg);
         this.updatePointsFromPayload(data);
         await this.loadConversations();
       } catch (err) {
@@ -2205,6 +2223,7 @@ function chatPage() {
       } else {
         this.messages.splice(idx, 1, normed);
         this.scrollToBottom();
+        if (normed.role === 'assistant') this.syncCardExperience(normed);
       }
     },
 
@@ -2324,6 +2343,7 @@ function chatPage() {
           msg._typing = false;
           this.touchMessage(msg);
           this.scrollToBottom();
+          if (msg.role === 'assistant') this.syncCardExperience(msg);
           return;
         }
         i += chunk;

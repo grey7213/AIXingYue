@@ -29,6 +29,32 @@ async function rawRequest(path, opts = {}) {
   return data;
 }
 
+async function uploadCardAssetContent(upload, file) {
+  const target = upload && typeof upload === 'object' ? upload : {};
+  const url = new URL(String(target.url || ''), location.href);
+  const sameOrigin = url.origin === location.origin;
+  const headers = { ...(target.headers || {}) };
+  if (!headers['Content-Type'] && file?.type) headers['Content-Type'] = file.type;
+  const token = getToken();
+  if (sameOrigin && token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(url.href, {
+    method: target.method || 'PUT',
+    headers,
+    body: file,
+    credentials: sameOrigin ? 'same-origin' : 'omit',
+  });
+  if (response.status === 401 && sameOrigin) redirectAfterUnauthorized();
+  if (!response.ok) {
+    let message = `上传失败（${response.status}）`;
+    try {
+      const data = await response.json();
+      message = data?.message || data?.msg || message;
+    } catch {}
+    throw new ApiError(message, response.status);
+  }
+  return response;
+}
+
 async function sseRequest(path, payload, handlers = {}, options = {}) {
   const headers = { Accept: 'text/event-stream', 'Content-Type': 'application/json' };
   const token = getToken();
@@ -188,6 +214,7 @@ export const api = {
   },
   myAppsCount: () => rawRequest('/console/api/web/my-apps-count'),
   modelPresets: () => rawRequest('/console/api/web/model-presets'),
+  creatorAccess: () => rawRequest('/console/api/web/creator-access'),
   ttsVoices: () => rawRequest('/console/api/web/tts/voices'),
   synthesizeTts: (payload) => rawRequest('/console/api/web/tts/synthesize', { method: 'POST', body: payload }),
   providerTemplates: () => rawRequest('/console/api/web/provider-templates'),
@@ -202,6 +229,13 @@ export const api = {
   deleteApp: (appId) => rawRequest(`/console/api/web/my-apps/${encodeURIComponent(appId)}/delete`, { method: 'POST', body: {} }),
   uploadCover: (image, filename = 'cover.png') =>
     rawRequest('/console/api/web/my-apps/upload-cover', { method: 'POST', body: { image, filename } }),
+  createCardAssetUploadIntent: (payload) =>
+    rawRequest('/console/api/web/card-assets/upload-intent', { method: 'POST', body: payload }),
+  uploadCardAssetContent,
+  completeCardAssetUpload: (assetId, payload = {}) =>
+    rawRequest(`/console/api/web/card-assets/${encodeURIComponent(assetId)}/complete`, { method: 'POST', body: payload }),
+  deleteCardAsset: (assetId) =>
+    rawRequest(`/console/api/web/card-assets/${encodeURIComponent(assetId)}/delete`, { method: 'POST', body: {} }),
   // 会话
   conversations: () => rawRequest('/console/api/web/conversations'),
   messages: (convId, params = {}) => {

@@ -33,6 +33,15 @@ from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse, unquote, quot
 from urllib.error import HTTPError
 from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
+from card_experience_extension import (
+    CardMediaError,
+    CardMediaService,
+    LocalObjectStorage,
+    migrate_card_media,
+    normalize_card_experience,
+    normalize_world_media_bindings,
+)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_STATE_DIR = ROOT / "output" / "zip-1-repack" / "local-server"
@@ -609,6 +618,33 @@ FARM_CROPS = {
     "inspiration_berry": {"name": "灵感莓果", "cost": 180, "grow_seconds": 18 * 3600, "coins": 340, "xp": 40},
 }
 FARM_PLOT_UNLOCK_DAYS = (1, 7, 14, 21, 28, 35, 42, 49)
+
+
+class AdvancedCreationError(PermissionError):
+    pass
+
+
+def advanced_creation_requested(data: object) -> bool:
+    if not isinstance(data, dict):
+        return False
+    assets = data.get("media_assets")
+    if isinstance(assets, list) and any(isinstance(item, dict) and item.get("id") for item in assets):
+        return True
+    experience = data.get("card_experience") if isinstance(data.get("card_experience"), dict) else {}
+    bgm = experience.get("bgm") if isinstance(experience.get("bgm"), dict) else {}
+    if bool(bgm.get("enabled")) or str(bgm.get("default_asset_id") or "").strip():
+        return True
+    if any(isinstance(item, dict) for item in (experience.get("ui_rules") or [])):
+        return True
+    if any(isinstance(item, dict) for item in (experience.get("sidebars") or [])):
+        return True
+    preset = data.get("card_prompt_preset") if isinstance(data.get("card_prompt_preset"), dict) else {}
+    if preset.get("enabled") or preset.get("name") or preset.get("source_file") or preset.get("prompts") or preset.get("blocks"):
+        return True
+    for entry in data.get("world_info") if isinstance(data.get("world_info"), list) else []:
+        if isinstance(entry, dict) and any(isinstance(item, dict) and item.get("asset_id") for item in (entry.get("media_bindings") or [])):
+            return True
+    return False
 FARM_ENERGY_MAX = 5
 FARM_ENERGY_RECOVERY_MS = 30 * 60 * 1000
 
@@ -2354,7 +2390,18 @@ class Store:
         except Exception:
             pass
         self.lock = threading.RLock()
+        self.card_media: CardMediaService | None = None
         self.init_schema()
+
+    def configure_card_media(self, media_dir: Path) -> None:
+        with self.lock:
+            migrate_card_media(self.conn)
+            storage = LocalObjectStorage(
+                Path(media_dir) / "card-assets",
+                public_prefix="/media-cache/card-assets/ready",
+            )
+            self.card_media = CardMediaService(self.conn, storage)
+            self.card_media.cleanup_stale_assets(max_age_seconds=24 * 60 * 60)
 
     def init_schema(self) -> None:
         with self.lock:
@@ -2367,6 +2414,7 @@ class Store:
                     password_hash text,
                     points integer not null default 500,
                     is_admin integer not null default 0,
+                    advanced_creator_override integer not null default 0,
                     created_at integer not null,
                     updated_at integer not null
                 );
@@ -2782,6 +2830,7 @@ class Store:
         self.ensure_user_persona_columns()
         self.ensure_user_profile_columns()
         self.ensure_user_security_columns()
+        self.ensure_advanced_creator_column()
         self.ensure_user_admin_column()
         self.ensure_local_apps_columns()
         self.ensure_messages_columns()
@@ -2986,6 +3035,13 @@ class Store:
                 if name not in columns:
                     self.conn.execute(f"alter table users add column {name} {column_type}")
             self.conn.commit()
+
+    def ensure_advanced_creator_column(self) -> None:
+        with self.lock:
+            columns = {row["name"] for row in self.conn.execute("pragma table_info(users)").fetchall()}
+            if "advanced_creator_override" not in columns:
+                self.conn.execute("alter table users add column advanced_creator_override integer not null default 0")
+                self.conn.commit()
 
     def ensure_user_gender_column(self) -> None:
         with self.lock:
@@ -3270,6 +3326,46 @@ class Store:
                 raise ValueError("环境变量管理员不能在后台撤销，请修改 ADMIN_EMAILS 后重启服务")
             self.conn.execute(
                 "update users set is_admin=?, updated_at=? where id=?",
+                (1 if enabled else 0, now_ms(), user_id),
+            )
+            self.conn.commit()
+            return self.get_user_by_id(user_id)
+
+    def advanced_creation_access(self, user_id: str) -> dict:
+        with self.lock:
+            user = self.conn.execute(
+                "select advanced_creator_override from users where id=?",
+                (user_id,),
+            ).fetchone()
+            if not user:
+                return {"allowed": False, "source": "none", "farm_unlocked": False, "admin_override": False, "streak_days": 0, "unlocked_plots": 0, "required_days": max(FARM_PLOT_UNLOCK_DAYS)}
+            profile = self.conn.execute("select streak_days from farm_profiles where user_id=?", (user_id,)).fetchone()
+            streak = max(0, int(profile["streak_days"] or 0)) if profile else 0
+            unlocked_plots = sum(1 for required in FARM_PLOT_UNLOCK_DAYS if streak >= required)
+            farm_unlocked = unlocked_plots == len(FARM_PLOT_UNLOCK_DAYS)
+            admin_override = bool(user["advanced_creator_override"])
+            return {
+                "allowed": bool(farm_unlocked or admin_override),
+                "source": "admin" if admin_override else ("farm" if farm_unlocked else "none"),
+                "farm_unlocked": farm_unlocked,
+                "admin_override": admin_override,
+                "streak_days": streak,
+                "unlocked_plots": unlocked_plots,
+                "required_days": max(FARM_PLOT_UNLOCK_DAYS),
+            }
+
+    def require_advanced_creation(self, user_id: str) -> dict:
+        access = self.advanced_creation_access(user_id)
+        if not access.get("allowed"):
+            raise AdvancedCreationError("高级创作需先将惑梦农场 8 块土地全部解锁，或由管理员开放权限")
+        return access
+
+    def set_advanced_creator_override(self, user_id: str, enabled: bool) -> sqlite3.Row | None:
+        with self.lock:
+            if not self.get_user_by_id(user_id):
+                return None
+            self.conn.execute(
+                "update users set advanced_creator_override=?, updated_at=? where id=?",
                 (1 if enabled else 0, now_ms(), user_id),
             )
             self.conn.commit()
@@ -5300,6 +5396,28 @@ class Store:
         return self.get_persona(user_id)
 
     # ===== 本地角色库 local_apps =====
+    def _card_media_service(self) -> CardMediaService:
+        if not self.card_media:
+            raise CardMediaError("card media service is not configured")
+        return self.card_media
+
+    def create_card_asset_upload_intent(self, owner_user_id: str, data: dict) -> dict:
+        with self.lock:
+            self.require_advanced_creation(owner_user_id)
+            return self._card_media_service().create_upload_intent(owner_user_id, data)
+
+    def write_card_asset_upload(self, owner_user_id: str, asset_id: str, body: bytes, content_type: str) -> None:
+        with self.lock:
+            self._card_media_service().write_local_upload(owner_user_id, asset_id, body, content_type)
+
+    def complete_card_asset_upload(self, owner_user_id: str, asset_id: str, data: dict | None = None) -> dict:
+        with self.lock:
+            return self._card_media_service().complete_upload(owner_user_id, asset_id, data)
+
+    def delete_card_asset(self, owner_user_id: str, asset_id: str) -> None:
+        with self.lock:
+            self._card_media_service().delete_asset(owner_user_id, asset_id)
+
     def upsert_upstream_app(self, app: dict) -> None:
         """同步脚本调用：写入/更新一个上游角色。app 是已 rebrand 的字段字典。"""
         with self.lock:
@@ -5339,28 +5457,43 @@ class Store:
 
     def create_user_app(self, owner_user_id: str, data: dict) -> sqlite3.Row:
         with self.lock:
+            if advanced_creation_requested(data):
+                self.require_advanced_creation(owner_user_id)
             ts = now_ms()
             app_id = "user-" + uuid.uuid4().hex[:16]
             display_id = self._next_local_app_display_id_locked()
-            extras = normalize_user_app_extras(data)
-            extra_json = json.dumps(extras, ensure_ascii=False, separators=(",", ":")) if extras else None
-            self.conn.execute(
-                """insert into local_apps(id,display_id,source,owner_user_id,name,summary,description,cover_url,
-                   tags,opening_statement,suggested_questions,pre_prompt,llm_model,api_base_url,age_rating,gender,
-                   language,status,is_public,extra_settings,created_at,updated_at)
-                   values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (app_id, display_id, "user", owner_user_id, data.get("name") or "未命名角色",
-                  data.get("summary") or "", data.get("description") or "",
-                  data.get("cover_url") or "", json.dumps(data.get("tags") or [], ensure_ascii=False),
-                  data.get("opening_statement") or "", json.dumps(data.get("suggested_questions") or [], ensure_ascii=False),
-                  data.get("pre_prompt") or "", normalize_user_selected_llm_model(data.get("llm_model")),
-                  "",
-                  int(data.get("age_rating") or 0), int(data.get("gender") or 0),
-                  data.get("language") or "zh-Hans", data.get("status") or "published",
-                  1 if data.get("is_public", True) else 0, extra_json, ts, ts),
-            )
-            self.conn.commit()
-            return self.conn.execute("select * from local_apps where id=?", (app_id,)).fetchone()
+            prepared = dict(data)
+            try:
+                self.conn.execute("begin immediate")
+                if self.card_media:
+                    prepared["_trusted_card_media"] = self.card_media.bind_payload(
+                        owner_user_id,
+                        app_id,
+                        str(data.get("media_draft_id") or ""),
+                        data,
+                        commit=False,
+                    )
+                extras = normalize_user_app_extras(prepared)
+                extra_json = json.dumps(extras, ensure_ascii=False, separators=(",", ":")) if extras else None
+                self.conn.execute(
+                    """insert into local_apps(id,display_id,source,owner_user_id,name,summary,description,cover_url,
+                       tags,opening_statement,suggested_questions,pre_prompt,llm_model,api_base_url,age_rating,gender,
+                       language,status,is_public,extra_settings,created_at,updated_at)
+                       values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (app_id, display_id, "user", owner_user_id, data.get("name") or "未命名角色",
+                      data.get("summary") or "", data.get("description") or "",
+                      data.get("cover_url") or "", json.dumps(data.get("tags") or [], ensure_ascii=False),
+                      data.get("opening_statement") or "", json.dumps(data.get("suggested_questions") or [], ensure_ascii=False),
+                      data.get("pre_prompt") or "", normalize_user_selected_llm_model(data.get("llm_model")),
+                      "", int(data.get("age_rating") or 0), int(data.get("gender") or 0),
+                      data.get("language") or "zh-Hans", data.get("status") or "published",
+                      1 if data.get("is_public", True) else 0, extra_json, ts, ts),
+                )
+                self.conn.commit()
+                return self.conn.execute("select * from local_apps where id=?", (app_id,)).fetchone()
+            except Exception:
+                self.conn.rollback()
+                raise
 
     def create_admin_app(self, data: dict) -> sqlite3.Row:
         with self.lock:
@@ -5421,6 +5554,7 @@ class Store:
                 "personality", "scenario", "mes_example", "post_history_instructions",
                 "alternate_greetings", "world_info", "creator_notes", "character_version",
                 "creator", "extensions", "prompt_blocks", "quick_replies", "regex_scripts", "TavernHelper_scripts",
+                "card_prompt_preset", "media_assets", "card_experience",
             )
             if extras_in or any(k in rich for k in extra_trigger_keys):
                 existing = parse_json_object(dict(row).get("extra_settings"))
@@ -5440,11 +5574,18 @@ class Store:
     def delete_admin_app(self, app_id: str) -> bool:
         with self.lock:
             app_id = self.resolve_local_app_id(app_id)
-            cur = self.conn.execute(
-                "delete from local_apps where id=?",
-                (app_id,),
-            )
-            self.conn.commit()
+            asset_ids: list[str] = []
+            try:
+                self.conn.execute("begin immediate")
+                if self.card_media:
+                    asset_ids = self.card_media.mark_app_assets_deleted(app_id, commit=False)
+                cur = self.conn.execute("delete from local_apps where id=?", (app_id,))
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
+            if asset_ids and self.card_media:
+                self.card_media.purge_deleted_assets(asset_ids=asset_ids)
             return cur.rowcount > 0
 
     def import_admin_apps(self, items: list, created_by: str = "") -> dict:
@@ -5537,14 +5678,14 @@ class Store:
 
                     if world_mode != "none":
                         extra = parse_json_object(row_d.get("extra_settings"))
-                        existing_world = normalize_world_info(extra.get("world_info") or [])
+                        existing_world = strip_required_world_info(extra.get("world_info") or [])
                         if world_mode == "replace":
                             new_world = world_entries
                         elif world_mode == "append":
                             new_world = normalize_world_info((existing_world + world_entries)[:200])
                         else:
                             new_world = merge_world_info_entries(existing_world, world_entries)
-                        extra["world_info"] = new_world
+                        extra["world_info"] = strip_required_world_info(new_world)
                         updates["extra_settings"] = json.dumps(extra, ensure_ascii=False, separators=(",", ":")) if extra else None
 
                     if not updates:
@@ -5568,6 +5709,8 @@ class Store:
 
     def update_user_app(self, app_id: str, owner_user_id: str, data: dict) -> sqlite3.Row | None:
         with self.lock:
+            if advanced_creation_requested(data):
+                self.require_advanced_creation(owner_user_id)
             app_id = self.resolve_local_app_id(app_id)
             row = self.conn.execute(
                 "select * from local_apps where id=? and owner_user_id=? and source='user'",
@@ -5575,54 +5718,85 @@ class Store:
             ).fetchone()
             if not row:
                 return None
-            allowed = ("name", "summary", "description", "cover_url", "opening_statement",
-                       "pre_prompt", "llm_model", "age_rating", "gender", "language", "status", "is_public")
-            updates = {}
-            for k in allowed:
-                if k in data:
-                    updates[k] = data[k]
-            if "tags" in data:
-                updates["tags"] = json.dumps(data["tags"] or [], ensure_ascii=False)
-            if "suggested_questions" in data:
-                updates["suggested_questions"] = json.dumps(data["suggested_questions"] or [], ensure_ascii=False)
-            if "is_public" in updates:
-                updates["is_public"] = 1 if updates["is_public"] else 0
-            extras_in = normalize_user_app_extras(data)
-            extra_trigger_keys = (
-                "bg_url", "nsfw", "protected", "protected_prompt", "anonymous", "sampling",
-                "personality", "scenario", "mes_example", "post_history_instructions",
-                "alternate_greetings", "world_info", "creator_notes", "character_version",
-                "creator", "extensions", "prompt_blocks", "quick_replies", "regex_scripts", "TavernHelper_scripts",
-            )
-            if extras_in or any(k in data for k in extra_trigger_keys):
-                # merge with existing extras to allow partial updates
-                existing = {}
-                try:
-                    existing = json.loads(row["extra_settings"] or "{}") or {}
-                    if not isinstance(existing, dict): existing = {}
-                except Exception:
-                    existing = {}
-                # normalize_user_app_extras only emits keys that were present in `data`,
-                # so merging all of extras_in gives correct partial-update semantics.
-                for k, v in extras_in.items():
-                    existing[k] = v
-                updates["extra_settings"] = json.dumps(existing, ensure_ascii=False, separators=(",", ":")) if existing else None
-            if not updates:
-                return row
-            updates["updated_at"] = now_ms()
-            cols = ", ".join(f"{k}=?" for k in updates)
-            self.conn.execute(f"update local_apps set {cols} where id=?", (*updates.values(), app_id))
-            self.conn.commit()
-            return self.conn.execute("select * from local_apps where id=?", (app_id,)).fetchone()
+            try:
+                existing_extra = json.loads(row["extra_settings"] or "{}") or {}
+                if not isinstance(existing_extra, dict):
+                    existing_extra = {}
+            except Exception:
+                existing_extra = {}
+            try:
+                self.conn.execute("begin immediate")
+                prepared = dict(data)
+                media_explicit = any(key in data for key in ("media_assets", "media_draft_id", "card_experience")) or any(
+                    isinstance(entry, dict) and bool(entry.get("media_bindings"))
+                    for entry in (data.get("world_info") if isinstance(data.get("world_info"), list) else [])
+                )
+                if media_explicit and self.card_media:
+                    media_payload = dict(data)
+                    for field in ("media_assets", "world_info", "card_experience"):
+                        if field not in media_payload:
+                            media_payload[field] = existing_extra.get(field, [] if field != "card_experience" else {})
+                    prepared["_trusted_card_media"] = self.card_media.bind_payload(
+                        owner_user_id,
+                        app_id,
+                        str(data.get("media_draft_id") or ""),
+                        media_payload,
+                        commit=False,
+                    )
+                allowed = ("name", "summary", "description", "cover_url", "opening_statement",
+                           "pre_prompt", "llm_model", "age_rating", "gender", "language", "status", "is_public")
+                updates = {}
+                for key in allowed:
+                    if key in data:
+                        updates[key] = normalize_user_selected_llm_model(data[key]) if key == "llm_model" else data[key]
+                if "tags" in data:
+                    updates["tags"] = json.dumps(data["tags"] or [], ensure_ascii=False)
+                if "suggested_questions" in data:
+                    updates["suggested_questions"] = json.dumps(data["suggested_questions"] or [], ensure_ascii=False)
+                if "is_public" in updates:
+                    updates["is_public"] = 1 if updates["is_public"] else 0
+                extras_in = normalize_user_app_extras(prepared)
+                extra_trigger_keys = (
+                    "bg_url", "nsfw", "protected", "protected_prompt", "anonymous", "sampling",
+                    "personality", "scenario", "mes_example", "post_history_instructions",
+                    "alternate_greetings", "world_info", "creator_notes", "character_version",
+                    "creator", "extensions", "prompt_blocks", "quick_replies", "regex_scripts", "TavernHelper_scripts",
+                    "card_prompt_preset", "media_assets", "media_draft_id", "card_experience",
+                )
+                if extras_in or any(key in data for key in extra_trigger_keys):
+                    existing = dict(existing_extra)
+                    existing.update(extras_in)
+                    updates["extra_settings"] = json.dumps(existing, ensure_ascii=False, separators=(",", ":")) if existing else None
+                if not updates:
+                    self.conn.commit()
+                    return row
+                updates["updated_at"] = now_ms()
+                cols = ", ".join(f"{key}=?" for key in updates)
+                self.conn.execute(f"update local_apps set {cols} where id=?", (*updates.values(), app_id))
+                self.conn.commit()
+                return self.conn.execute("select * from local_apps where id=?", (app_id,)).fetchone()
+            except Exception:
+                self.conn.rollback()
+                raise
 
     def delete_user_app(self, app_id: str, owner_user_id: str) -> bool:
         with self.lock:
             app_id = self.resolve_local_app_id(app_id)
-            cur = self.conn.execute(
-                "delete from local_apps where id=? and owner_user_id=? and source='user'",
-                (app_id, owner_user_id),
-            )
-            self.conn.commit()
+            asset_ids: list[str] = []
+            try:
+                self.conn.execute("begin immediate")
+                if self.card_media:
+                    asset_ids = self.card_media.mark_app_assets_deleted(app_id, owner_user_id, commit=False)
+                cur = self.conn.execute(
+                    "delete from local_apps where id=? and owner_user_id=? and source='user'",
+                    (app_id, owner_user_id),
+                )
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
+            if asset_ids and self.card_media:
+                self.card_media.purge_deleted_assets(asset_ids=asset_ids)
             return cur.rowcount > 0
 
     def get_local_app(self, app_id: str) -> sqlite3.Row | None:
@@ -6669,6 +6843,8 @@ class Store:
                     "model": model,
                     "enabled": bool(p.get("enabled")),
                     "is_default": p["id"] == default_id and model == default_model,
+                    "points_cost": CHAT_MESSAGE_COST,
+                    "price_label": f"{CHAT_MESSAGE_COST} 惑梦币/次",
                 }
                 for models in [split_model_names(p.get("models") or p.get("model")) or [p.get("model") or ""]]
                 for default_model in [str(p.get("model") or "") if str(p.get("model") or "") in models else models[0]]
@@ -6677,11 +6853,11 @@ class Store:
         ]
         if not visible and presets:
             p = presets[0]
-            visible = [{"id": p["id"], "preset_id": p["id"], "name": p.get("name") or p.get("model") or p["id"], "protocol": p.get("protocol") or "openai", "model": p.get("model") or "", "enabled": True, "is_default": True}]
+            visible = [{"id": p["id"], "preset_id": p["id"], "name": p.get("name") or p.get("model") or p["id"], "protocol": p.get("protocol") or "openai", "model": p.get("model") or "", "enabled": True, "is_default": True, "points_cost": CHAT_MESSAGE_COST, "price_label": f"{CHAT_MESSAGE_COST} 惑梦币/次"}]
             default_id = p["id"]
         else:
             default_id = next((p["id"] for p in visible if p.get("is_default")), visible[0]["id"] if visible else default_id)
-        return {"list": visible, "default_id": default_id, "total": len(visible)}
+        return {"list": visible, "default_id": default_id, "total": len(visible), "points_cost": CHAT_MESSAGE_COST, "price_label": f"{CHAT_MESSAGE_COST} 惑梦币/次"}
 
     def public_model_selection(self, value: object) -> str:
         selected = normalize_user_selected_llm_model(value)
@@ -7016,6 +7192,7 @@ def normalize_admin_rich_app_payload(data: dict) -> dict:
         "personality", "scenario", "mes_example", "post_history_instructions",
         "alternate_greetings", "world_info", "creator_notes", "character_version",
         "creator", "extensions", "prompt_blocks", "quick_replies", "regex_scripts",
+        "card_prompt_preset", "media_assets", "card_experience",
         "TavernHelper_scripts", "sampling", "bg_url", "nsfw", "protected",
         "protected_prompt", "anonymous",
     ):
@@ -8796,7 +8973,7 @@ def local_app_to_card(row: dict) -> dict:
     alt_greet = extra.get("alternate_greetings")
     if not isinstance(alt_greet, list):
         alt_greet = []
-    world_info = ensure_required_world_info(extra.get("world_info") or [])
+    world_info = strip_required_world_info(extra.get("world_info") or [])
     prompt_blocks = extra.get("prompt_blocks")
     if not isinstance(prompt_blocks, list):
         prompt_blocks = []
@@ -8806,6 +8983,9 @@ def local_app_to_card(row: dict) -> dict:
     regex_scripts = extra.get("regex_scripts")
     if not isinstance(regex_scripts, list):
         regex_scripts = []
+    media_assets = extra.get("media_assets") if isinstance(extra.get("media_assets"), list) else []
+    card_experience = extra.get("card_experience") if isinstance(extra.get("card_experience"), dict) else {}
+    card_prompt_preset = normalize_card_prompt_preset(extra.get("card_prompt_preset"))
     feature_flags = local_app_feature_flags(row, extra)
     return {
         "id": row["id"],
@@ -8847,9 +9027,26 @@ def local_app_to_card(row: dict) -> dict:
         "post_history_instructions": str(extra.get("post_history_instructions") or ""),
         "alternate_greetings": [str(g) for g in alt_greet if isinstance(g, str) and g.strip()],
         "world_info": world_info,
+        "platform_worldbook_applied": bool(required_world_info_entry()),
         "prompt_blocks": prompt_blocks,
         "quick_replies": quick_replies,
         "regex_scripts": regex_scripts,
+        "media_assets": [
+            {
+                "id": str(item.get("id") or ""),
+                "kind": str(item.get("kind") or ""),
+                "name": str(item.get("name") or ""),
+                "url": str(item.get("url") or ""),
+                "mime_type": str(item.get("mime_type") or ""),
+                "size_bytes": int(item.get("size_bytes") or 0),
+                "sha256": str(item.get("sha256") or ""),
+                "status": str(item.get("status") or ""),
+                "metadata": item.get("metadata") if isinstance(item.get("metadata"), dict) else {},
+            }
+            for item in media_assets[:200] if isinstance(item, dict) and item.get("id")
+        ],
+        "card_experience": card_experience,
+        "card_prompt_preset": card_prompt_preset,
         "has_opening": feature_flags["opening"],
         "has_world_info": feature_flags["world_info"],
         "has_regex": feature_flags["regex"],
@@ -8857,7 +9054,7 @@ def local_app_to_card(row: dict) -> dict:
         "creator_notes": str(extra.get("creator_notes") or ""),
         "creator": str(extra.get("creator") or ""),
         "character_version": str(extra.get("character_version") or ""),
-        "extensions": extra.get("extensions") if isinstance(extra.get("extensions"), dict) else {},
+        "extensions": sanitize_card_extensions(extra.get("extensions")),
         "sampling": {
             "temperature": float(sampling.get("temperature")) if sampling.get("temperature") not in (None, "") else None,
             "top_p": float(sampling.get("top_p")) if sampling.get("top_p") not in (None, "") else None,
@@ -8983,10 +9180,12 @@ def silly_card_to_app(card: dict) -> dict:
     world = []
     book = data.get("character_book")
     if isinstance(book, dict) and isinstance(book.get("entries"), list):
-        for e in book["entries"]:
+        for entry_index, e in enumerate(book["entries"]):
             if not isinstance(e, dict):
                 continue
             world.append({
+                "id": e.get("id") or e.get("uid") or f"world-{entry_index + 1}",
+                "name": e.get("name") or e.get("title") or e.get("comment") or f"世界书条目 {entry_index + 1}",
                 "keys": e.get("keys") or e.get("key") or [],
                 "secondary_keys": e.get("secondary_keys") or e.get("keys_secondary") or e.get("keysecondary") or [],
                 "content": e.get("content") or "",
@@ -8999,7 +9198,21 @@ def silly_card_to_app(card: dict) -> dict:
                 "order": e.get("order", e.get("insertion_order", 100)),
                 "probability": e.get("probability", 100),
                 "recursive": bool(e.get("recursive", e.get("case_sensitive", False))),
+                "media_bindings": [],
             })
+    raw_extensions = data.get("extensions") if isinstance(data.get("extensions"), dict) else {}
+    extensions = sanitize_card_extensions(raw_extensions)
+    imported_experience = raw_extensions.get("homer_card_experience") if isinstance(raw_extensions.get("homer_card_experience"), dict) else {}
+    if imported_experience:
+        imported_experience = json.loads(json.dumps(imported_experience, ensure_ascii=False))
+        bgm = imported_experience.get("bgm") if isinstance(imported_experience.get("bgm"), dict) else {}
+        bgm["default_asset_id"] = ""
+        imported_experience["bgm"] = bgm
+        imported_experience["ui_rules"] = [
+            item for item in (imported_experience.get("ui_rules") or [])
+            if isinstance(item, dict) and str(item.get("action") or "") != "switch_bgm"
+        ]
+        imported_experience = normalize_card_experience(imported_experience, {}, {str(item.get("id") or "") for item in world})
     payload = {
         "name": name[:120],
         "description": _s("description", "personality_summary"),
@@ -9015,10 +9228,16 @@ def silly_card_to_app(card: dict) -> dict:
         "creator_notes": creator_notes,
         "creator": _s("creator"),
         "character_version": _s("character_version"),
-        "extensions": data.get("extensions") if isinstance(data.get("extensions"), dict) else {},
+        "extensions": extensions,
         "tags": tags,
         "is_public": False,
     }
+    if imported_experience:
+        payload["card_experience"] = imported_experience
+    if isinstance(raw_extensions.get("homer_card_prompt_preset"), dict):
+        imported_preset = normalize_card_prompt_preset(raw_extensions.get("homer_card_prompt_preset"))
+        imported_preset["enabled"] = False
+        payload["card_prompt_preset"] = imported_preset
     promoted_regex = regex_scripts_from_extensions(payload.get("extensions"))
     if promoted_regex:
         payload["regex_scripts"] = promoted_regex
@@ -9034,7 +9253,9 @@ def app_to_silly_card(card: dict) -> dict:
     for e in (card.get("world_info") or []):
         if not isinstance(e, dict):
             continue
-        entries.append({
+        entry = {
+            "id": str(e.get("id") or "")[:80],
+            "name": str(e.get("name") or "")[:80],
             "keys": e.get("keys") or [],
             "secondary_keys": e.get("secondary_keys") or [],
             "keys_secondary": e.get("secondary_keys") or [],
@@ -9049,7 +9270,19 @@ def app_to_silly_card(card: dict) -> dict:
             "insertion_order": int(e.get("order") or e.get("priority") or 100),
             "probability": int(e.get("probability") if e.get("probability") is not None else 100),
             "recursive": bool(e.get("recursive", False)),
-        })
+        }
+        bindings = e.get("media_bindings") if isinstance(e.get("media_bindings"), list) else []
+        if bindings:
+            entry["extensions"] = {"homer_media_bindings": bindings}
+        entries.append(entry)
+    extensions = sanitize_card_extensions(card.get("extensions"))
+    card_prompt_preset = normalize_card_prompt_preset(card.get("card_prompt_preset"))
+    if card_prompt_preset.get("name") or card_prompt_preset.get("prompts") or card_prompt_preset.get("blocks"):
+        extensions["homer_card_prompt_preset"] = card_prompt_preset
+    if isinstance(card.get("card_experience"), dict) and card.get("card_experience"):
+        extensions["homer_card_experience"] = card.get("card_experience")
+    if isinstance(card.get("media_assets"), list) and card.get("media_assets"):
+        extensions["homer_media_assets"] = card.get("media_assets")
     data = {
         "name": card.get("name") or "",
         "description": card.get("description") or "",
@@ -9065,7 +9298,7 @@ def app_to_silly_card(card: dict) -> dict:
         "creator": card.get("creator") or "",
         "character_version": card.get("character_version") or "",
         "avatar": card.get("cover_url") or card.get("cover") or "",
-        "extensions": card.get("extensions") if isinstance(card.get("extensions"), dict) else {},
+        "extensions": extensions,
     }
     if entries:
         data["character_book"] = {"name": (card.get("name") or "lore"), "entries": entries}
@@ -9112,7 +9345,11 @@ def normalize_world_info(value: object) -> list:
         position = str(raw.get("position") or raw.get("insertion_position") or "system").strip()
         position = allowed_positions.get(position, "system")
         content = str(raw.get("content") or raw.get("entry") or "").strip()[:8000]
-        if not content:
+        media_bindings = raw.get("media_bindings")
+        if not isinstance(media_bindings, list):
+            extensions = raw.get("extensions") if isinstance(raw.get("extensions"), dict) else {}
+            media_bindings = extensions.get("homer_media_bindings") if isinstance(extensions.get("homer_media_bindings"), list) else []
+        if not content and not media_bindings:
             continue
         priority_value = raw.get("priority", raw.get("insertion_order", raw.get("order", 100)))
         out.append({
@@ -9138,6 +9375,7 @@ def normalize_world_info(value: object) -> list:
             "sticky": _int(raw.get("sticky"), 0, 0, 9999),
             "cooldown": _int(raw.get("cooldown"), 0, 0, 9999),
             "delay": _int(raw.get("delay"), 0, 0, 9999),
+            "media_bindings": [dict(item) for item in media_bindings[:30] if isinstance(item, dict)],
         })
     return out
 
@@ -9180,18 +9418,35 @@ def required_world_info_entry() -> dict | None:
     return entry
 
 
+def _world_content_signature(value: object) -> str:
+    text = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+    text = "\n".join(line.rstrip() for line in text.split("\n")).strip()
+    return hashlib.sha256(text.encode("utf-8")).hexdigest() if text else ""
+
+
 def ensure_required_world_info(entries: object) -> list:
     normalized = normalize_world_info(entries if isinstance(entries, list) else [])
     required = required_world_info_entry()
     if not required:
         return normalized
-    content = str(required.get("content") or "").strip()
+    content_signature = _world_content_signature(required.get("content"))
     remaining = [
         entry for entry in normalized
         if str(entry.get("id") or "") != REQUIRED_WORLD_BOOK_ID
-        and not (str(entry.get("name") or "").strip() == "反扒卡" and str(entry.get("content") or "").strip() == content)
+        and not (content_signature and _world_content_signature(entry.get("content")) == content_signature)
     ]
     return [required, *remaining[:199]]
+
+
+def strip_required_world_info(entries: object) -> list:
+    """Return only creator-authored world entries; platform policy stays server-side."""
+    required = required_world_info_entry()
+    required_content = _world_content_signature((required or {}).get("content"))
+    return [
+        entry for entry in normalize_world_info(entries if isinstance(entries, list) else [])
+        if str(entry.get("id") or "") != REQUIRED_WORLD_BOOK_ID
+        and not (required_content and _world_content_signature(entry.get("content")) == required_content)
+    ][:199]
 
 
 def normalize_prompt_blocks(value: object) -> list:
@@ -9550,6 +9805,50 @@ def prompt_preset_runtime_blocks(value: object, *, galgame_enabled: bool | None 
     return blocks
 
 
+def normalize_card_prompt_preset(value: object) -> dict:
+    """Normalize an author-owned card prompt preset without retaining secret fields."""
+    if not isinstance(value, dict):
+        return {"version": 1, "enabled": False, "name": "", "format": "sillytavern", "source_file": "", "prompts": [], "prompt_order": [], "blocks": [], "stats": {"entry_count": 0, "enabled_count": 0}}
+    normalized = normalize_full_prompt_preset(value)
+    prompts: list[dict] = []
+    total_chars = 0
+    for index, raw in enumerate(normalized.get("prompts") or []):
+        if not isinstance(raw, dict) or len(prompts) >= 160:
+            continue
+        content = str(raw.get("content") or "")[:16000]
+        if total_chars + len(content) > 160000:
+            content = content[: max(0, 160000 - total_chars)]
+        total_chars += len(content)
+        prompts.append({
+            "identifier": str(raw.get("identifier") or f"prompt-{index + 1}")[:160],
+            "name": str(raw.get("name") or raw.get("identifier") or f"提示词 {index + 1}")[:160],
+            "role": str(raw.get("role") or "system")[:20],
+            "content": content,
+            "marker": bool(raw.get("marker")),
+            "system_prompt": bool(raw.get("system_prompt")),
+            "in_order": bool(raw.get("in_order")),
+            "order": _bounded_int(raw.get("order"), index, 0, 9999),
+            "order_enabled": bool(raw.get("order_enabled")),
+        })
+        if total_chars >= 160000:
+            break
+    clean = {
+        "version": 1,
+        "enabled": bool(value.get("enabled", False)),
+        "name": str(normalized.get("name") or value.get("name") or "本卡预设")[:160],
+        "format": "sillytavern" if prompts else "legacy-blocks",
+        "source_file": Path(str(value.get("source_file") or "")).name[:260],
+        "prompts": prompts,
+        "prompt_order": normalized.get("prompt_order") if isinstance(normalized.get("prompt_order"), list) else [],
+        "blocks": normalize_global_prompt_blocks(normalized.get("blocks") or [])[:160],
+    }
+    clean["stats"] = {
+        "entry_count": len(prompts) if prompts else len(clean["blocks"]),
+        "enabled_count": sum(1 for item in prompts if item.get("in_order") and item.get("order_enabled")) if prompts else sum(1 for item in clean["blocks"] if item.get("enabled", True)),
+    }
+    return clean
+
+
 def normalize_prompt_preset_collection(value: object, legacy: object = None) -> dict:
     parsed = value
     if isinstance(parsed, str):
@@ -9757,6 +10056,21 @@ def regex_scripts_from_extensions(extensions: object) -> list:
     return normalize_regex_scripts(raw_items)
 
 
+def sanitize_card_extensions(value: object) -> dict:
+    """Remove Homer-owned extension snapshots that must be rebuilt from trusted fields."""
+    if not isinstance(value, dict):
+        return {}
+    try:
+        clean = json.loads(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(clean, dict):
+        return {}
+    for key in ("homer_card_prompt_preset", "homer_card_experience", "homer_media_assets"):
+        clean.pop(key, None)
+    return clean
+
+
 def normalize_user_app_extras(data: dict) -> dict:
     """从前端 payload 中抽取扩展字段。返回 JSON 可序列化 dict 或 None（表示无覆盖）。"""
     if not isinstance(data, dict):
@@ -9786,7 +10100,8 @@ def normalize_user_app_extras(data: dict) -> dict:
         if key in data:
             extras[key] = str(data.get(key) or "").strip()[:limit]
     if isinstance(data.get("extensions"), dict):
-        raw_extensions = json.dumps(data.get("extensions") or {}, ensure_ascii=False, separators=(",", ":"))
+        sanitized_extensions = sanitize_card_extensions(data.get("extensions"))
+        raw_extensions = json.dumps(sanitized_extensions, ensure_ascii=False, separators=(",", ":"))
         if len(raw_extensions) <= 50000:
             extras["extensions"] = json.loads(raw_extensions)
             if "regex_scripts" not in data:
@@ -9804,7 +10119,8 @@ def normalize_user_app_extras(data: dict) -> dict:
                 if s:
                     greetings.append(s[:8000])
         extras["alternate_greetings"] = greetings
-    extras["world_info"] = ensure_required_world_info(data.get("world_info") if "world_info" in data else [])
+    if "world_info" in data:
+        extras["world_info"] = strip_required_world_info(data.get("world_info"))
     if "prompt_blocks" in data:
         extras["prompt_blocks"] = normalize_prompt_blocks(data.get("prompt_blocks"))
     if "quick_replies" in data:
@@ -9813,6 +10129,13 @@ def normalize_user_app_extras(data: dict) -> dict:
         extras["regex_scripts"] = normalize_regex_scripts(data.get("regex_scripts"))
     elif "TavernHelper_scripts" in data:
         extras["regex_scripts"] = normalize_regex_scripts(data.get("TavernHelper_scripts"))
+    if "card_prompt_preset" in data:
+        extras["card_prompt_preset"] = normalize_card_prompt_preset(data.get("card_prompt_preset"))
+    trusted_media = data.get("_trusted_card_media") if isinstance(data.get("_trusted_card_media"), dict) else None
+    if trusted_media is not None:
+        extras["media_assets"] = trusted_media.get("media_assets") if isinstance(trusted_media.get("media_assets"), list) else []
+        extras["world_info"] = strip_required_world_info(trusted_media.get("world_info") or [])
+        extras["card_experience"] = trusted_media.get("card_experience") if isinstance(trusted_media.get("card_experience"), dict) else {}
     sampling_in = data.get("sampling") if isinstance(data.get("sampling"), dict) else None
     if sampling_in:
         sampling: dict = {}
@@ -11168,6 +11491,7 @@ def build_user_llm_request(app: dict, content: str, messages: list[dict] | None 
     apply_initial_template_variables(extras.get("world_info") or [], template_context, char_name=char_name, user_name=user_name)
     global_preset = settings.get("global_prompt_preset") if isinstance(settings, dict) else None
     global_regex_preset = settings.get("global_regex_preset") if isinstance(settings, dict) else None
+    card_preset = normalize_card_prompt_preset(extras.get("card_prompt_preset"))
     conversation_settings = context.get("conversation_settings") if isinstance(context, dict) else None
     galgame_enabled = None
     if isinstance(conversation_settings, dict) and "galgame_enabled" in conversation_settings:
@@ -11189,10 +11513,42 @@ def build_user_llm_request(app: dict, content: str, messages: list[dict] | None 
         template_context=template_context,
         galgame_enabled=galgame_enabled,
     )
-    if global_before or global_after:
+    card_before = global_prompt_messages(
+        card_preset,
+        "system_before",
+        char_name=char_name,
+        user_name=user_name,
+        template_context=template_context,
+    )
+    card_after = global_prompt_messages(
+        card_preset,
+        "system_after",
+        char_name=char_name,
+        user_name=user_name,
+        template_context=template_context,
+    )
+    if global_before or global_after or card_before or card_after:
+        required_prefix = ""
+        required_entry = next((item for item in extras.get("world_info") or [] if isinstance(item, dict) and item.get("id") == REQUIRED_WORLD_BOOK_ID), None)
+        if required_entry:
+            required_text = render_tavern_template(
+                str(required_entry.get("content") or ""),
+                char_name,
+                user_name,
+                template_context=template_context_with_world(template_context, required_entry),
+                phase="generate",
+            )
+            if required_text:
+                required_prefix = f"【{required_entry.get('name') or '反扒卡'}】\n{required_text}"
+        system_remainder = system_prompt
+        if required_prefix and system_remainder.startswith(required_prefix):
+            system_remainder = system_remainder[len(required_prefix):].lstrip()
         system_prompt = "\n\n".join(
-            [msg["content"] for msg in global_before if msg.get("content")]
-            + [system_prompt]
+            ([required_prefix] if required_prefix else [])
+            + [msg["content"] for msg in global_before if msg.get("content")]
+            + [msg["content"] for msg in card_before if msg.get("content")]
+            + ([system_remainder] if system_remainder else [])
+            + [msg["content"] for msg in card_after if msg.get("content")]
             + [msg["content"] for msg in global_after if msg.get("content")]
         )
     chat_messages = [{"role": "system", "content": system_prompt}]
@@ -11229,6 +11585,13 @@ def build_user_llm_request(app: dict, content: str, messages: list[dict] | None 
     last = chat_messages[-1] if chat_messages else {}
     if not (last.get("role") == "user" and str(last.get("content") or "").strip() == user_content):
         chat_messages.append({"role": "user", "content": user_content})
+    chat_messages.extend(global_prompt_messages(
+        card_preset,
+        "post_history",
+        char_name=char_name,
+        user_name=user_name,
+        template_context=template_context,
+    ))
     chat_messages.extend(global_prompt_messages(
         global_preset,
         "post_history",
@@ -11644,6 +12007,16 @@ def stream_user_llm_chunks(app: dict, content: str, messages: list[dict] | None 
         yield from chunk_text(fallback)
 
 
+def app_requires_site_runtime(app: dict) -> bool:
+    extras = app_extras(app or {})
+    has_required_world = any(
+        isinstance(entry, dict) and entry.get("id") == REQUIRED_WORLD_BOOK_ID
+        for entry in (extras.get("world_info") or [])
+    )
+    card_preset = normalize_card_prompt_preset(extras.get("card_prompt_preset"))
+    return bool(has_required_world or card_preset.get("enabled"))
+
+
 def chat_reply_for_app(store: "Store", user_id: str, app_id: str, content: str, *, app_name: str = "", conversation_id: str = "", response_mode: str = "", model_override: str = "") -> tuple[dict, str]:
     app_row = store.get_local_app(app_id)
     if app_row:
@@ -11659,7 +12032,7 @@ def chat_reply_for_app(store: "Store", user_id: str, app_id: str, content: str, 
             except Exception:
                 history = []
         global_runtime_active = bool((llm_settings.get("global_prompt_preset") or {}).get("enabled") or (llm_settings.get("global_regex_preset") or {}).get("enabled"))
-        if selected_model or app.get("source") in ("user", "admin") or global_runtime_active:
+        if selected_model or app.get("source") in ("user", "admin") or global_runtime_active or app_requires_site_runtime(app):
             persona = store.get_persona(user_id)
             context = store.chat_context(user_id, app_id, conversation_id, content, history) if conversation_id else {}
             answer = call_user_llm(app, content, history, llm_settings, persona, context)
@@ -11715,7 +12088,7 @@ def generate_group_reply(store: "Store", user_id: str, group: dict, *, app_id: s
     app_row = store.get_local_app(str(member.get("app_id") or ""))
     if not user_can_access_app(app_row, user_id):
         raise ValueError("角色不可用")
-    app = local_app_to_card(dict(app_row))
+    app = dict(app_row)
     messages = store.list_group_messages(group["id"], user_id, limit=120)
     group_names = "、".join(str(m.get("app_name") or "") for m in group.get("members", []) if m.get("app_name"))
     last_user = prompt.strip()
@@ -11757,7 +12130,7 @@ def regenerate_reply_for_app(store: "Store", user_id: str, app_id: str, *, histo
             app["llm_model"] = selected_model
         llm_settings = store.effective_llm_settings(app, user_id=user_id)
         global_runtime_active = bool((llm_settings.get("global_prompt_preset") or {}).get("enabled") or (llm_settings.get("global_regex_preset") or {}).get("enabled"))
-        if selected_model or app.get("source") in ("user", "admin") or global_runtime_active:
+        if selected_model or app.get("source") in ("user", "admin") or global_runtime_active or app_requires_site_runtime(app):
             persona = store.get_persona(user_id)
             context = store.chat_context(user_id, app_id, conversation_id, last_user_content, history) if conversation_id else {}
             answer = call_user_llm(app, last_user_content, history, llm_settings, persona, context)
@@ -11886,13 +12259,14 @@ def admin_source(user: sqlite3.Row | dict | None) -> str:
     return "none"
 
 
-def admin_user_json(user: sqlite3.Row | dict) -> dict:
+def admin_user_json(user: sqlite3.Row | dict, advanced_creation: dict | None = None) -> dict:
     data = dict(user)
     source = admin_source(data)
     data["is_admin"] = source != "none"
     data["admin_source"] = source
     data["can_toggle_admin"] = source != "env"
     data["balance"] = credit_balance_json(data)
+    data["advanced_creation"] = advanced_creation or {}
     return data
 
 
@@ -12631,15 +13005,56 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.flush()
 
     def send_file(self, status: int, path: Path, content_type: str) -> None:
-        raw = path.read_bytes()
-        self.send_response(status)
+        size = path.stat().st_size
+        start = 0
+        end = max(0, size - 1)
+        response_status = status
+        range_header = str(self.headers.get("Range") or "").strip()
+        if self.command.upper() == "GET" and range_header.startswith("bytes=") and size:
+            match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header)
+            if not match:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                self.close_connection = True
+                return
+            first, last = match.groups()
+            if first:
+                start = int(first)
+                end = int(last) if last else end
+            elif last:
+                length = int(last)
+                start = max(0, size - length)
+            if start < 0 or start >= size or end < start:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                self.close_connection = True
+                return
+            end = min(end, size - 1)
+            response_status = 206
+        length = max(0, end - start + 1)
+        self.send_response(response_status)
         self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(raw)))
+        self.send_header("Content-Length", str(length))
+        self.send_header("Accept-Ranges", "bytes")
+        if response_status == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
         self.send_header("Cache-Control", "public, max-age=604800")
         self.send_cors_headers()
         self.send_header("Connection", "close")
         self.end_headers()
-        self.wfile.write(raw)
+        with path.open("rb") as stream:
+            stream.seek(start)
+            remaining = length
+            while remaining > 0:
+                chunk = stream.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                remaining -= len(chunk)
         self.wfile.flush()
         self.close_connection = True
 
@@ -12648,6 +13063,9 @@ class Handler(BaseHTTPRequestHandler):
         rel = path.removeprefix("/media-cache/").strip("/")
         if not rel or ".." in rel or rel.startswith("/"):
             self.send_text(400, "bad path")
+            return
+        if rel.startswith("card-assets/pending/"):
+            self.send_text(404, "not found")
             return
         if MEDIA_DIR is None:
             self.send_text(404, "not found")
@@ -12780,7 +13198,7 @@ class Handler(BaseHTTPRequestHandler):
                 settings = self.store.effective_llm_settings(app, user_id=user["id"])
             global_runtime_active = bool((settings.get("global_prompt_preset") or {}).get("enabled") or (settings.get("global_regex_preset") or {}).get("enabled"))
             runtime_settings = settings
-            if app and (model_override or app.get("source") in ("user", "admin") or global_runtime_active):
+            if app and (model_override or app.get("source") in ("user", "admin") or global_runtime_active or app_requires_site_runtime(app)):
                 try:
                     history = [dict(row) for row in self.store.list_messages(conv_id, user["id"], limit=100)]
                 except Exception:
@@ -13088,6 +13506,9 @@ class Handler(BaseHTTPRequestHandler):
     def handle_any(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
+        if re.fullmatch(r"/console/api/web/card-assets/[^/]+/content", path):
+            self.handle_card_asset_content(path)
+            return
         try:
             body_text, body = self.read_body()
         except (TypeError, ValueError):
@@ -13208,6 +13629,33 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_json(status, payload)
 
+    def handle_card_asset_content(self, path: str) -> None:
+        if self.command.upper() != "PUT":
+            self.send_json(405, error_response("method not allowed", 405))
+            return
+        user = self.authenticated_user()
+        if not user:
+            self.send_json(401, error_response("unauthorized", 401))
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+        except (TypeError, ValueError):
+            length = 0
+        if length <= 0 or length > 30 * 1024 * 1024:
+            self.send_json(413, error_response("invalid upload size", 413))
+            return
+        asset_id = unquote(path.split("/")[-2])
+        body = self.rfile.read(length)
+        try:
+            self.store.write_card_asset_upload(user["id"], asset_id, body, str(self.headers.get("Content-Type") or ""))
+            self.store.log_event(user["id"], "card_asset_upload", "上传角色互动素材", {"asset_id": asset_id, "size_bytes": len(body)})
+            self.store.log_request(self.command, path, "", {k: v for k, v in self.headers.items()}, f"[binary {len(body)} bytes]", 200)
+            self.send_json(200, ok_response({"uploaded": True, "asset_id": asset_id, "size_bytes": len(body)}))
+        except CardMediaError as exc:
+            message = str(exc)
+            status = 404 if "not found" in message or "not owned" in message else 400
+            self.send_json(status, error_response(message, status))
+
     def route(self, path: str, query: str, body: object) -> object:
         normalized = path.lstrip("/")
 
@@ -13217,6 +13665,41 @@ class Handler(BaseHTTPRequestHandler):
         user = self.authenticated_user()
         if not user and not anonymous_route_allowed(normalized, self.command):
             return error_response("unauthorized", 401)
+
+        if normalized == "console/api/web/creator-access":
+            if self.command.upper() != "GET":
+                return error_response("method not allowed", 405)
+            return ok_response(self.store.advanced_creation_access(user["id"]))
+
+        if normalized == "console/api/web/card-assets/upload-intent":
+            if self.command.upper() != "POST" or not isinstance(body, dict):
+                return error_response("invalid request", 400)
+            try:
+                payload = self.store.create_card_asset_upload_intent(user["id"], body)
+                self.store.log_event(user["id"], "card_asset_intent", "创建角色互动素材上传", {"asset_id": (payload.get("asset") or {}).get("id"), "kind": body.get("kind")})
+                return ok_response(payload)
+            except AdvancedCreationError as exc:
+                return error_response(str(exc), 403)
+            except CardMediaError as exc:
+                message = str(exc)
+                return error_response(message, 404 if "not found" in message or "not owned" in message else 400)
+
+        asset_route = re.fullmatch(r"console/api/web/card-assets/([^/]+)/(complete|delete)", normalized)
+        if asset_route:
+            if self.command.upper() != "POST":
+                return error_response("method not allowed", 405)
+            asset_id, action = asset_route.groups()
+            try:
+                if action == "complete":
+                    payload = self.store.complete_card_asset_upload(user["id"], unquote(asset_id), body if isinstance(body, dict) else {})
+                    self.store.log_event(user["id"], "card_asset_complete", "完成角色互动素材上传", {"asset_id": asset_id})
+                    return ok_response(payload)
+                self.store.delete_card_asset(user["id"], unquote(asset_id))
+                self.store.log_event(user["id"], "card_asset_delete", "删除角色互动素材", {"asset_id": asset_id})
+                return ok_response({"deleted": True, "asset_id": asset_id})
+            except CardMediaError as exc:
+                message = str(exc)
+                return error_response(message, 404 if "not found" in message or "not owned" in message else 400)
 
         if normalized == "console/api/web/tts/voices":
             if not self.authenticated_token_user():
@@ -13526,7 +14009,13 @@ class Handler(BaseHTTPRequestHandler):
                 return error_response("invalid body")
             data = dict(body)
             data["cover_url"] = normalize_cover_input(data.get("cover_url") or data.get("cover") or "")
-            row = self.store.create_user_app(user["id"], data)
+            try:
+                row = self.store.create_user_app(user["id"], data)
+            except AdvancedCreationError as exc:
+                return error_response(str(exc), 403)
+            except CardMediaError as exc:
+                message = str(exc)
+                return error_response(message, 404 if "not found" in message or "not owned" in message else 400)
             payload = local_app_to_card(dict(row))
             self.store.log_event(user["id"], "workshop", f"创建角色：{payload.get('name')}", {"app_id": payload.get("id")})
             return go_response(payload) if normalized.startswith("go/") else ok_response(payload)
@@ -13547,7 +14036,13 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 return error_response(f"角色卡解析失败：{exc}", 400)
             data["cover_url"] = normalize_cover_input(data.get("cover_url") or "")
-            row = self.store.create_user_app(user["id"], data)
+            try:
+                row = self.store.create_user_app(user["id"], data)
+            except AdvancedCreationError as exc:
+                return error_response(str(exc), 403)
+            except CardMediaError as exc:
+                message = str(exc)
+                return error_response(message, 404 if "not found" in message or "not owned" in message else 400)
             payload = local_app_to_card(dict(row))
             self.store.log_event(user["id"], "workshop", f"导入角色：{payload.get('name')}", {"app_id": payload.get("id")})
             return ok_response(payload)
@@ -13583,7 +14078,13 @@ class Handler(BaseHTTPRequestHandler):
             data = dict(body)
             if "cover_url" in data or "cover" in data:
                 data["cover_url"] = normalize_cover_input(data.get("cover_url") or data.get("cover") or "")
-            row = self.store.update_user_app(app_id, user["id"], data)
+            try:
+                row = self.store.update_user_app(app_id, user["id"], data)
+            except AdvancedCreationError as exc:
+                return error_response(str(exc), 403)
+            except CardMediaError as exc:
+                message = str(exc)
+                return error_response(message, 404 if "not found" in message or "not owned" in message else 400)
             if not row:
                 return error_response("not found", 404)
             payload = local_app_to_card(dict(row))
@@ -15085,7 +15586,7 @@ class Handler(BaseHTTPRequestHandler):
                         (limit, offset),
                     ).fetchall()
                 return ok_response({
-                    "users": [admin_user_json(r) for r in rows],
+                    "users": [admin_user_json(r, self.store.advanced_creation_access(r["id"])) for r in rows],
                     "total": total,
                     "page": page,
                     "limit": limit,
@@ -15104,7 +15605,16 @@ class Handler(BaseHTTPRequestHandler):
                     updated = self.store.set_user_admin(target_id, bool(body.get("is_admin")))
                 except ValueError as exc:
                     return error_response(str(exc), 400)
-                return ok_response(admin_user_json(updated))
+                return ok_response(admin_user_json(updated, self.store.advanced_creation_access(updated["id"])))
+
+            if normalized.startswith("admin/api/users/") and normalized.endswith("/advanced-creation"):
+                target_id = normalized.split("/")[3]
+                if not isinstance(body, dict) or not isinstance(body.get("enabled"), bool):
+                    return error_response("enabled must be boolean", 400)
+                updated = self.store.set_advanced_creator_override(target_id, body.get("enabled"))
+                if not updated:
+                    return error_response("user not found", 404)
+                return ok_response(admin_user_json(updated, self.store.advanced_creation_access(target_id)))
 
             if normalized.startswith("admin/api/users/") and normalized.endswith("/points"):
                 target_id = normalized.split("/")[3]
@@ -15346,13 +15856,14 @@ def main() -> int:
 
     if len(AUTH_TOKEN_SECRET.encode("utf-8")) < 32:
         raise RuntimeError("AUTH_TOKEN_SECRET must be configured with at least 32 bytes")
-    store = Store(args.db)
     global ACTIVE_STORE, MEDIA_DIR
-    ACTIVE_STORE = store
     MEDIA_DIR = Path(os.environ.get("MEDIA_DIR") or (args.db.resolve().parent / "media"))
     (MEDIA_DIR / "cover").mkdir(parents=True, exist_ok=True)
     (MEDIA_DIR / "profile").mkdir(parents=True, exist_ok=True)
     (MEDIA_DIR / "generated").mkdir(parents=True, exist_ok=True)
+    store = Store(args.db)
+    store.configure_card_media(MEDIA_DIR)
+    ACTIVE_STORE = store
     mail_db = Path(os.environ.get("MAIL_DB_PATH") or (args.db.resolve().parent / "verification_mail.sqlite3"))
     verification_store = VerificationStore(mail_db)
     server = LocalServer((args.host, args.port), Handler, store, verification_store)

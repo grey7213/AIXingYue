@@ -10,7 +10,7 @@
   <script src="/assets/vendor/tailwindcss-browser.js?v=20260713-local"></script>
   <link rel="stylesheet" href="/assets/css/custom.css?v=20260703-fengyue-ui2">
   <link rel="stylesheet" href="/assets/css/admin.css?v=20260711-reference-ui1">
-  <script type="module" src="/assets/js/admin-app.js?v=20260713-global-presets-2"></script>
+  <script type="module" src="/assets/js/admin-app.js?v=20260716-card-maker"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="xy-admin min-h-screen">
@@ -283,6 +283,7 @@
                       <th>邮箱</th>
                       <th>昵称</th>
                       <th>权限</th>
+                      <th>高级创作</th>
                       <th>积分</th>
                       <th>注册时间</th>
                       <th>操作</th>
@@ -290,7 +291,7 @@
                   </thead>
                   <tbody>
                     <template x-if="users.length === 0 && !loading">
-                      <tr><td colspan="6" class="text-center text-slate-500 py-12">暂无数据</td></tr>
+                      <tr><td colspan="7" class="text-center text-slate-500 py-12">暂无数据</td></tr>
                     </template>
                     <template x-for="u in users" :key="u.id">
                       <tr>
@@ -299,6 +300,7 @@
                         <td>
                           <span class="xy-badge" :class="adminBadgeClass(u)" x-text="adminLabel(u)"></span>
                         </td>
+                        <td><span class="xy-badge" :class="advancedCreationBadge(u)" x-text="advancedCreationLabel(u)"></span></td>
                         <td>
                           <span class="xy-badge xy-badge-purple" x-text="u.points"></span>
                         </td>
@@ -306,6 +308,7 @@
                         <td>
                           <div class="flex items-center gap-3 text-xs flex-wrap min-w-40">
                             <button @click="adjustPointsPrompt(u)" class="text-violet-300 hover:text-white">调整积分</button>
+                            <button @click="toggleAdvancedCreation(u)" class="text-amber-300 hover:text-amber-100" x-text="u.advanced_creation?.admin_override ? '收回高级创作' : '开放高级创作'"></button>
                             <button
                               @click="toggleUserAdmin(u)"
                               :disabled="u.can_toggle_admin === false || (adminInfo?.id === u.id && u.is_admin)"

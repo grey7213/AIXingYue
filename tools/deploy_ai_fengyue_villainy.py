@@ -13,6 +13,7 @@ import paramiko
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BACKEND = ROOT / "tools" / "ai_fengyue_local_server.py"
+DEFAULT_CARD_MEDIA_EXTENSION = ROOT / "tools" / "card_experience_extension.py"
 DEFAULT_REQUIRED_WORLD_BOOK = ROOT / "tools" / "data" / "tavo_anti_scrape_worldbook.json"
 DEFAULT_FRONTEND = ROOT / "frontend"
 DEFAULT_APK = ROOT / "output" / "zip-1-repack" / "ai-xingyue-patcher-signed.apk"
@@ -214,7 +215,7 @@ server {{
     add_header X-Frame-Options "DENY" always;
     add_header Referrer-Policy "no-referrer" always;
     add_header Permissions-Policy "camera=(), geolocation=(), payment=(), usb=()" always;
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self'; media-src 'self' blob:; frame-src 'self' data: blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; worker-src 'none'" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self'; media-src 'self' blob:; frame-src 'self' data: blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; worker-src 'self'" always;
 
 {proxy_locations(port)}
 
@@ -225,6 +226,12 @@ server {{
 
     # 静态资源：短期缓存 + 验证（每次刷新会问服务器是否更新，但 304 仍然很快）
     location /assets/ {{
+        try_files $uri =404;
+        expires 1h;
+    }}
+
+    location ~* \\.mjs$ {{
+        types {{ text/javascript mjs; }}
         try_files $uri =404;
         expires 1h;
     }}
@@ -361,6 +368,7 @@ def main() -> int:
     parser.add_argument("--deploy-dir", default="/opt/ai-fengyue-backend")
     parser.add_argument("--port", type=int, default=8008)
     parser.add_argument("--backend", type=Path, default=DEFAULT_BACKEND)
+    parser.add_argument("--card-media-extension", type=Path, default=DEFAULT_CARD_MEDIA_EXTENSION)
     parser.add_argument("--frontend", type=Path, default=DEFAULT_FRONTEND, help="前端目录，会上传到 /var/www/ai-fengyue-frontend")
     parser.add_argument("--apk", type=Path, default=DEFAULT_APK, help="要发布到 /download/ai-xingyue-latest.apk 的 APK 文件")
     parser.add_argument("--skip-frontend", action="store_true", help="跳过前端上传")
@@ -377,6 +385,8 @@ def main() -> int:
 
     if not args.backend.exists():
         raise FileNotFoundError(args.backend)
+    if not args.card_media_extension.exists():
+        raise FileNotFoundError(args.card_media_extension)
     if not args.key.exists():
         raise FileNotFoundError(args.key)
 
@@ -391,8 +401,17 @@ def main() -> int:
         run(ssh, f"[ -f {PATCHER_NGINX_CONF} ] && cp {PATCHER_NGINX_CONF} {PATCHER_NGINX_CONF}.bak-{timestamp} || true")
 
         remote_backend = posixpath.join(args.deploy_dir, "ai_fengyue_local_server.py")
+        remote_card_media_extension = posixpath.join(args.deploy_dir, "card_experience_extension.py")
+        run(ssh, f"[ -f {remote_backend} ] && cp {remote_backend} {remote_backend}.bak-{timestamp} || true")
+        run(
+            ssh,
+            f"[ -f {remote_card_media_extension} ] && cp {remote_card_media_extension} "
+            f"{remote_card_media_extension}.bak-{timestamp} || true",
+        )
         log(f"uploading backend to {remote_backend}")
         put_file(sftp, args.backend, remote_backend)
+        log(f"uploading card media extension to {remote_card_media_extension}")
+        put_file(sftp, args.card_media_extension, remote_card_media_extension)
         if DEFAULT_REQUIRED_WORLD_BOOK.exists():
             remote_worldbook = posixpath.join(args.deploy_dir, "data", "tavo_anti_scrape_worldbook.json")
             log(f"uploading required world book to {remote_worldbook}")
@@ -490,7 +509,16 @@ def main() -> int:
         # The backend writes media even when --skip-frontend is used. Prepare this
         # path unconditionally after any frontend-wide www-data chown.
         run(ssh, f"mkdir -p {FRONTEND_REMOTE}/media-cache && chown -R ai-xingyue:ai-xingyue {FRONTEND_REMOTE}/media-cache && chmod 750 {FRONTEND_REMOTE}/media-cache")
+        run(
+            ssh,
+            f"mkdir -p {FRONTEND_REMOTE}/media-cache/card-assets/pending "
+            f"{FRONTEND_REMOTE}/media-cache/card-assets/ready && "
+            f"chown -R ai-xingyue:ai-xingyue {FRONTEND_REMOTE}/media-cache/card-assets && "
+            f"find {FRONTEND_REMOTE}/media-cache/card-assets -type d -exec chmod 750 {{}} + && "
+            f"find {FRONTEND_REMOTE}/media-cache/card-assets -type f -exec chmod 640 {{}} +",
+        )
         run(ssh, f"chown root:ai-xingyue {env_path} && chmod 640 {env_path}")
+        run(ssh, f"python3 -m py_compile {remote_backend} {remote_card_media_extension}")
         run(ssh, "systemctl enable --now ai-fengyue-backend.service")
         run(ssh, "systemctl restart ai-fengyue-backend.service")
         run(ssh, "sleep 1; systemctl --no-pager --full status ai-fengyue-backend.service | sed -n '1,18p'")

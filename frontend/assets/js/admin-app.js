@@ -1,5 +1,5 @@
 // 惑梦（Homer） 管理后台 Alpine.js 应用
-import { api, isLoggedIn, formatDateTime, ApiError } from '/assets/js/api.js';
+import { api, isLoggedIn, formatDateTime, ApiError } from '/assets/js/api.js?v=20260716-card-maker';
 
 function adminPanel() {
   return {
@@ -2241,6 +2241,33 @@ function adminPanel() {
         await this.loadStats();
       } catch (err) {
         this.showToast(err.message || '权限更新失败', 'error');
+      } finally { this.loading = false; }
+    },
+
+    advancedCreationLabel(user) {
+      const access = user?.advanced_creation || {};
+      if (access.source === 'admin') return '后台开放';
+      if (access.source === 'farm') return '农场全解锁';
+      return `未开放 · ${access.unlocked_plots || 0}/8`;
+    },
+
+    advancedCreationBadge(user) {
+      const source = user?.advanced_creation?.source;
+      return source === 'admin' ? 'xy-badge-purple' : (source === 'farm' ? 'xy-badge-green' : 'xy-badge-gray');
+    },
+
+    async toggleAdvancedCreation(user) {
+      if (!user?.id) return;
+      const next = !user?.advanced_creation?.admin_override;
+      const action = next ? '后台开放高级创作给' : '收回后台高级创作权限：';
+      if (!confirm(`${action}${user.email || user.name || user.id}？`)) return;
+      this.loading = true;
+      try {
+        await api.admin.setAdvancedCreation(user.id, next);
+        this.showToast(next ? '已开放高级创作' : '已收回后台开放权限', 'success');
+        await this.loadUsers(this.userPage);
+      } catch (err) {
+        this.showToast(err.message || '高级创作权限更新失败', 'error');
       } finally { this.loading = false; }
     },
   };

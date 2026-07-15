@@ -148,6 +148,8 @@ export const api = {
       request(`/admin/api/users/${encodeURIComponent(userId)}/points`, { method: 'POST', body: { delta } }),
     setUserAdmin: (userId, isAdmin) =>
       request(`/admin/api/users/${encodeURIComponent(userId)}/admin`, { method: 'POST', body: { is_admin: !!isAdmin } }),
+    setAdvancedCreation: (userId, enabled) =>
+      request(`/admin/api/users/${encodeURIComponent(userId)}/advanced-creation`, { method: 'POST', body: { enabled: !!enabled } }),
     requestLog: (page = 1, limit = 50, filters = {}) => {
       const qs = new URLSearchParams({ page, limit });
       if (filters.method) qs.set('method', filters.method);
