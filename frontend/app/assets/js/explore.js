@@ -1,4 +1,4 @@
-import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js?v=20260710-web-reliability';
+import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js?v=20260717-handoff-merge';
 import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260710-resume-chat';
 
 const DEFAULT_PAGE_SIZE = 12;
@@ -37,6 +37,7 @@ function explorePage() {
     total: 0,
     searchKeyword: '',
     cards: [],
+    featuredPool: [],
     activeCategory: 'all',
     activeSort: 'random',
     activeRank: 'daily',
@@ -243,6 +244,7 @@ function explorePage() {
         this._listAbortController?.abort();
         this.page = 1;
         this.cards = [];
+        this.featuredPool = [];
         this.hasMore = true;
         this.total = 0;
         if (this.activeSort === 'random') this.randomSeed = Math.floor(Math.random() * 2147483647);
@@ -270,6 +272,12 @@ function explorePage() {
         if (requestEpoch !== this._listEpoch) return;
         const data = r?.data || {};
         const list = data.apps || data.list || data.items || [];
+        if (requestPage === 1) {
+          const featured = Array.isArray(data.featured_apps) ? data.featured_apps : [];
+          this.featuredPool = featured
+            .map((raw, index) => normalizeCard(raw, this.siteSettings?.app_home || {}, index))
+            .filter(Boolean);
+        }
         const seen = new Set(this.cards.map(card => card.id));
         const normalized = list
           .map((raw, index) => normalizeCard(raw, this.siteSettings?.app_home || {}, index))
@@ -294,11 +302,12 @@ function explorePage() {
     loadMore() { this.loadList(false); },
 
     featuredCards() {
-      return this.cards.slice(0, 2);
+      return this.featuredPool.length ? this.featuredPool.slice(0, 2) : this.cards.slice(0, 2);
     },
 
     recommendedCards() {
-      return this.cards.slice(2);
+      const featuredIds = new Set(this.featuredCards().map(card => card.id));
+      return this.cards.filter(card => !card.official_recommended && !featuredIds.has(card.id));
     },
 
     emptyText(key, fallback = '') {
@@ -332,6 +341,7 @@ function explorePage() {
           randomSeed: this.randomSeed,
           pictureless: this.pictureless,
           cards: this.cards.slice(0, 80),
+          featuredPool: this.featuredPool.slice(0, 2),
           clickedId: card?.id || '',
         }));
       } catch {}
@@ -380,6 +390,7 @@ function explorePage() {
         this.randomSeed = Number(state.randomSeed) || this.randomSeed;
         this.pictureless = !!state.pictureless;
         this.cards = Array.isArray(state.cards) ? state.cards : [];
+        this.featuredPool = Array.isArray(state.featuredPool) ? state.featuredPool : [];
         this.syncAdvancedForm();
         return state;
       } catch {

@@ -1,4 +1,4 @@
-import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js?v=20260716-card-maker';
+import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js?v=20260717-handoff-merge';
 import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-channels-closed';
 import {
   createSidebarTemplate,
@@ -8,7 +8,7 @@ import {
   normalizeCardExperience,
   normalizeMediaAssets,
   normalizeMediaBindings,
-} from '/app/assets/js/card-experience-schema.mjs?v=20260716';
+} from '/app/assets/js/card-experience-schema.mjs?v=20260717-handoff-merge';
 
 const emptyCardPromptPreset = () => ({ version: 1, enabled: false, name: '', format: 'sillytavern', source_file: '', prompts: [], prompt_order: [], blocks: [], stats: { entry_count: 0, enabled_count: 0 } });
 
@@ -415,9 +415,27 @@ function createPage() {
       } catch (err) { this.showToast(err.message || '素材删除失败', 'error'); }
     },
 
+    setAssetEmotion(assetId, value) {
+      const asset = this.form.media_assets.find(item => item.id === assetId);
+      if (!asset) return;
+      const emotion = String(value || '').trim().slice(0, 40);
+      asset.metadata = { ...(asset.metadata || {}) };
+      if (emotion) asset.metadata.emotion = emotion;
+      else delete asset.metadata.emotion;
+    },
+
+    galgamePortraitOptions() {
+      return this.assetsByKind('portrait');
+    },
+
+    galgameBackgroundOptions() {
+      return this.assetsByKind('background');
+    },
+
     toggleVisibility() {
       this.form.is_public = !this.form.is_public;
     },
+
 
     bumpSampling(key, delta, lo, hi, decimals = 1) {
       let v = Number(this.form.sampling[key]) || 0;

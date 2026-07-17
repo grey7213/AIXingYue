@@ -98,6 +98,12 @@ CONTENT_MODE = os.environ.get("CONTENT_MODE", "cache_first").strip().lower()
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://patcher.villainy.top").rstrip("/")
 AUTH_TOKEN_SECRET = os.environ.get("AUTH_TOKEN_SECRET", "").strip()
 AUTH_TOKEN_TTL_SECONDS = env_int("AUTH_TOKEN_TTL_SECONDS", 30 * 24 * 60 * 60, 300, 365 * 24 * 60 * 60)
+# 方案A改造1：登录凭证从 localStorage 迁到 HttpOnly Cookie
+AUTH_COOKIE_NAME = os.environ.get("AUTH_COOKIE_NAME", "ai_xingyue_token").strip() or "ai_xingyue_token"
+# Secure 属性：生产（https）下应为 True；本地 http 调试可用环境变量关掉
+AUTH_COOKIE_SECURE = (os.environ.get("AUTH_COOKIE_SECURE", "1").strip().lower() not in ("0", "false", "no", ""))
+AUTH_COOKIE_SAMESITE = os.environ.get("AUTH_COOKIE_SAMESITE", "Lax").strip() or "Lax"
+
 ALLOWED_CORS_ORIGINS = {
     item.strip().rstrip("/")
     for item in os.environ.get("ALLOWED_CORS_ORIGINS", PUBLIC_BASE_URL).split(",")
@@ -679,7 +685,53 @@ def user_id_from_token(value: str | None) -> str | None:
     return str(user_id) if user_id else None
 
 
+# 方案A改造1：Cookie 辅助函数
+def build_auth_cookie(token: str) -> str:
+    """构建登录成功后写入 HttpOnly Cookie 的 Set-Cookie 值。"""
+    parts = [
+        f"{AUTH_COOKIE_NAME}={token}",
+        "Path=/",
+        "HttpOnly",
+        f"SameSite={AUTH_COOKIE_SAMESITE}",
+        f"Max-Age={AUTH_TOKEN_TTL_SECONDS}",
+    ]
+    if AUTH_COOKIE_SECURE:
+        parts.append("Secure")
+    return "; ".join(parts)
+
+
+def clear_auth_cookie() -> str:
+    """构建登出时清除认证 Cookie 的 Set-Cookie 值。"""
+    parts = [
+        f"{AUTH_COOKIE_NAME}=",
+        "Path=/",
+        "HttpOnly",
+        f"SameSite={AUTH_COOKIE_SAMESITE}",
+        "Max-Age=0",
+        "Expires=Thu, 01 Jan 1970 00:00:00 GMT",
+    ]
+    if AUTH_COOKIE_SECURE:
+        parts.append("Secure")
+    return "; ".join(parts)
+
+
+def token_from_cookie_header(cookie_header: str | None) -> str | None:
+    """从请求头的 Cookie 字段解析出认证 token（不做签名校验）。"""
+    raw = (cookie_header or "").strip()
+    if not raw:
+        return None
+    for item in raw.split(";"):
+        item = item.strip()
+        if not item or "=" not in item:
+            continue
+        name, _, val = item.partition("=")
+        if name.strip() == AUTH_COOKIE_NAME:
+            return val.strip()
+    return None
+
+
 def anonymous_route_allowed(normalized: str, method: str) -> bool:
+
     method = method.upper()
     exact = {
         "console/api/register/email", "console/api/register", "console/api/register/name_check",
@@ -2620,6 +2672,7 @@ class Store:
                     status text not null default 'published',
                     is_public integer not null default 1,
                     sort_weight integer default 0,
+                    official_recommended integer not null default 0,
                     extra_settings text,
                     created_at integer not null,
                     updated_at integer not null
@@ -2868,6 +2921,7 @@ class Store:
                 "display_id": "text",
                 "api_base_url": "text",
                 "extra_settings": "text",
+                "official_recommended": "integer not null default 0",
             }
             for name, column_type in wanted.items():
                 if name not in columns:
@@ -2875,6 +2929,10 @@ class Store:
             self.conn.execute(
                 "create unique index if not exists idx_local_apps_display_id "
                 "on local_apps(display_id) where display_id is not null and display_id<>''"
+            )
+            self.conn.execute(
+                "create index if not exists idx_local_apps_official_recommended "
+                "on local_apps(official_recommended, is_public, status, updated_at desc)"
             )
             self.conn.commit()
 
@@ -5506,8 +5564,8 @@ class Store:
             self.conn.execute(
                 """insert into local_apps(id,display_id,source,owner_user_id,name,summary,description,cover_url,
                    tags,opening_statement,suggested_questions,pre_prompt,llm_model,api_base_url,age_rating,gender,
-                   language,status,is_public,sort_weight,extra_settings,created_at,updated_at)
-                   values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   language,status,is_public,sort_weight,official_recommended,extra_settings,created_at,updated_at)
+                   values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (app_id, display_id, "admin", None, normalized.get("name") or "未命名官方角色",
                   normalized.get("summary") or "", normalized.get("description") or "",
                   normalized.get("cover_url") or "", json.dumps(normalized.get("tags") or [], ensure_ascii=False),
@@ -5517,6 +5575,7 @@ class Store:
                   int(normalized.get("age_rating") or 0), int(normalized.get("gender") or 0),
                   normalized.get("language") or "zh-Hans", normalized.get("status") or "published",
                   1 if normalized.get("is_public", True) else 0, int(normalized.get("sort_weight") or 100),
+                  1 if normalized.get("official_recommended", False) else 0,
                   extra_json if extra_json != "{}" else None, ts, ts),
             )
             self.conn.commit()
@@ -5535,7 +5594,7 @@ class Store:
             data = normalize_admin_app_data({**data, **rich}, partial=True)
             allowed = ("name", "summary", "description", "cover_url", "opening_statement",
                        "pre_prompt", "llm_model", "api_base_url", "age_rating", "gender",
-                       "language", "status", "is_public", "sort_weight")
+                       "language", "status", "is_public", "sort_weight", "official_recommended")
             updates = {}
             for k in allowed:
                 if k in data:
@@ -5548,6 +5607,8 @@ class Store:
                 updates["is_public"] = 1 if updates["is_public"] else 0
             if "sort_weight" in updates:
                 updates["sort_weight"] = int(updates["sort_weight"] or 0)
+            if "official_recommended" in updates:
+                updates["official_recommended"] = 1 if updates["official_recommended"] else 0
             extras_in = normalize_user_app_extras({**data, **rich})
             extra_trigger_keys = (
                 "bg_url", "nsfw", "protected", "protected_prompt", "anonymous", "sampling",
@@ -5841,7 +5902,8 @@ class Store:
                         random_seed: int | None = None,
                         page: int = 1, page_size: int = 30,
                         only_public: bool = True, only_published: bool = True,
-                        lightweight: bool = False) -> tuple[list, int]:
+                        lightweight: bool = False,
+                        official_recommended: bool | None = None) -> tuple[list, int]:
         where = []
         if only_published:
             where.append("status='published'")
@@ -5854,6 +5916,9 @@ class Store:
         if owner_user_id:
             where = ["owner_user_id=?"]  # 我的角色：不限 public/status
             params = [owner_user_id]
+        if official_recommended is not None:
+            where.append("official_recommended=?")
+            params.append(1 if official_recommended else 0)
         if search:
             where.append("(id like ? or display_id like ? or name like ? or summary like ? or description like ? or tags like ?)")
             params.extend([f"%{search}%", f"%{search}%", f"%{search}%", f"%{search}%", f"%{search}%", f"%{search}%"])
@@ -5896,6 +5961,7 @@ class Store:
             select_cols = (
                 "id,display_id,name,summary,description,cover_url,tags,age_rating,gender,language,"
                 "players_count,like_count,source,status,is_public,sort_weight,created_at,updated_at,"
+                "official_recommended,"
                 "coalesce((select has_opening from role_card_annotations ra where ra.app_id=local_apps.id),"
                 "case when length(trim(coalesce(opening_statement,'')))>0 then 1 else 0 end) as has_opening,"
                 "coalesce((select has_world_info from role_card_annotations ra where ra.app_id=local_apps.id),"
@@ -5910,6 +5976,32 @@ class Store:
                 (*params, *order_params, page_size, offset),
             ).fetchall()
         return [dict(r) for r in rows], int(total)
+
+    def list_official_recommendations(self, *, limit: int = 2, random_seed: int | None = None) -> tuple[list[dict], int]:
+        safe_limit = max(1, min(int(limit or 2), 12))
+        seed_value = int(random_seed or random.SystemRandom().randint(1, 2147483647)) & 0x7FFFFFFF
+        where_sql = " where official_recommended=1 and is_public=1 and status='published'"
+        order_by = (
+            "abs(((rowid * rowid * 1103515245) + "
+            "(rowid * (? + 1) * 12345) + (? * 2654435761)) % 2147483647), updated_at desc"
+        )
+        select_cols = (
+            "id,display_id,name,summary,description,cover_url,tags,age_rating,gender,language,"
+            "players_count,like_count,source,status,is_public,sort_weight,official_recommended,created_at,updated_at,"
+            "coalesce((select has_opening from role_card_annotations ra where ra.app_id=local_apps.id),"
+            "case when length(trim(coalesce(opening_statement,'')))>0 then 1 else 0 end) as has_opening,"
+            "coalesce((select has_world_info from role_card_annotations ra where ra.app_id=local_apps.id),"
+            "case when json_valid(extra_settings) and json_array_length(extra_settings,'$.world_info')>0 then 1 else 0 end) as has_world_info,"
+            "coalesce((select has_regex from role_card_annotations ra where ra.app_id=local_apps.id),"
+            "case when json_valid(extra_settings) and json_array_length(extra_settings,'$.regex_scripts')>0 then 1 else 0 end) as has_regex"
+        )
+        with self.lock:
+            total = int(self.conn.execute(f"select count(*) from local_apps{where_sql}").fetchone()[0])
+            rows = self.conn.execute(
+                f"select {select_cols} from local_apps{where_sql} order by {order_by} limit ?",
+                (seed_value, seed_value, safe_limit),
+            ).fetchall()
+        return [dict(row) for row in rows], total
 
     def local_apps_count(self) -> dict:
         with self.lock:
@@ -7170,6 +7262,11 @@ def normalize_admin_app_data(data: dict, partial: bool = False) -> dict:
         out["sort_weight"] = parse_int(data.get("sort_weight", data.get("sort", data.get("weight"))), 100)
     if "is_public" in data or "public" in data or not partial:
         out["is_public"] = parse_bool(data.get("is_public", data.get("public")), True)
+    if "official_recommended" in data or "official_featured" in data or not partial:
+        out["official_recommended"] = parse_bool(
+            data.get("official_recommended", data.get("official_featured")),
+            False,
+        )
     if not out.get("language") and not partial:
         out["language"] = "zh-Hans"
     return out
@@ -9013,6 +9110,7 @@ def local_app_to_card(row: dict) -> dict:
         "status": row.get("status") or "published",
         "is_public": bool(row.get("is_public", 1)),
         "sort_weight": row.get("sort_weight") or 0,
+        "official_recommended": bool(row.get("official_recommended", 0)),
         "is_original": (row.get("source") in ("user", "admin")),
         "account_name": "原创作者" if row.get("source") == "user" else "惑梦（Homer）",
         "api_base_url": row.get("api_base_url") or "",
@@ -9047,6 +9145,7 @@ def local_app_to_card(row: dict) -> dict:
         ],
         "card_experience": card_experience,
         "card_prompt_preset": card_prompt_preset,
+        "legacy_rp_hub": normalize_legacy_rp_hub(extra.get("legacy_rp_hub")),
         "has_opening": feature_flags["opening"],
         "has_world_info": feature_flags["world_info"],
         "has_regex": feature_flags["regex"],
@@ -9116,6 +9215,7 @@ def local_app_to_list_card(row: dict) -> dict:
         "status": row.get("status") or "published",
         "is_public": bool(row.get("is_public", 1)),
         "sort_weight": row.get("sort_weight") or 0,
+        "official_recommended": bool(row.get("official_recommended", 0)),
         "is_original": source in ("user", "admin"),
         "account_name": "原创作者" if source == "user" else "惑梦（Homer）",
         "created_at": row.get("created_at") or 0,
@@ -9158,7 +9258,7 @@ def silly_card_to_app(card: dict) -> dict:
                 return v.strip()
         return ""
 
-    name = _s("name", "char_name") or "导入角色"
+    name = _s("name", "char_name", "scriptName", "title") or "导入角色"
     tags = data.get("tags")
     if isinstance(tags, str):
         tags = [t.strip() for t in re.split(r"[，,\n]", tags) if t.strip()]
@@ -9167,7 +9267,9 @@ def silly_card_to_app(card: dict) -> dict:
     alt = data.get("alternate_greetings")
     if not isinstance(alt, list):
         alt = []
-    raw_first_mes = _s("first_mes", "greeting", "first_message")
+    # 兼容风月/DZMM 等平台：开场白可能位于顶层 beginning 字段
+    raw_first_mes = _s("first_mes", "greeting", "first_message", "beginning")
+
     split_first_mes = split_silly_first_mes_greetings(raw_first_mes)
     opening_statement = str(split_first_mes.get("primary") or raw_first_mes).strip()
     alternate_greetings = merge_alternate_greetings(
@@ -9238,9 +9340,47 @@ def silly_card_to_app(card: dict) -> dict:
         imported_preset = normalize_card_prompt_preset(raw_extensions.get("homer_card_prompt_preset"))
         imported_preset["enabled"] = False
         payload["card_prompt_preset"] = imported_preset
+    # 兼容风月/DZMM/roleplay hub 等平台：正则脚本可能位于顶层 regex_scripts，而非 extensions 内。
+    # 做到「正则全网适配」：合并 extensions 与顶层来源，并按 (find, flags) 去重。
+    top_level_regex_raw: list = []
+    for src in (data, card):
+        if isinstance(src, dict) and isinstance(src.get("regex_scripts"), list):
+            top_level_regex_raw.extend(src.get("regex_scripts"))
+        if src is card:
+            break  # data 与 card 可能是同一对象，避免重复采集
     promoted_regex = regex_scripts_from_extensions(payload.get("extensions"))
-    if promoted_regex:
-        payload["regex_scripts"] = promoted_regex
+    top_level_regex = normalize_regex_scripts(top_level_regex_raw)
+    combined_regex: list = []
+    seen_regex_keys: set = set()
+    for script in list(promoted_regex) + list(top_level_regex):
+        key = (script.get("find"), script.get("flags"))
+        if key in seen_regex_keys:
+            continue
+        seen_regex_keys.add(key)
+        combined_regex.append(script)
+    if combined_regex:
+        payload["regex_scripts"] = combined_regex[:40]
+    # roleplay hub BGM 播放列表：extensions 与顶层 regex_scripts 均可能承载
+    legacy_rp_hub = legacy_rp_hub_from_extensions(raw_extensions)
+    if not legacy_rp_hub and top_level_regex_raw:
+        legacy_rp_hub = legacy_rp_hub_from_extensions({"regex_scripts": top_level_regex_raw})
+    if legacy_rp_hub:
+        payload["legacy_rp_hub"] = legacy_rp_hub
+    # 保留 statusbar / pageDepth 等平台元信息，避免静默丢失（存入 extensions 备查）
+    statusbar_val = data.get("statusbar") if isinstance(data.get("statusbar"), str) else ""
+    page_depth_val = data.get("pageDepth")
+    if statusbar_val.strip() or isinstance(page_depth_val, (int, float)):
+        ext = payload.get("extensions")
+        if not isinstance(ext, dict):
+            ext = {}
+        meta = ext.get("homer_import_meta") if isinstance(ext.get("homer_import_meta"), dict) else {}
+        if statusbar_val.strip():
+            meta["statusbar"] = statusbar_val.strip()[:REGEX_REPLACE_MAX_CHARS]
+        if isinstance(page_depth_val, (int, float)):
+            meta["pageDepth"] = int(page_depth_val)
+        ext["homer_import_meta"] = meta
+        payload["extensions"] = ext
+
     avatar = _s("avatar", "image", "cover_url")
     if avatar and avatar.lower() not in ("none",) and (avatar.startswith("http") or avatar.startswith("/")):
         payload["cover_url"] = avatar
@@ -10056,6 +10196,64 @@ def regex_scripts_from_extensions(extensions: object) -> list:
     return normalize_regex_scripts(raw_items)
 
 
+def normalize_legacy_rp_hub(value: object) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    playlist = []
+    seen_urls: set[str] = set()
+    raw_playlist = value.get("bgm_playlist") if isinstance(value.get("bgm_playlist"), list) else []
+    for index, item in enumerate(raw_playlist[:20]):
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").strip()
+        try:
+            parsed = urlparse(url)
+        except Exception:
+            continue
+        if parsed.scheme != "https" or (parsed.hostname or "").lower() != "raw.githubusercontent.com":
+            continue
+        if not re.search(r"\.(?:mp3|ogg|wav|m4a)$", parsed.path, re.I):
+            continue
+        if url in seen_urls:
+            continue
+        seen_urls.add(url)
+        title = re.sub(r"\s+", " ", str(item.get("title") or item.get("name") or f"BGM {index + 1}")).strip()[:120]
+        playlist.append({
+            "id": f"legacy-rp-bgm-{len(playlist) + 1}",
+            "title": title or f"BGM {len(playlist) + 1}",
+            "url": url[:2048],
+        })
+    if not playlist and not value.get("vue_ui"):
+        return {}
+    return {
+        "version": 1,
+        "kind": "rp_hub",
+        "vue_ui": bool(value.get("vue_ui")),
+        "bgm_playlist": playlist,
+    }
+
+
+def legacy_rp_hub_from_extensions(extensions: object) -> dict:
+    if not isinstance(extensions, dict):
+        return {}
+    raw_items = extensions.get("regex_scripts") if isinstance(extensions.get("regex_scripts"), list) else []
+    playlist: list[dict] = []
+    vue_ui = False
+    for raw in raw_items[:40]:
+        if not isinstance(raw, dict):
+            continue
+        replacement = str(raw.get("replace") or raw.get("replacement") or raw.get("replaceString") or "")
+        if "unpkg.com/vue@3" in replacement and "vue.global.prod.js" in replacement:
+            vue_ui = True
+        for match in re.finditer(
+            r"title\s*:\s*(['\"])(?P<title>.*?)\1\s*,\s*url\s*:\s*(['\"])(?P<url>https://raw\.githubusercontent\.com/.*?\.(?:mp3|ogg|wav|m4a)(?:\?[^'\"]*)?)\3",
+            replacement,
+            re.I | re.S,
+        ):
+            playlist.append({"title": match.group("title"), "url": match.group("url")})
+    return normalize_legacy_rp_hub({"vue_ui": vue_ui, "bgm_playlist": playlist})
+
+
 def sanitize_card_extensions(value: object) -> dict:
     """Remove Homer-owned extension snapshots that must be rebuilt from trusted fields."""
     if not isinstance(value, dict):
@@ -10131,6 +10329,10 @@ def normalize_user_app_extras(data: dict) -> dict:
         extras["regex_scripts"] = normalize_regex_scripts(data.get("TavernHelper_scripts"))
     if "card_prompt_preset" in data:
         extras["card_prompt_preset"] = normalize_card_prompt_preset(data.get("card_prompt_preset"))
+    if "legacy_rp_hub" in data:
+        legacy_rp_hub = normalize_legacy_rp_hub(data.get("legacy_rp_hub"))
+        if legacy_rp_hub:
+            extras["legacy_rp_hub"] = legacy_rp_hub
     trusted_media = data.get("_trusted_card_media") if isinstance(data.get("_trusted_card_media"), dict) else None
     if trusted_media is not None:
         extras["media_assets"] = trusted_media.get("media_assets") if isinstance(trusted_media.get("media_assets"), list) else []
@@ -12896,9 +13098,16 @@ class Handler(BaseHTTPRequestHandler):
     def verification_store(self) -> "VerificationStore":
         return self.server.verification_store
 
-    def authenticated_user(self) -> sqlite3.Row | None:
+    def request_auth_token(self) -> str | None:
+        """优先取 Authorization 头，其次回退到 HttpOnly Cookie。"""
         auth = self.headers.get("Authorization") or self.headers.get("authorization")
-        user_id = user_id_from_token(auth)
+        if user_id_from_token(auth):
+            return auth
+        cookie_token = token_from_cookie_header(self.headers.get("Cookie") or self.headers.get("cookie"))
+        return cookie_token or auth
+
+    def authenticated_user(self) -> sqlite3.Row | None:
+        user_id = user_id_from_token(self.request_auth_token())
         if user_id:
             user = self.store.get_user_by_id(user_id)
             if user:
@@ -12906,11 +13115,11 @@ class Handler(BaseHTTPRequestHandler):
         return None
 
     def authenticated_token_user(self) -> sqlite3.Row | None:
-        auth = self.headers.get("Authorization") or self.headers.get("authorization")
-        user_id = user_id_from_token(auth)
+        user_id = user_id_from_token(self.request_auth_token())
         if not user_id:
             return None
         return self.store.get_user_by_id(user_id)
+
 
     def read_body(self) -> tuple[str, object]:
         length = int(self.headers.get("Content-Length", "0") or "0")
@@ -12930,6 +13139,8 @@ class Handler(BaseHTTPRequestHandler):
         if origin and origin in ALLOWED_CORS_ORIGINS:
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
+            # 方案A改造1：允许携带 HttpOnly Cookie 的跨域请求
+            self.send_header("Access-Control-Allow-Credentials", "true")
 
     def send_json(self, status: int, payload: object) -> None:
         data = json_bytes(payload)
@@ -12940,7 +13151,12 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.send_cors_headers()
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, Idempotency-Key")
+        # 方案A改造1：如有待写入的登录 Cookie，则输出 Set-Cookie
+        pending_cookie = getattr(self, "_pending_set_cookie", None)
+        if pending_cookie:
+            self.send_header("Set-Cookie", pending_cookie)
         self.end_headers()
+
         self.wfile.write(data)
         self.wfile.flush()
         self.close_connection = True
@@ -13662,7 +13878,13 @@ class Handler(BaseHTTPRequestHandler):
         if normalized == "console/api/public/site-settings":
             return ok_response(public_site_settings_json(self.store.site_settings()))
 
+        # 方案A改造1：登出时清除 HttpOnly Cookie
+        if normalized in ("console/api/logout", "console/api/web/logout"):
+            self._pending_set_cookie = clear_auth_cookie()
+            return ok_response("ok")
+
         user = self.authenticated_user()
+
         if not user and not anonymous_route_allowed(normalized, self.command):
             return error_response("unauthorized", 401)
 
@@ -13800,7 +14022,10 @@ class Handler(BaseHTTPRequestHandler):
                 user = self.store.create_registered_user(str(email), str(name), str(password), remote_ip)
             except ValueError as exc:
                 return error_response(str(exc), 409 if "already" in str(exc) else 400)
-            return ok_response(token_for(user["id"]))
+            # 方案A改造1：登录凭证写入 HttpOnly Cookie
+            token = token_for(user["id"])
+            self._pending_set_cookie = build_auth_cookie(token)
+            return ok_response(token)
 
         if normalized in ("console/api/login", "console/api/oauth-token-login"):
             if isinstance(body, dict):
@@ -13823,7 +14048,10 @@ class Handler(BaseHTTPRequestHandler):
                     self.store.conn.execute("update users set password_hash=?, updated_at=? where id=?", (self.store.password_hash(str(password)), now_ms(), existing["id"]))
                     self.store.conn.commit()
             self.store.commit_security_event(existing["id"], normalized_email, "login_success", remote_ip, {})
-            return ok_response(token_for(existing["id"]))
+            # 方案A改造1：登录凭证写入 HttpOnly Cookie
+            token = token_for(existing["id"])
+            self._pending_set_cookie = build_auth_cookie(token)
+            return ok_response(token)
 
         if normalized in ("console/api/password-reset", "console/api/reset-password"):
             if isinstance(body, dict):
@@ -13844,7 +14072,10 @@ class Handler(BaseHTTPRequestHandler):
                 updated = self.store.reset_user_password(str(email), str(password), self.client_ip())
             except ValueError as exc:
                 return error_response(str(exc), 400)
-            return ok_response(token_for(updated["id"]))
+            # 方案A改造1：重置成功后同样写入 HttpOnly Cookie
+            token = token_for(updated["id"])
+            self._pending_set_cookie = build_auth_cookie(token)
+            return ok_response(token)
 
         if normalized == "console/api/register/name_check":
             return ok_response("")
@@ -14846,6 +15077,27 @@ class Handler(BaseHTTPRequestHandler):
                 random_seed = random.SystemRandom().randint(1, 2147483647)
             pictureless = (params.get("pictureless") or [""])[0].strip().lower() in ("1", "true", "yes")
             rows, total = self.store.list_local_apps(search=kw, tag=tag, sort=sort, content_zone=content_zone, random_seed=random_seed, page=page, page_size=page_size, lightweight=True)
+            featured_cards: list[dict] = []
+            featured_pool_count = 0
+            if page == 1:
+                featured_seed = random_seed or random.SystemRandom().randint(1, 2147483647)
+                featured_rows, featured_pool_count = self.store.list_official_recommendations(
+                    limit=2,
+                    random_seed=featured_seed,
+                )
+                featured_favorites, featured_likes = self.store.app_interaction_states(
+                    user["id"] if user else None,
+                    [str(row.get("id") or "") for row in featured_rows],
+                )
+                for featured_row in featured_rows:
+                    featured_card = local_app_to_list_card(featured_row)
+                    featured_card["favorited"] = featured_card["id"] in featured_favorites
+                    featured_card["liked"] = featured_card["id"] in featured_likes
+                    if pictureless:
+                        featured_card["pictureless"] = True
+                        featured_card["cover"] = ""
+                        featured_card["icon"] = ""
+                    featured_cards.append(featured_card)
             if rows:
                 cards = []
                 favorite_ids, liked_ids = self.store.app_interaction_states(
@@ -14861,9 +15113,9 @@ class Handler(BaseHTTPRequestHandler):
                         card["cover"] = ""
                         card["icon"] = ""
                     cards.append(card)
-                return go_response({"apps": cards, "total": total, "is_cache": True, "page": page, "page_size": page_size, "sort": sort, "tag": tag, "seed": random_seed, "pictureless": pictureless, "zone": content_zone})
+                return go_response({"apps": cards, "featured_apps": featured_cards, "featured_pool_count": featured_pool_count, "total": total, "is_cache": True, "page": page, "page_size": page_size, "sort": sort, "tag": tag, "seed": random_seed, "pictureless": pictureless, "zone": content_zone})
             if CONTENT_MODE == "local_only":
-                return go_response({"apps": [], "total": 0, "is_cache": True, "page": page, "page_size": page_size, "sort": sort, "tag": tag, "seed": random_seed, "pictureless": pictureless, "zone": content_zone})
+                return go_response({"apps": [], "featured_apps": featured_cards, "featured_pool_count": featured_pool_count, "total": 0, "is_cache": True, "page": page, "page_size": page_size, "sort": sort, "tag": tag, "seed": random_seed, "pictureless": pictureless, "zone": content_zone})
             # 非本地库模式才允许回源上游
             fallback = go_response({"apps": [], "total": 0, "is_cache": False})
             explore_payload = self.store.first_nonempty_explore_payload()
@@ -15492,6 +15744,12 @@ class Handler(BaseHTTPRequestHandler):
                 source = parse_query_str(query, "source", "admin").strip() or "admin"
                 search = parse_query_str(query, "q", "").strip()
                 lightweight = truthy(parse_query_str(query, "lightweight", "0"))
+                official_filter = parse_query_str(query, "official_recommended", "").strip().lower()
+                official_recommended = None
+                if official_filter in ("1", "true", "yes", "recommended"):
+                    official_recommended = True
+                elif official_filter in ("0", "false", "no", "not_recommended"):
+                    official_recommended = False
                 rows, total = self.store.list_local_apps(
                     source=source if source != "all" else None,
                     search=search,
@@ -15500,6 +15758,7 @@ class Handler(BaseHTTPRequestHandler):
                     only_public=False,
                     only_published=False,
                     lightweight=lightweight,
+                    official_recommended=official_recommended,
                 )
                 mapper = local_app_to_list_card if lightweight else local_app_to_card
                 return ok_response({"list": [mapper(r) for r in rows], "total": total, "page": page, "page_size": page_size})

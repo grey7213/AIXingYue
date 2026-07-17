@@ -137,6 +137,12 @@ def _clean_filename(value: object) -> str:
     return re.sub(r"[^\w.()\-\u4e00-\u9fff ]", "_", name) or "asset"
 
 
+def _clean_emotion(value: object) -> str:
+    """归一化立绘情绪/姿态标签；空串表示清除该标签。"""
+    return str(value or "").strip()[:40]
+
+
+
 def _sniff_mime(head: bytes) -> str:
     if head.startswith(b"\x89PNG\r\n\x1a\n"):
         return "image/png"
@@ -303,18 +309,47 @@ class CardMediaService:
         if len(assets) != len(asset_ids):
             raise CardMediaError("one or more media assets are missing or not owned")
         allowed = {row["id"]: row["kind"] for row in assets}
+        # 客户端提交的情绪/姿态标签（galgame 立绘切换用），按 asset_id 收集。
+        requested_emotions = {
+            _clean_id(item.get("id"), "asset_id"): _clean_emotion((item.get("metadata") or {}).get("emotion"))
+            for item in requested[:200]
+            if isinstance(item, dict) and isinstance(item.get("metadata"), dict)
+        }
         world_info = normalize_world_media_bindings(payload.get("world_info"), allowed)
         experience = normalize_card_experience(payload.get("card_experience"), allowed, {str(entry.get("id")) for entry in world_info})
+        now = int(time.time())
         if draft and asset_ids:
-            now = int(time.time())
             marks = ",".join("?" for _ in asset_ids)
             self.conn.execute(
                 f"UPDATE card_media_assets SET app_id=?, draft_id=NULL, updated_at=? WHERE owner_user_id=? AND draft_id=? AND status='ready' AND id IN ({marks})",
                 (app, now, owner, draft, *asset_ids),
             )
-            if commit:
-                self.conn.commit()
-        return {"media_assets": [_asset_dict(row) for row in assets], "world_info": world_info, "card_experience": experience}
+        # 将情绪标签持久化进 DB metadata，保证读取时可用于立绘切换。
+        persisted: list[sqlite3.Row] = []
+        for row in assets:
+            emotion = requested_emotions.get(row["id"])
+            if emotion is None:
+                persisted.append(row)
+                continue
+            try:
+                current = json.loads(row["metadata"]) if isinstance(row["metadata"], str) else {}
+            except (TypeError, json.JSONDecodeError):
+                current = {}
+            if not isinstance(current, dict):
+                current = {}
+            if emotion:
+                current["emotion"] = emotion
+            else:
+                current.pop("emotion", None)
+            self.conn.execute(
+                "UPDATE card_media_assets SET metadata=?, updated_at=? WHERE id=? AND owner_user_id=?",
+                (json.dumps(current, ensure_ascii=False, separators=(",", ":")), now, row["id"], owner),
+            )
+            persisted.append(self._owned_asset(row["id"], owner))
+        if commit and (asset_ids or requested_emotions):
+            self.conn.commit()
+        return {"media_assets": [_asset_dict(row) for row in persisted], "world_info": world_info, "card_experience": experience}
+
 
     def hydrate_card(self, owner_or_public_card_id: str) -> list[dict]:
         rows = self.conn.execute(
@@ -594,6 +629,7 @@ def normalize_card_experience(value: object, allowed_assets: dict[str, str], wor
     sidebar_ids = {item["id"] for item in sidebars}
     if any(rule["action"] == "open_sidebar" and rule["target_id"] not in sidebar_ids for rule in rules):
         raise CardMediaError("UI rule sidebar target is invalid")
+    galgame = _normalize_galgame(raw.get("galgame"), allowed_assets)
     return {
         "version": 1,
         "bgm": {
@@ -606,4 +642,43 @@ def normalize_card_experience(value: object, allowed_assets: dict[str, str], wor
         },
         "ui_rules": sorted(rules, key=lambda item: (item["order"], item["name"])),
         "sidebars": sorted(sidebars, key=lambda item: (item["order"], item["name"])),
+        "galgame": galgame,
+    }
+
+
+DEFAULT_PORTRAIT_DIRECTIVE = r"\[(?:立绘|portrait|图)[:：]\s*([^\]]+)\]"
+DEFAULT_BACKGROUND_DIRECTIVE = r"\[(?:背景|bg|scene)[:：]\s*([^\]]+)\]"
+
+
+def _normalize_galgame(value: object, allowed_assets: dict[str, str]) -> dict:
+    """校验并归一化 galgame（横板立绘对话）配置。未知字段一律丢弃。"""
+    raw = value if isinstance(value, dict) else {}
+    default_portrait = _clean_id(raw.get("default_portrait_id"), "asset_id", optional=True)
+    if default_portrait and allowed_assets.get(default_portrait) != "portrait":
+        raise CardMediaError("default portrait is not an owned portrait asset")
+    default_background = _clean_id(raw.get("default_background_id"), "asset_id", optional=True)
+    if default_background and allowed_assets.get(default_background) != "background":
+        raise CardMediaError("default background is not an owned background asset")
+
+    def _directive(candidate: object, fallback: str) -> str:
+        text = str(candidate or "").strip()
+        if not text:
+            return fallback
+        try:
+            pattern, _ = _safe_regex(text, "")
+        except CardMediaError:
+            return fallback
+        return pattern
+
+    layout = raw.get("portrait_layout")
+    return {
+        "enabled": bool(raw.get("enabled")),
+        "dialogue_position": "top" if raw.get("dialogue_position") == "top" else "bottom",
+        "portrait_layout": layout if layout in {"center", "left", "right", "dual"} else "center",
+        "default_portrait_id": default_portrait,
+        "default_background_id": default_background,
+        "portrait_directive": _directive(raw.get("portrait_directive"), DEFAULT_PORTRAIT_DIRECTIVE),
+        "background_directive": _directive(raw.get("background_directive"), DEFAULT_BACKGROUND_DIRECTIVE),
+        "hide_bubble_avatar": raw.get("hide_bubble_avatar") is not False,
+        "typewriter": raw.get("typewriter") is not False,
     }

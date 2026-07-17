@@ -1,4 +1,4 @@
-import { api, requireAuth, getCachedUser, setCachedUser, clearAuth, formatDateTime, ApiError } from '/app/assets/js/app-core.js';
+import { api, requireAuth, getCachedUser, setCachedUser, clearAuth, formatDateTime, ApiError } from '/app/assets/js/app-core.js?v=20260717-handoff-merge';
 import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-channels-closed';
 
 function mePage() {
@@ -224,7 +224,9 @@ function mePage() {
       } finally { this.loading = false; }
     },
 
-    doLogout() {
+    async doLogout() {
+      // 先请求后端清除 HttpOnly 登录 Cookie，再清理本地标记
+      try { await api.logout(); } catch {}
       clearAuth();
       this.showToast(this.dashboardText('logout_success_text', '已退出登录'), 'info');
       setTimeout(() => location.replace('/app/login.html'), 600);

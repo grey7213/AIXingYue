@@ -1,4 +1,4 @@
-import { api, setToken, clearAuth, ApiError } from '/app/assets/js/app-core.js?v=20260713-auth-migration';
+import { api, setToken, clearAuth, isLoggedIn, ApiError } from '/app/assets/js/app-core.js?v=20260717-handoff-merge';
 import { loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-channels-closed';
 
 function safeNextPath() {
@@ -70,10 +70,10 @@ function loginPage() {
     siteSettings: null,
 
     async init() {
-      // 只有服务端仍认可的 token 才直接跳转。签名/过期策略升级后，
-      // 旧 token 会在这里被清理，避免登录页和 /app/ 之间循环跳转。
-      const token = localStorage.getItem('ai_xingyue_token');
-      if (token) {
+      // 登录凭证已迁移到 HttpOnly Cookie；此处仅用非敏感登录标记做预判，
+      // 再向服务端确认。若服务端不再认可（401），清理本地标记，
+      // 避免登录页和 /app/ 之间循环跳转。
+      if (isLoggedIn()) {
         try {
           await api.profile();
           location.replace(safeNextPath());

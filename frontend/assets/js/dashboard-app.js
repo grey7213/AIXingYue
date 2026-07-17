@@ -1,5 +1,5 @@
 // 惑梦（Homer） 用户面板 Alpine.js 应用
-import { api, getToken, setToken, clearAuth, getCachedUser, setCachedUser, formatDateTime, ApiError } from '/assets/js/api.js';
+import { api, getToken, setToken, clearAuth, isLoggedIn, getCachedUser, setCachedUser, formatDateTime, ApiError } from '/assets/js/api.js?v=20260717-handoff-merge';
 
 function dashboard() {
   return {
@@ -24,7 +24,8 @@ function dashboard() {
 
     async init() {
       await this.loadSiteSettings();
-      if (getToken()) {
+      // 登录凭证已迁移到 HttpOnly Cookie，改用非敏感登录标记判断。
+      if (isLoggedIn()) {
         const cached = getCachedUser();
         if (cached) this.user = cached;
         await this.loadProfile();
@@ -225,7 +226,9 @@ function dashboard() {
       }
     },
 
-    doLogout() {
+    async doLogout() {
+      // 先请求后端清除 HttpOnly 登录 Cookie，再清理本地标记
+      try { await api.logout(); } catch {}
       clearAuth();
       this.loggedIn = false;
       this.user = null;

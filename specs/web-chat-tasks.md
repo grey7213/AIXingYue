@@ -55,6 +55,7 @@
 | WC45 | 48 个对话模型与延迟优化 | Done | 2026-07-15 公开模型 `48/48` 唯一，三组各 16，minimal 为推荐默认；同提示线上 minimal `18.7s`、max `38.5s`，buffered 模式约 `2.1s` 发出模型已响应状态；backend/Nginx/health/DB/browser 回归通过 |
 | WC46 | 单会话关闭全局预设 | Done | 2026-07-15 线上 Prompt `28 -> 0`、全局 Regex disabled、A/B 会话隔离和 Galgame 恢复通过；390px 设置区 3×2 无溢出、console error=0，临时数据清零 |
 | WC47 | 完整 HTML 开场可视化裁切修复 | Done | 2026-07-15 完整 HTML 文档直接挂载到 sandbox body，仅片段保留 `.mes_text` 兼容壳；剥离 Regex 套在完整文档外的单层格式包装，document iframe 高度上限放宽至 1200。目标卡 `蛊真人v2.0` 桌面/390px 线上实测 iframe/body/app 均为 680px，黑块消失；Tavo 高级渲染、sandbox/CSP 回归通过，临时用户/会话清零 |
+| WC48 | 独立 Card Experience Runtime 与旧沙箱并存 | Done | 2026-07-18 Shadow DOM 运行时支持 Galgame、多曲 BGM/音量、声明式弹窗/侧栏、live 字段、搜索筛选和 insert-text；Tavo/完整 HTML 继续使用无 same-origin iframe+CSP。RP Hub 样本、数据合并页、桌面/390px 页面和旧沙箱回归均通过。 |
 
 ## 本轮完成记录
 

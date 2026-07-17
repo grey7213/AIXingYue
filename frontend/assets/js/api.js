@@ -1,20 +1,29 @@
 // 惑梦（Homer） 共享 API 工具
 // 同源请求，由 Nginx 反向代理到后端 Python 服务
 const API_BASE = '';
+// 方案A：登录凭证已迁移到后端下发的 HttpOnly Cookie，前端不再持久化敏感 token。
+// TOKEN_KEY 仅用于清理历史遗留数据；LOGIN_KEY 是非敏感的登录态标记。
 const TOKEN_KEY = 'ai_xingyue_token';
+const LOGIN_KEY = 'ai_xingyue_logged_in';
 const USER_KEY = 'ai_xingyue_user';
 
 export function getToken() {
+  // 敏感 token 现由 HttpOnly Cookie 携带，JS 无法读取。
+  // 此处仅为兼容仍残留旧 token 的历史会话，作为 Bearer 回退。
   return localStorage.getItem(TOKEN_KEY) || '';
 }
 
 export function setToken(token) {
+  // 不再持久化敏感 token（由 HttpOnly Cookie 承载），仅记录非敏感登录标记。
   if (token) {
-    localStorage.setItem(TOKEN_KEY, token);
+    localStorage.setItem(LOGIN_KEY, '1');
   } else {
-    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(LOGIN_KEY);
   }
+  // 清理历史遗留的敏感 token
+  localStorage.removeItem(TOKEN_KEY);
 }
+
 
 export function getCachedUser() {
   try {
@@ -35,11 +44,13 @@ export function setCachedUser(user) {
 
 export function clearAuth() {
   localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(LOGIN_KEY);
   localStorage.removeItem(USER_KEY);
 }
 
 export function isLoggedIn() {
-  return !!getToken();
+  // 登录态以非敏感标记判断；兼容仍残留旧 token 的历史会话。
+  return localStorage.getItem(LOGIN_KEY) === '1' || !!getToken();
 }
 
 function handleUnauthorized() {
@@ -64,6 +75,8 @@ async function request(path, { method = 'GET', body, headers = {}, auth = true }
     response = await fetch(`${API_BASE}${path}`, {
       method,
       headers: finalHeaders,
+      // 携带 HttpOnly Cookie（登录凭证），同源下必需，配合后端 Access-Control-Allow-Credentials。
+      credentials: 'include',
       body: body instanceof FormData ? body : (body !== undefined && body !== null ? JSON.stringify(body) : undefined),
     });
   } catch (err) {
@@ -112,6 +125,9 @@ export const api = {
     request('/console/api/login', { method: 'POST', body: { email, password }, auth: false }),
   resetPassword: (email, password, code) =>
     request('/console/api/password-reset', { method: 'POST', body: { email, password, code }, auth: false }),
+  // 通知后端清除 HttpOnly 登录 Cookie
+  logout: () => request('/console/api/logout', { method: 'POST', body: {} }),
+
 
   // 用户接口
   profile: () => request('/console/api/account/profile'),

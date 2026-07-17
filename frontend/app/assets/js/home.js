@@ -1,4 +1,4 @@
-import { api, getToken, ApiError } from '/app/assets/js/app-core.js?v=20260713-auth-migration';
+import { api, isLoggedIn, ApiError } from '/app/assets/js/app-core.js?v=20260717-handoff-merge';
 
 const statusNode = document.querySelector('[data-resume-status]');
 
@@ -11,7 +11,7 @@ function go(path) {
 }
 
 async function resumeLatestConversation() {
-  if (!getToken()) {
+  if (!isLoggedIn()) {
     go('/app/login.html?next=%2Fapp%2F');
     return;
   }

@@ -10,7 +10,7 @@
   <script src="/assets/vendor/tailwindcss-browser.js?v=20260713-local"></script>
   <link rel="stylesheet" href="/assets/css/custom.css?v=20260703-fengyue-ui2">
   <link rel="stylesheet" href="/assets/css/admin.css?v=20260711-reference-ui1">
-  <script type="module" src="/assets/js/admin-app.js?v=20260716-card-maker"></script>
+  <script type="module" src="/assets/js/admin-app.js?v=20260717-handoff-merge"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="xy-admin min-h-screen">
@@ -1864,6 +1864,11 @@
                 <option value="upstream">同步角色</option>
                 <option value="all">全部角色</option>
               </select>
+              <select x-model="appOfficialFilter" @change="loadApps(1)" class="xy-input text-sm py-2 w-40">
+                <option value="all">全部推荐状态</option>
+                <option value="recommended">官推卡池</option>
+                <option value="not_recommended">非官推卡</option>
+              </select>
               <input x-model="appSearch" @keydown.enter="loadApps(1)" class="xy-input text-sm w-64" placeholder="搜索角色名称/简介/ID">
               <button @click="loadApps(1)" class="xy-btn xy-btn-ghost text-sm">查询</button>
               <template x-if="selectedAppIds.length">
@@ -1920,6 +1925,7 @@
                           <div class="flex flex-col gap-1">
                             <span class="xy-badge" :class="app.is_public === false ? 'xy-badge-gray' : 'xy-badge-green'" x-text="app.is_public === false ? '私有' : '公开'"></span>
                             <span class="xy-badge" :class="app.status === 'published' ? 'xy-badge-green' : 'xy-badge-yellow'" x-text="app.status || 'published'"></span>
+                            <span x-show="app.official_recommended" class="xy-badge xy-badge-purple">官推卡池</span>
                           </div>
                         </td>
                         <td>
@@ -1928,6 +1934,7 @@
                             <button @click="editAppDialog(app)" class="text-violet-300 hover:text-white">编辑</button>
                             <button @click="quickToggleAppPublic(app)" class="text-cyan-300 hover:text-cyan-100" x-text="app.is_public === false ? '公开' : '私有'"></button>
                             <button @click="quickSetAppStatus(app, app.status === 'published' ? 'draft' : 'published')" class="text-amber-300 hover:text-amber-100" x-text="app.status === 'published' ? '下架' : '发布'"></button>
+                            <button @click="quickToggleOfficialRecommendation(app)" class="text-fuchsia-300 hover:text-fuchsia-100" x-text="app.official_recommended ? '移出官推' : '加入官推'"></button>
                             <button @click="deleteApp(app)" class="text-red-300 hover:text-red-200">删除</button>
                           </div>
                         </td>
@@ -2141,6 +2148,10 @@
                 <label class="flex items-center gap-2 text-sm text-slate-300">
                   <input type="checkbox" x-model="appDialog.is_public" class="accent-violet-500">
                   发布到探索页
+                </label>
+                <label class="flex items-center gap-2 text-sm text-slate-300">
+                  <input type="checkbox" x-model="appDialog.official_recommended" class="accent-fuchsia-500">
+                  加入首页官推卡池
                 </label>
                 <select x-model="appDialog.status" class="xy-input text-sm py-2 w-36">
                   <option value="published">published</option>

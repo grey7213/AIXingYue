@@ -25,6 +25,11 @@ def make_handler(api_target: str):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=str(FRONTEND_DIR), **kwargs)
 
+        def guess_type(self, path):
+            if Path(path).suffix.lower() == ".mjs":
+                return "text/javascript"
+            return super().guess_type(path)
+
         def log_message(self, fmt, *args):
             print(f"[frontend-dev] {self.client_address[0]} - {fmt % args}", flush=True)
 

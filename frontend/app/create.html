@@ -7,10 +7,10 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
   <link rel="icon" href="/favicon.ico">
   <script src="/assets/vendor/tailwindcss-browser.js?v=20260713-local"></script>
-  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260712-preview-fix">
+  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260717-handoff-merge">
   <link rel="stylesheet" href="/app/assets/css/worldbook-editor.css?v=20260713">
   <link rel="stylesheet" href="/app/assets/css/card-experience-editor.css?v=20260716">
-  <script type="module" src="/app/assets/js/create.js?v=20260716-card-maker"></script>
+  <script type="module" src="/app/assets/js/create.js?v=20260717-handoff-merge"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen creator-editor-page">
@@ -434,7 +434,8 @@
                 <label class="editor-checkbox"><input type="checkbox" x-model="form.card_experience.bgm.show_floating_player"><div class="editor-checkbox__text"><div class="editor-checkbox__title">显示迷你播放器</div></div></label>
               </div>
               <div class="experience-assets" x-show="form.media_assets.length">
-                <template x-for="asset in form.media_assets" :key="asset.id"><div><span class="experience-assets__kind" x-text="asset.kind === 'bgm' ? 'BGM' : (asset.kind === 'portrait' ? '立绘' : '背景')"></span><strong x-text="asset.name"></strong><small x-text="asset.size_bytes ? `${(asset.size_bytes / 1048576).toFixed(1)} MB` : ''"></small><button type="button" @click="removeMediaAsset(asset.id)">删除</button></div></template>
+                <template x-for="asset in form.media_assets" :key="asset.id"><div style="flex-wrap:wrap"><span class="experience-assets__kind" x-text="asset.kind === 'bgm' ? 'BGM' : (asset.kind === 'portrait' ? '立绘' : '背景')"></span><strong x-text="asset.name"></strong><small x-text="asset.size_bytes ? `${(asset.size_bytes / 1048576).toFixed(1)} MB` : ''"></small><input x-show="asset.kind === 'portrait'" class="xy-input text-sm" style="max-width:140px;margin-left:auto" :value="asset.metadata?.emotion || ''" @input="setAssetEmotion(asset.id, $event.target.value)" placeholder="情绪标签，如 微笑"><button type="button" @click="removeMediaAsset(asset.id)">删除</button></div></template>
+                <div class="experience-guide" style="margin-top:6px"><small>给立绘打上情绪/姿态标签（如 微笑、生气、害羞），启用 galgame 模式后，AI 回复中的 <code>[立绘:微笑]</code> 标记会自动切换到对应立绘。</small></div>
               </div>
             </section>
 
@@ -457,6 +458,21 @@
             <section class="experience-section">
               <div class="experience-section__head"><div><strong>③ 自定义侧栏</strong><small>可设置位置、宽度、正则、静态 HTML 或世界书内容。</small></div><button type="button" class="editor-toolbar__btn" @click="addExperienceSidebar">＋ 添加侧栏</button></div>
               <template x-for="(bar, i) in form.card_experience.sidebars" :key="bar.id"><details class="experience-card"><summary><span x-text="bar.name || `侧栏 ${i + 1}`"></span><small x-text="`${bar.position === 'left' ? '左侧' : '右侧'} · ${bar.width}px`"></small></summary><div class="experience-card__body"><div class="experience-card__toolbar"><label class="editor-checkbox"><input type="checkbox" x-model="bar.enabled"><div class="editor-checkbox__text"><div class="editor-checkbox__title">启用</div></div></label><button type="button" class="editor-toolbar__btn is-danger" @click="removeExperienceSidebar(i)">删除</button></div><div class="editor-row-2"><input class="xy-input text-sm" x-model="bar.name" placeholder="侧栏名称"><input class="xy-input text-sm" x-model="bar.trigger_label" placeholder="边缘按钮文字"></div><div class="experience-sidebar-grid"><label><span>位置</span><select class="xy-input text-sm" x-model="bar.position"><option value="left">左侧</option><option value="right">右侧</option></select></label><label><span>宽度（240–720px）</span><input class="xy-input text-sm" type="number" min="240" max="720" x-model.number="bar.width"></label><label><span>内容来源</span><select class="xy-input text-sm" x-model="bar.content_mode"><option value="static">自定义 HTML</option><option value="worldbook">世界书条目</option></select></label><label x-show="bar.content_mode === 'worldbook'"><span>世界书条目</span><select class="xy-input text-sm" x-model="bar.world_entry_id"><option value="">请选择</option><template x-for="entry in form.world_info" :key="entry.id"><option :value="entry.id" x-text="entry.name"></option></template></select></label></div><div class="experience-pattern"><input class="xy-input text-sm" x-model="bar.open_pattern" placeholder="打开正则，例如 \[SIDEBAR:info1\]"><input class="xy-input text-sm" x-model="bar.flags" placeholder="flags，如 i"></div><div class="experience-code-grid" x-show="bar.content_mode === 'static'"><label><span>HTML 内容</span><textarea class="xy-input text-sm" x-model="bar.content_html"></textarea></label><label><span>局部 CSS</span><textarea class="xy-input text-sm" x-model="bar.scoped_css"></textarea></label></div></div></details></template>
+            </section>
+
+            <section class="experience-section">
+              <div class="experience-section__head"><div><strong>④ galgame 横板对话模式</strong><small>碧蓝档案 / galgame 风：立绘 + 对话栏，AI 回复用 <code>[立绘:微笑]</code> / <code>[背景:教室]</code> 标记自动切换。</small></div></div>
+              <div class="experience-bgm-grid">
+                <label class="editor-checkbox"><input type="checkbox" x-model="form.card_experience.galgame.enabled"><div class="editor-checkbox__text"><div class="editor-checkbox__title">启用 galgame 模式</div><div class="editor-checkbox__hint">聊天页切换为横板立绘 + 对话栏渲染</div></div></label>
+                <label><span>对话栏位置</span><select class="xy-input text-sm" x-model="form.card_experience.galgame.dialogue_position"><option value="bottom">底部</option><option value="top">顶部</option></select></label>
+                <label><span>立绘布局</span><select class="xy-input text-sm" x-model="form.card_experience.galgame.portrait_layout"><option value="center">居中</option><option value="left">靠左</option><option value="right">靠右</option><option value="dual">双人</option></select></label>
+                <label><span>默认立绘</span><select class="xy-input text-sm" x-model="form.card_experience.galgame.default_portrait_id"><option value="">不设置</option><template x-for="asset in galgamePortraitOptions()" :key="asset.id"><option :value="asset.id" x-text="asset.metadata?.emotion ? `${asset.name}（${asset.metadata.emotion}）` : asset.name"></option></template></select></label>
+                <label><span>默认背景</span><select class="xy-input text-sm" x-model="form.card_experience.galgame.default_background_id"><option value="">不设置</option><template x-for="asset in galgameBackgroundOptions()" :key="asset.id"><option :value="asset.id" x-text="asset.name"></option></template></select></label>
+                <label class="editor-checkbox"><input type="checkbox" x-model="form.card_experience.galgame.typewriter"><div class="editor-checkbox__text"><div class="editor-checkbox__title">打字机效果</div></div></label>
+                <label class="editor-checkbox"><input type="checkbox" x-model="form.card_experience.galgame.hide_bubble_avatar"><div class="editor-checkbox__text"><div class="editor-checkbox__title">隐藏气泡头像</div></div></label>
+              </div>
+              <div class="experience-pattern"><input class="xy-input text-sm" x-model="form.card_experience.galgame.portrait_directive" placeholder="立绘切换正则，如 \[(?:立绘|portrait)[:：]\s*([^\]]+)\]"><input class="xy-input text-sm" x-model="form.card_experience.galgame.background_directive" placeholder="背景切换正则，如 \[(?:背景|bg)[:：]\s*([^\]]+)\]"></div>
+              <div class="experience-guide"><small>立绘标记的捕获组会与立绘的「情绪标签」匹配（不区分大小写），匹配不到时回退按立绘名称包含匹配。给每张立绘设置好情绪标签即可让 AI 用 <code>[立绘:xxx]</code> 精准切换。</small></div>
             </section>
             </fieldset>
           </div>

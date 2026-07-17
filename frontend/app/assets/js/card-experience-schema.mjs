@@ -29,10 +29,46 @@ export function defaultCardExperience() {
     },
     ui_rules: [],
     sidebars: [],
+    galgame: defaultGalgame(),
+  };
+}
+
+export function defaultGalgame() {
+  return {
+    enabled: false,
+    dialogue_position: 'bottom', // bottom | top
+    portrait_layout: 'center', // center | left | right | dual
+    default_portrait_id: '',
+    default_background_id: '',
+    // 情绪切换：AI 回复里出现 pattern（默认 [立绘:xxx]）时，按标签匹配立绘素材的 metadata.emotion。
+    portrait_directive: '\\[(?:立绘|portrait|图)[:：]\\s*([^\\]]+)\\]',
+    background_directive: '\\[(?:背景|bg|scene)[:：]\\s*([^\\]]+)\\]',
+    hide_bubble_avatar: true,
+    typewriter: true,
+  };
+}
+
+export function normalizeGalgame(raw) {
+  const fallback = defaultGalgame();
+  if (!raw || typeof raw !== 'object') return fallback;
+  const dialoguePosition = raw.dialogue_position === 'top' ? 'top' : 'bottom';
+  const layouts = ['center', 'left', 'right', 'dual'];
+  const portraitLayout = layouts.includes(raw.portrait_layout) ? raw.portrait_layout : 'center';
+  return {
+    enabled: !!raw.enabled,
+    dialogue_position: dialoguePosition,
+    portrait_layout: portraitLayout,
+    default_portrait_id: idText(raw.default_portrait_id),
+    default_background_id: idText(raw.default_background_id),
+    portrait_directive: text(raw.portrait_directive || fallback.portrait_directive, 500),
+    background_directive: text(raw.background_directive || fallback.background_directive, 500),
+    hide_bubble_avatar: raw.hide_bubble_avatar !== false,
+    typewriter: raw.typewriter !== false,
   };
 }
 
 export function normalizeMediaAsset(raw, index = 0) {
+
   if (!raw || typeof raw !== 'object') return null;
   const kind = MEDIA_KINDS.includes(raw.kind) ? raw.kind : '';
   const id = idText(raw.id || raw.asset_id, `asset-${index + 1}`);
@@ -47,9 +83,19 @@ export function normalizeMediaAsset(raw, index = 0) {
     size_bytes: Math.round(clamp(raw.size_bytes, 0, 80 * 1024 * 1024, 0)),
     sha256: text(raw.sha256, 64).toLowerCase(),
     status: raw.status === 'pending' ? 'pending' : 'ready',
-    metadata: raw.metadata && typeof raw.metadata === 'object' ? { ...raw.metadata } : {},
+    metadata: normalizeAssetMetadata(raw.metadata, raw),
   };
 }
+
+// 立绘情绪/姿态标签：既可写在 metadata.emotion，也兼容顶层 emotion 字段。
+export function normalizeAssetMetadata(metadata, raw = {}) {
+  const meta = metadata && typeof metadata === 'object' ? { ...metadata } : {};
+  const emotion = text(meta.emotion || raw.emotion, 40);
+  if (emotion) meta.emotion = emotion;
+  else delete meta.emotion;
+  return meta;
+}
+
 
 export function normalizeMediaAssets(value) {
   if (!Array.isArray(value)) return [];
@@ -136,8 +182,10 @@ export function normalizeCardExperience(raw) {
     },
     ui_rules: (Array.isArray(raw.ui_rules) ? raw.ui_rules : []).slice(0, 40).map(normalizeUiRule).filter(Boolean).sort((a, b) => a.order - b.order),
     sidebars: (Array.isArray(raw.sidebars) ? raw.sidebars : []).slice(0, 20).map(normalizeSidebar).filter(Boolean).sort((a, b) => a.order - b.order),
+    galgame: normalizeGalgame(raw.galgame),
   };
 }
+
 
 export function normalizeWorldEntryMedia(entry) {
   return { ...entry, media_bindings: normalizeMediaBindings(entry?.media_bindings) };
@@ -210,5 +258,34 @@ export function stripExperienceDirectives(input, experience) {
     const regex = safeRegExp(sidebar.open_pattern, sidebar.flags.includes('g') ? sidebar.flags : `${sidebar.flags}g`);
     if (regex) output = output.replace(regex, '');
   }
+  // galgame 立绘/背景指令标记不应显示在正文里。
+  if (config.galgame?.enabled) {
+    for (const directive of [config.galgame.portrait_directive, config.galgame.background_directive]) {
+      const regex = safeRegExp(directive, 'ig');
+      if (regex) output = output.replace(regex, '');
+    }
+  }
   return output.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+// 从一段文本里解析 galgame 指令（立绘/背景标签），返回捕获到的标签文本。
+export function parseGalgameDirectives(input, galgame) {
+  const result = { portrait: '', background: '' };
+  if (!galgame || !galgame.enabled) return result;
+  const grab = (pattern) => {
+    const regex = safeRegExp(pattern, 'ig');
+    if (!regex) return '';
+    let last = '';
+    let match;
+    let guard = 0;
+    while ((match = regex.exec(input)) && guard < 40) {
+      guard += 1;
+      if (match[1] != null) last = String(match[1]).trim();
+      if (match.index === regex.lastIndex) regex.lastIndex += 1;
+    }
+    return last;
+  };
+  result.portrait = grab(galgame.portrait_directive);
+  result.background = grab(galgame.background_directive);
+  return result;
 }

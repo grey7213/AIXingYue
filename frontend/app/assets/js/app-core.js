@@ -1,5 +1,5 @@
 // 惑梦（Homer） Web App 共享核心 - 在所有 /app/*.html 顶部加载
-import { api as baseApi, getToken, setToken, clearAuth, getCachedUser, setCachedUser, formatDateTime, ApiError } from '/assets/js/api.js?v=20260713-auth-migration';
+import { api as baseApi, getToken, setToken, clearAuth, isLoggedIn, getCachedUser, setCachedUser, formatDateTime, ApiError } from '/assets/js/api.js?v=20260717-handoff-merge';
 
 function redirectAfterUnauthorized() {
   clearAuth();
@@ -18,6 +18,8 @@ async function rawRequest(path, opts = {}) {
   const res = await fetch(path, {
     method: opts.method || 'GET',
     headers,
+    // 携带 HttpOnly 登录 Cookie
+    credentials: 'include',
     body: opts.body ? (opts.body instanceof FormData ? opts.body : JSON.stringify(opts.body)) : undefined,
   });
   const text = await res.text();
@@ -62,6 +64,8 @@ async function sseRequest(path, payload, handlers = {}, options = {}) {
   const res = await fetch(path, {
     method: 'POST',
     headers,
+    // 携带 HttpOnly 登录 Cookie
+    credentials: 'include',
     body: JSON.stringify(payload || {}),
     signal: options.signal,
   });
@@ -292,13 +296,14 @@ export const api = {
 
 // 全局工具：要求登录否则跳转到 login
 export function requireAuth() {
-  if (!getToken()) {
+  // 敏感 token 已迁移到 HttpOnly Cookie，改用非敏感登录标记判断。
+  if (!isLoggedIn()) {
     location.replace('/app/login.html?next=' + encodeURIComponent(location.pathname));
     return false;
   }
   return true;
 }
 
-export { getToken, setToken, clearAuth, getCachedUser, setCachedUser, formatDateTime, ApiError };
+export { getToken, setToken, clearAuth, isLoggedIn, getCachedUser, setCachedUser, formatDateTime, ApiError };
 
-window.aiXingyueApp = { api, getToken, setToken, clearAuth, getCachedUser, setCachedUser, requireAuth, ApiError };
+window.aiXingyueApp = { api, getToken, setToken, clearAuth, isLoggedIn, getCachedUser, setCachedUser, requireAuth, ApiError };

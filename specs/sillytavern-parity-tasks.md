@@ -28,6 +28,7 @@ Updated: 2026-07-05
 | ST21 | `E:\迅雷下载\卡\卡.zip` 全量可用角色卡导入 | Done | 2026-07-04 按用户要求不做题材筛选；6692 个 PNG/JSON 候选中 6608 个有 metadata，6523 个可用角色卡导入为公开官方卡，85 个空壳与 84 个无 metadata/非 PNG 未导入；2626 张保留并提升 Regex/TavernHelper 脚本，6411 个封面上传；线上验证 `expected_found=6523`、`public_found=6523`、`empty_imported=0`、样本详情/封面/流式聊天通过，总官方卡数 8778 |
 | ST22 | 站点级 SillyTavern Prompt Preset | Done | 2026-07-05 后台“模型配置”新增全局提示词预设编辑器，支持粘贴 SillyTavern preset JSON 并按 `prompt_order` 解析为 `system_before`、`system_after`、`post_history`；后端在所有角色请求中注入全局预设，不修改角色卡本身。用户提供的 `E:\迅雷下载\Tavo_v_3.51_15nuf(1).json` 已应用到线上，解析为 33 个真实块（40 个 enabled prompt 中 7 个为 marker），其中 System 前置 3 个、历史后 30 个；公开 `/model-presets` 不暴露预设正文或 API Key，后台面板 Playwright 验证通过 |
 | ST23 | 长期记忆当前存档绑定与后台阈值 | Done | 新增后台记忆策略：AI 回复读取记忆开关、自动摘要开关、首次摘要消息数、刷新间隔、当前存档绑定和最大读取条数；复制历史会话时复制当前存档绑定的长期记忆。线上验证 `memory in context`、自动摘要、复制会话记忆数量和后台配置均通过。 |
+| ST24 | Shadow Card Experience 与 Tavo iframe 兼容矩阵 | Done | 普通声明式卡片交互由 Shadow DOM runtime 承担；Tavo/完整 HTML/脚本卡仍走 `sandbox=allow-scripts` 且无 same-origin 的 iframe。2026-07-18 RP Hub 样本序章交互、5 首 BGM、脚本解析通过，旧 ST10/ST17-ST20/WC47 的 sandbox/CSP/resize 线上回归无错误。 |
 
 ## 2026-07-05 长期记忆当前存档绑定与后台阈值
 

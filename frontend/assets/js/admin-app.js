@@ -1,5 +1,5 @@
 // 惑梦（Homer） 管理后台 Alpine.js 应用
-import { api, isLoggedIn, formatDateTime, ApiError } from '/assets/js/api.js?v=20260716-card-maker';
+import { api, isLoggedIn, formatDateTime, ApiError } from '/assets/js/api.js?v=20260717-handoff-merge';
 
 function adminPanel() {
   return {
@@ -674,6 +674,7 @@ function adminPanel() {
     appLimit: 30,
     appSearch: '',
     appSource: 'admin',
+    appOfficialFilter: 'all',
     appDialog: null,
     appImportDialog: false,
     appImportRaw: '',
@@ -1813,6 +1814,7 @@ function adminPanel() {
         cover_url: '',
         llm_model: '',
         sort_weight: 100,
+        official_recommended: false,
         is_public: true,
         status: 'published',
         creator_notes: '',
@@ -1857,6 +1859,7 @@ function adminPanel() {
           source: this.appSource,
           q: this.appSearch.trim(),
           lightweight: 1,
+          official_recommended: this.appOfficialFilter === 'all' ? '' : this.appOfficialFilter,
         });
         const data = r.data || r;
         this.apps = data.list || [];
@@ -2000,6 +2003,7 @@ function adminPanel() {
         cover_url: detail.cover || detail.cover_url || detail.icon || app?.cover || app?.cover_url || app?.icon || '',
         llm_model: detail.llm_model || '',
         sort_weight: detail.sort_weight ?? app?.sort_weight ?? 100,
+        official_recommended: !!(detail.official_recommended ?? app?.official_recommended),
         is_public: detail.is_public !== false,
         status: detail.status || app?.status || 'published',
         creator_notes: detail.creator_notes || '',
@@ -2033,6 +2037,7 @@ function adminPanel() {
         cover_url: String(app.cover_url || '').trim(),
         llm_model: String(app.llm_model || '').trim(),
         sort_weight: Number(app.sort_weight || 0),
+        official_recommended: !!app.official_recommended,
         is_public: !!app.is_public,
         status: app.status || 'published',
       };
@@ -2062,6 +2067,7 @@ function adminPanel() {
           cover_url: payload.cover_url,
           llm_model: payload.llm_model,
           sort_weight: payload.sort_weight,
+          official_recommended: payload.official_recommended,
           is_public: payload.is_public,
           status: payload.status,
         });
@@ -2131,6 +2137,19 @@ function adminPanel() {
         await this.loadApps(this.appPage);
       } catch (err) {
         this.showToast(err.message || '状态更新失败', 'error');
+      } finally { this.loading = false; }
+    },
+
+    async quickToggleOfficialRecommendation(app) {
+      if (!app?.id) return;
+      this.loading = true;
+      try {
+        const next = !app.official_recommended;
+        await api.admin.updateApp(app.id, { official_recommended: next });
+        this.showToast(next ? '已加入官推卡池' : '已移出官推卡池', 'success');
+        await this.loadApps(this.appPage);
+      } catch (err) {
+        this.showToast(err.message || '官推卡池更新失败', 'error');
       } finally { this.loading = false; }
     },
 

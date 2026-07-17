@@ -1,6 +1,6 @@
-import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js?v=20260715-conversation-global-preset';
+import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js?v=20260717-handoff-merge';
 import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-channels-closed';
-import { cleanCardExperienceText, consumeCardExperienceText, mountCardExperience } from '/app/assets/js/card-experience-runtime.mjs?v=20260716';
+import { cleanCardExperienceText, consumeCardExperienceText, mountCardExperience } from '/app/assets/js/card-experience-runtime.mjs?v=20260717-handoff-merge';
 
 const STATUS_LABELS = {
   name: '姓名',
@@ -434,21 +434,70 @@ function advancedSourceNeedsConfirmation(source, options = {}) {
   return !renderOptions.confirmedTavoFrames?.[advancedFrameKey(source)];
 }
 
+const TRUSTED_RP_HUB_VUE_URL = 'https://unpkg.com/vue@3.5.13/dist/vue.global.prod.js';
+const TRUSTED_RP_HUB_FONT_AWESOME_URL = 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css';
+
+function isTrustedRpHubMediaUrl(value) {
+  try {
+    const url = new URL(String(value || ''));
+    return url.protocol === 'https:'
+      && url.hostname === 'raw.githubusercontent.com'
+      && /\.(?:mp3|ogg|wav|m4a)(?:$|[?#])/i.test(url.pathname + url.search + url.hash);
+  } catch {
+    return false;
+  }
+}
+
+function markTrustedRpHubResources(doc) {
+  doc.querySelectorAll('script[src]').forEach(el => {
+    const value = String(el.getAttribute('src') || '').trim();
+    if (/^https:\/\/unpkg\.com\/vue@3(?:\/|$).*\/vue\.global\.prod\.js(?:[?#].*)?$/i.test(value)) {
+      el.setAttribute('src', TRUSTED_RP_HUB_VUE_URL);
+      el.setAttribute('referrerpolicy', 'no-referrer');
+      el.setAttribute('data-xy-trusted-external', 'vue');
+    } else {
+      el.remove();
+    }
+  });
+  doc.querySelectorAll('link[rel]').forEach(el => {
+    const rel = String(el.getAttribute('rel') || '').trim().toLowerCase();
+    const value = String(el.getAttribute('href') || '').trim();
+    if (rel === 'stylesheet' && value === TRUSTED_RP_HUB_FONT_AWESOME_URL) {
+      el.setAttribute('referrerpolicy', 'no-referrer');
+      el.setAttribute('data-xy-trusted-external', 'font-awesome');
+    } else {
+      el.remove();
+    }
+  });
+}
+
 function sanitizeUrlAttribute(el, attr) {
   const value = String(el.getAttribute(attr) || '').trim();
   if (!value) return;
   if (value.startsWith('#') || /^data:/i.test(value) || /^blob:/i.test(value)) return;
+  if (el.hasAttribute('data-xy-trusted-external') && (attr === 'src' || attr === 'href')) return;
+  if (attr === 'src' && ['AUDIO', 'VIDEO', 'SOURCE'].includes(el.tagName) && isTrustedRpHubMediaUrl(value)) return;
   el.removeAttribute(attr);
 }
 
 function rewriteTavernHelperScript(source) {
   return String(source || '')
+    // Some RP Hub exports embed HTML such as `<span style="...">` inside a
+    // double-quoted JSON value without preserving the JavaScript escapes.
+    // HTML entities keep the rendered attribute intact while making the
+    // isolated inline script parseable again.
+    .replace(/(<[a-z][^<>]*\sstyle=)"([^"]*)"/gi, '$1&quot;$2&quot;')
+    .replace(/\bwindow\.parent\.document\b/g, 'window.__xySTTop.document')
+    .replace(/\bwindow\.parent\.localStorage\b/g, 'window.__xySTTop.localStorage')
+    .replace(/\bwindow\.parent\.sessionStorage\b/g, 'window.__xySTTop.sessionStorage')
     .replace(/\bwindow\.parent\.getChatMessages\b/g, 'window.__xySTTop.getChatMessages')
     .replace(/(^|[^\w$.])parent\.getChatMessages\b/g, '$1window.__xySTTop.getChatMessages')
     .replace(/\bwindow\.parent\.getChatMessage\b/g, 'window.__xySTTop.getChatMessage')
     .replace(/(^|[^\w$.])parent\.getChatMessage\b/g, '$1window.__xySTTop.getChatMessage')
     .replace(/\bwindow\.parent\.SillyTavern\b/g, 'window.__xySTTop.SillyTavern')
     .replace(/\bparent\.SillyTavern\b/g, 'window.__xySTTop.SillyTavern')
+    .replace(/\bwindow\.parent\b/g, 'window.__xySTTop')
+    .replace(/(^|[^\w$.])parent\b/g, '$1window.__xySTTop')
     .replace(/\bwindow\.top\b/g, 'window.__xySTTop')
     .replace(/\bwindow\.localStorage\b/g, 'window.__xyLocalStorage')
     .replace(/(^|[^\w$.])localStorage\b/g, '$1window.__xyLocalStorage')
@@ -478,7 +527,8 @@ function sanitizeAdvancedHtml(raw, options = {}) {
     return { head: '', body: source, bodyAttrs: '', isFullDocument };
   }
   const doc = new DOMParser().parseFromString(source, 'text/html');
-  doc.querySelectorAll('base, iframe, object, embed, link[rel], script[src], script[data-src]').forEach(el => el.remove());
+  doc.querySelectorAll('base, iframe, object, embed, script[data-src]').forEach(el => el.remove());
+  markTrustedRpHubResources(doc);
   if (!allowScripts) doc.querySelectorAll('script').forEach(el => el.remove());
   if (allowScripts) {
     doc.querySelectorAll('script:not([src])').forEach(el => {
@@ -606,6 +656,9 @@ function buildTavoBridgeScript() {
       });
       topProxy.getComputedStyle = el => window.getComputedStyle(el);
       topProxy.scrollTo = (...args) => { try { window.scrollTo(...args); } catch (e) {} };
+      topProxy.addEventListener = (...args) => window.addEventListener(...args);
+      topProxy.removeEventListener = (...args) => window.removeEventListener(...args);
+      topProxy.postMessage = (...args) => { try { window.parent.postMessage(...args); } catch (e) {} };
       topProxy.updateMessageBlock = (idx, msg) => {
         try {
           const raw = document.getElementById('raw-data-store');
@@ -683,6 +736,10 @@ function buildTavoBridgeScript() {
 function buildSandboxSrcdoc(raw, options = {}) {
   const allowScripts = options.allowScripts !== false;
   const sanitized = sanitizeAdvancedHtml(raw, { allowScripts });
+  const rawSource = String(raw || '');
+  const allowRpHubVue = /https:\/\/unpkg\.com\/vue@3(?:\/|$).*\/vue\.global\.prod\.js/i.test(rawSource);
+  const allowRpHubFontAwesome = rawSource.includes(TRUSTED_RP_HUB_FONT_AWESOME_URL);
+  const allowRpHubMedia = /https:\/\/raw\.githubusercontent\.com\/[^\s'"<>]+\.(?:mp3|ogg|wav|m4a)(?:[?#][^\s'"<>]*)?/i.test(rawSource);
   const pluginFragments = Array.isArray(options.pluginFragments) ? options.pluginFragments : [];
   const pluginHtml = pluginFragments
     .map(fragment => sanitizeAdvancedHtml(fragment?.html || '', { allowScripts: false }).body)
@@ -711,10 +768,10 @@ function buildSandboxSrcdoc(raw, options = {}) {
   const csp = [
     "default-src 'none'",
     "img-src data: blob:",
-    "media-src data: blob:",
-    "font-src data:",
-    "style-src 'unsafe-inline'",
-    allowScripts ? "script-src 'unsafe-inline'" : "script-src 'none'",
+    `media-src data: blob:${allowRpHubMedia ? ' https://raw.githubusercontent.com' : ''}`,
+    `font-src data:${allowRpHubFontAwesome ? ' https://cdnjs.cloudflare.com' : ''}`,
+    `style-src 'unsafe-inline'${allowRpHubFontAwesome ? ' https://cdnjs.cloudflare.com' : ''}`,
+    allowScripts ? `script-src 'unsafe-inline'${allowRpHubVue ? ' https://unpkg.com' : ''}` : "script-src 'none'",
     "connect-src 'none'",
     "frame-src 'none'",
     "worker-src 'none'",
@@ -1300,7 +1357,20 @@ function chatPage() {
       });
       window.addEventListener('pagehide', () => this.persistMessageScroll());
       window.addEventListener('beforeunload', () => this.persistMessageScroll());
+      // 卡内侧边栏/悬浮层通过 data-card-action="insert-text" 向输入框注入预设文本。
+      this._insertTextHandler = (event) => {
+        const detail = event?.detail || {};
+        const text = String(detail.text || '').slice(0, 2000);
+        if (!text) return;
+        this.draft = detail.mode === 'replace' ? text : (this.draft ? this.draft + ' ' : '') + text;
+        this.$nextTick?.(() => {
+          const ta = this.$refs?.composerInput || document.querySelector('.xy-composer textarea, textarea[x-model="draft"]');
+          if (ta) { try { ta.focus(); ta.selectionStart = ta.selectionEnd = ta.value.length; } catch { /* ignore */ } }
+        });
+      };
+      document.addEventListener('card-experience-insert-text', this._insertTextHandler);
     },
+
 
     beginGeneration(mode = 'send') {
       if (this._activeAbortController) this._activeAbortController.abort();

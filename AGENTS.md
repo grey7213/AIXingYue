@@ -63,6 +63,26 @@
 
 ## Reusable Pitfalls
 
+- Symptom: RP Hub/Tavo 卡片开场静态界面能显示，但确认执行后控制台报 `Unexpected identifier 'color'`，Vue/状态层或后续交互不启动。
+  Cause: 部分导出卡把 `<span style="...">` 放入双引号 JSON/JavaScript 字符串时丢失转义；DOM 能解析外层 HTML，但 iframe 内联脚本成为 `"...<span style="color..."..."` 的非法 JavaScript。
+  Fix: `frontend/app/assets/js/chat.js` 的 `rewriteTavernHelperScript()` 仅对隔离 iframe 内联脚本中的 HTML `style="..."` 属性改写为 `style=&quot;...&quot;`，保持 innerHTML 渲染结果且恢复脚本可解析性；安全代理、CSP 和无 same-origin 边界不变。
+  Verify: 2026-07-18 目标卡 `黎明之契2.71` 三段 iframe script 均可用 `new Function` 解析，序章“翻开序章”后进入角色设定页，page error=0；旧 Tavo sandbox/advanced/resize 线上回归均 console/page error=0。
+
+- Symptom: 官推池超过 2 张时，首页顶部只展示 2 张，但其余官推卡仍出现在下方“为你推荐”。
+  Cause: `recommendedCards()` 只排除了本轮 `featuredCards()` 的两个 ID，没有排除其余 `official_recommended=true` 卡。
+  Fix: 普通推荐同时过滤 `card.official_recommended` 和当前 featured ID；池为空时仍按旧逻辑回退普通前两张。
+  Verify: 2026-07-18 浏览器构造 3 张官推 + 2 张普通卡，顶部返回前 2 张官推，下方只返回 2 张普通卡。
+
+- Symptom: Web 登录成功后 `/app/` 与登录页反复跳转，服务端 `profile` 持续返回 200，浏览器也已有 HttpOnly Cookie。
+  Cause: 认证迁移到 HttpOnly Cookie 后，`frontend/app/assets/js/home.js` 仍用 `getToken()` 检查 localStorage 中的旧 token；新前端只保留 `ai_xingyue_logged_in` 非敏感标记，因此首页误判未登录。
+  Fix: 所有页面级登录判断统一使用 `isLoggedIn()`，真实权限仍由服务端 profile/401 校验；Bearer token 仅作为 APK 和旧客户端兼容路径。
+  Verify: 2026-07-17 本地 Chromium 真实登录后进入 Explore，不再循环；localStorage 无 `ai_xingyue_token`，Cookie 为 HttpOnly，profile 200。
+
+- Symptom: `tools/run_frontend_dev.py` 启动的本地站点可以打开 HTML，但浏览器拒绝加载 `card-experience-runtime.mjs`，制卡/聊天页模块功能失效。
+  Cause: Windows `SimpleHTTPRequestHandler` 将 `.mjs` 返回为 `text/plain`，ES Module 要求 JavaScript MIME。
+  Fix: 开发服务器覆写 `guess_type()`，对 `.mjs` 返回 `text/javascript`；生产 Nginx 继续保持相同 MIME 配置。
+  Verify: 2026-07-17 `http://127.0.0.1:8080/app/assets/js/card-experience-runtime.mjs` 返回 `200 text/javascript`，Chromium 模块加载无错误。
+
 - Symptom: 完整 HTML 角色卡的开场可视化只显示上半段，底部出现大块黑色；父 iframe 显示 860px，但卡内 `body` 只显示 680px，真实内容高度却超过 1900px。
   Cause: `buildSandboxSrcdoc()` 把完整 `<!DOCTYPE html><html>...` 也塞进 `#chat > .mes > .mes_text` 片段兼容壳，破坏卡片 `.app { height:100% }` 的百分比高度链；后端 Regex 还可能把整份文档套进单层 `<div>`，再次形成无高度包装；父端又把所有 resize 统一硬封顶为 860px。
   Fix: 2026-07-15 `frontend/app/assets/js/chat.js` 区分完整文档与 HTML 片段：完整文档 body 直接挂载，片段才保留 `.mes_text` 兼容壳；完整文档若被 Regex 单层块元素包裹则安全解包；resize 消息携带 layout，document 上限为 1200、fragment 保持 860，sandbox/CSP 不变。
@@ -602,3 +622,18 @@
   Cause: Alpine 指令表达式不接受以 `try { ... } catch { ... }` 开头的语句块；把完整异常处理直接写入 `@change` 会在组件初始化时编译失败。
   Fix: 将 JSON 解析与异常处理移到 `admin-app.js` 方法中，HTML 指令只调用单个方法，例如 `@change="parseGlobalArrayField(...)"`。
   Verify: 2026-07-13 线上重新加载全局正则编辑器并展开条目后，新增 warning/error 为 0；桌面和 390x844 页面正常渲染。
+
+- Symptom: 从 Windows PowerShell 通过双引号 SSH 命令执行远端 `STAMP=$(date +%Y%m%d-%H%M%S)` 时，远端时间戳为空，并出现本地 `Get-Date` 参数错误。
+  Cause: PowerShell 会在调用 SSH 前把 `$()` 当成本地子表达式执行，远端 shell 收不到原命令。
+  Fix: 包含 `$()`、`$VAR` 的远端脚本使用单引号包住整个 SSH 远端命令，或先 Base64/上传脚本再执行；不要把它直接放进 PowerShell 双引号字符串。
+  Verify: 2026-07-16 将安全变更备份目录修正为 `/root/security-change-20260715-163711`，Fail2ban 与 AI风月服务均保持 active。
+
+- Symptom: 创作页加载后 Alpine 大量报 `createPage/form is not defined`，或互动正则 Worker 在线上完全不执行。
+  Cause: `.mjs` 被静态服务器以 `text/plain` 返回会让浏览器拒绝模块；生产 CSP 的 `worker-src 'none'` 也会阻止同源 Regex Worker。
+  Fix: Nginx 为 `.mjs` 显式返回 `text/javascript`，CSP 改为 `worker-src 'self'`；同时更新 create/chat/admin 脚本 cache-buster，部署新增 Worker 文件。
+  Verify: 2026-07-16 线上三个 `.mjs` 均为 `200 text/javascript`；Playwright 桌面/390px 模型分组与互动运行时 console error=0，弹窗/侧栏/场景和触发标记清理通过。
+
+- Symptom: 后端 `py_compile` 通过，但服务启动配置媒体扩展时抛 `cleanup_stale_assets() got an unexpected keyword argument 'commit'`。
+  Cause: 调用方仍按旧草案传 `commit=False`，独立媒体模块的最终清理函数已自行提交且不接受该参数。
+  Fix: `Store.configure_card_media()` 按最终签名调用 `cleanup_stale_assets(max_age_seconds=...)`，不再额外传事务参数。
+  Verify: 2026-07-16 本地集成测试成功初始化临时 Store/媒体目录；线上服务重启 active，内外 `/health` OK。

@@ -1,4 +1,4 @@
-import { api, requireAuth, getCachedUser, setCachedUser, formatDateTime, ApiError } from '/app/assets/js/app-core.js';
+import { api, requireAuth, getCachedUser, setCachedUser, formatDateTime, ApiError } from '/app/assets/js/app-core.js?v=20260717-handoff-merge';
 import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260710-resume-chat';
 
 const FIELD_LABELS = {
