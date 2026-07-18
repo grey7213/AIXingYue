@@ -671,6 +671,15 @@ function buildTavoBridgeScript() {
       topProxy.matchChatMessages = matchChatMessages;
       topProxy.getLastMessageId = () => 0;
       topProxy.getCurrentMessageId = () => 0;
+      const triggerSlash = content => {
+        const message = String(content || '').trim();
+        if (!message) return false;
+        try {
+          parent.postMessage({ type: 'xy-tavo-send-message', message: message.slice(0, 24000) }, '*');
+          return true;
+        } catch (e) { return false; }
+      };
+      topProxy.triggerSlash = triggerSlash;
       const emptyWorldNames = () => [];
       const emptyWorld = () => Promise.resolve([]);
       window.__xyLocalStorage = storage;
@@ -683,6 +692,7 @@ function buildTavoBridgeScript() {
       window.matchChatMessages = matchChatMessages;
       window.getLastMessageId = () => 0;
       window.getCurrentMessageId = () => 0;
+      window.triggerSlash = triggerSlash;
       window.getCharWorldbookNames = () => ({ primary: '', additional: [] });
       window.getChatWorldbookName = () => '';
       window.getGlobalWorldbookNames = emptyWorldNames;
@@ -1093,6 +1103,14 @@ function bindTavoFrameResizeListener() {
   };
   window.addEventListener('message', (event) => {
     const data = event?.data || {};
+    const sourceFrame = Array.from(document.querySelectorAll('iframe.tavo-frame'))
+      .find(frame => frame.contentWindow === event.source);
+    if (!sourceFrame) return;
+    if (data.type === 'xy-tavo-send-message') {
+      const message = String(data.message || '').trim().slice(0, 24000);
+      if (message && typeof window.__xyTavoSendMessage === 'function') window.__xyTavoSendMessage(message);
+      return;
+    }
     if (data.type !== 'xy-tavo-resize') return;
     const maxHeight = data.layout === 'document' ? 1200 : 860;
     const height = Math.max(260, Math.min(parseInt(data.height, 10) || 0, maxHeight));
@@ -1205,6 +1223,11 @@ function chatPage() {
       this.bindLifecycleHandlers();
       this.loadAdvancedRenderSettings();
       this.bindAdvancedRenderConfirmHandler();
+      window.__xyTavoSendMessage = async (message) => {
+        if (!message || this.sending) return false;
+        await this.sendMessage(message);
+        return true;
+      };
       this.siteSettings = await loadPublicSiteSettings().catch(() => null);
       if (!requireAuth()) return;
       const cached = getCachedUser();

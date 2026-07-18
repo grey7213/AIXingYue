@@ -63,6 +63,11 @@
 
 ## Reusable Pitfalls
 
+- Symptom: 完整 HTML 开场卡点击“踏上旅程/确认设定”后提示“角色设定已生成，当前环境未提供发送接口”，不会把生成的设定发到聊天。
+  Cause: 卡内脚本调用 SillyTavern/Tavo 兼容函数 `window.triggerSlash(message)`，现有安全 iframe bridge 只提供状态、通知和确认接口，没有受限发送桥。
+  Fix: sandbox 内 `triggerSlash` 只发送 `xy-tavo-send-message` postMessage；父页仅接受当前 `iframe.tavo-frame` 来源、限制 24000 字符并复用现有 `sendMessage()`，鉴权、扣费、流式和持久化边界不变。
+  Verify: 2026-07-18 浏览器 iframe 中 `triggerSlash` 为 function，点击后父页收到“角色设定测试消息”，卡内显示“角色设定已发送。”；线上服务/health 正常。
+
 - Symptom: Windows 工具生成的 TGP/ZIP 明明只有正常素材目录，创作中心却提示 `资源包包含不安全路径`。
   Cause: 某些 ZIP 把目录名写成反斜杠结尾（如 `assets\\background\\`），但没有设置 ZIP directory attribute，JSZip 因而报告 `entry.dir=false`。
   Fix: 资源包枚举同时把原始路径以 `/` 或 `\\` 结尾的 entry 视为目录并跳过；普通文件仍严格拒绝绝对路径、盘符、空段、NUL 和 `..`。
