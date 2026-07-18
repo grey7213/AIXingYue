@@ -63,6 +63,11 @@
 
 ## Reusable Pitfalls
 
+- Symptom: Windows 工具生成的 TGP/ZIP 明明只有正常素材目录，创作中心却提示 `资源包包含不安全路径`。
+  Cause: 某些 ZIP 把目录名写成反斜杠结尾（如 `assets\\background\\`），但没有设置 ZIP directory attribute，JSZip 因而报告 `entry.dir=false`。
+  Fix: 资源包枚举同时把原始路径以 `/` 或 `\\` 结尾的 entry 视为目录并跳过；普通文件仍严格拒绝绝对路径、盘符、空段、NUL 和 `..`。
+  Verify: 2026-07-18 正式模块可解析交付示例，路径穿越和五类体积/数量安全测试共 6/6 通过。
+
 - Symptom: RP Hub/Tavo 卡片开场静态界面能显示，但确认执行后控制台报 `Unexpected identifier 'color'`，Vue/状态层或后续交互不启动。
   Cause: 部分导出卡把 `<span style="...">` 放入双引号 JSON/JavaScript 字符串时丢失转义；DOM 能解析外层 HTML，但 iframe 内联脚本成为 `"...<span style="color..."..."` 的非法 JavaScript。
   Fix: `frontend/app/assets/js/chat.js` 的 `rewriteTavernHelperScript()` 仅对隔离 iframe 内联脚本中的 HTML `style="..."` 属性改写为 `style=&quot;...&quot;`，保持 innerHTML 渲染结果且恢复脚本可解析性；安全代理、CSP 和无 same-origin 边界不变。

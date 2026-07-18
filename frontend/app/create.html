@@ -10,7 +10,8 @@
   <link rel="stylesheet" href="/app/assets/css/app.css?v=20260717-handoff-merge">
   <link rel="stylesheet" href="/app/assets/css/worldbook-editor.css?v=20260713">
   <link rel="stylesheet" href="/app/assets/css/card-experience-editor.css?v=20260716">
-  <script type="module" src="/app/assets/js/create.js?v=20260717-handoff-merge"></script>
+  <script src="/app/assets/vendor/jszip-3.10.1.min.js?v=3.10.1"></script>
+  <script type="module" src="/app/assets/js/create.js?v=20260718-card-pack"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen creator-editor-page">
@@ -38,10 +39,10 @@
           <span x-text="creatorText('delete_text', '删除')"></span>
         </button>
         <div class="grow"></div>
-        <input type="file" accept=".json,.png,application/json,image/png" x-ref="importInput" @change="onImportFile" class="hidden" style="display:none">
-        <button class="editor-toolbar__btn" @click="triggerImport" :disabled="importing" :title="creatorText('import_title', '导入 SillyTavern 角色卡 JSON/PNG')">
+        <input type="file" accept=".json,.png,.zip,.tgp,.tpg,application/json,image/png,application/zip,application/x-zip-compressed" x-ref="importInput" @change="onImportFile" class="hidden" style="display:none">
+        <button class="editor-toolbar__btn" @click="triggerImport" :disabled="importing" :title="creatorText('import_pack_title', '导入角色卡 JSON/PNG 或包含世界书、正则、立绘、背景、BGM 的 ZIP/TGP/TPG 资源包')">
           <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v12m0 0l-4-4m4 4l4-4M5 20h14"/></svg>
-          <span x-text="importing ? creatorText('importing_text', '导入中…') : creatorText('import_text', '导入')"></span>
+          <span x-text="importing ? creatorText('importing_text', '导入中…') : (pendingCardPackImport ? '重试绑定' : creatorText('import_pack_text', '导入卡包'))"></span>
         </button>
         <button class="editor-toolbar__btn" x-show="editingId" @click="exportCard" :title="creatorText('export_title', '导出为 SillyTavern V2 JSON')">
           <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 20V8m0 0l-4 4m4-4l4 4M5 4h14"/></svg>

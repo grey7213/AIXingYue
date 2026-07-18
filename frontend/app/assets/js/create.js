@@ -9,6 +9,11 @@ import {
   normalizeMediaAssets,
   normalizeMediaBindings,
 } from '/app/assets/js/card-experience-schema.mjs?v=20260717-handoff-merge';
+import {
+  buildCardPackMediaUpdate,
+  isCardPackFilename,
+  parseCardPack,
+} from '/app/assets/js/card-pack-import.mjs?v=20260718-card-pack';
 
 const emptyCardPromptPreset = () => ({ version: 1, enabled: false, name: '', format: 'sillytavern', source_file: '', prompts: [], prompt_order: [], blocks: [], stats: { entry_count: 0, enabled_count: 0 } });
 
@@ -67,6 +72,7 @@ function createPage() {
     editingId: '',  // empty = create, set = edit existing app
     expand: { persona: false, advanced: false, promptManager: false, greetings: false, worldinfo: false, experience: false, sampling: false, voice: false, share: false },
     importing: false,
+    pendingCardPackImport: null,
     siteSettings: null,
     previewOpen: false,
     activeSection: 'creator-basic',
@@ -656,14 +662,78 @@ function createPage() {
 
     // ---- 导入 SillyTavern 角色卡 ----
     triggerImport() {
+      if (this.pendingCardPackImport) {
+        this.retryPendingCardPackImport();
+        return;
+      }
       if (this.$refs.importInput) this.$refs.importInput.click();
     },
+
+    async beginCardPackImport(file) {
+      if (!this.canUseAdvancedCreation()) throw new Error(this.advancedCreationHint());
+      const pack = await parseCardPack(file);
+      const importedResult = await api.importCard(pack.card);
+      const app = importedResult?.data || importedResult;
+      if (!app?.id) throw new Error('服务器已接收资源包，但没有返回有效卡片 ID');
+      this.editingId = app.id;
+      this.pendingCardPackImport = { app, pack, uploaded: [], next_asset: 0 };
+      await this.continueCardPackImport();
+    },
+
+    async continueCardPackImport() {
+      const task = this.pendingCardPackImport;
+      if (!task?.app?.id || !task.pack) throw new Error('没有可恢复的资源包导入任务');
+      const total = task.pack.assets.length;
+      while (task.next_asset < total) {
+        const source = task.pack.assets[task.next_asset];
+        this.showToast(`正在导入资源 ${task.next_asset + 1}/${total}：${source.name || source.file.name}`, 'info', 3000);
+        const asset = await this.uploadCardAsset(source.file, source.kind);
+        asset.pack_index = source.pack_index;
+        asset.filename = source.file.name;
+        asset.kind = source.kind;
+        asset.metadata = { ...(asset.metadata || {}) };
+        if (source.emotion) asset.metadata.emotion = source.emotion;
+        task.uploaded.push(asset);
+        task.next_asset += 1;
+      }
+
+      const { payload, report } = buildCardPackMediaUpdate({
+        importedApp: task.app,
+        uploadedAssets: task.uploaded,
+        sourceAssets: task.pack.assets,
+        mediaDraftId: this.mediaDraftId,
+        idFactory: newStableId,
+      });
+      await api.updateApp(task.app.id, payload);
+      const unmatchedText = report.unmatched.length ? `；${report.unmatched.length} 个素材未匹配世界书，已保留在素材库` : '';
+      this.pendingCardPackImport = null;
+      this.showToast(`资源包导入完成：${report.asset_count} 个素材、${report.world_binding_count} 个世界书绑定${unmatchedText}`, 'success', 2200);
+      setTimeout(() => { location.href = `/app/create.html?id=${encodeURIComponent(task.app.id)}`; }, 700);
+    },
+
+    async retryPendingCardPackImport() {
+      if (!this.pendingCardPackImport || this.importing) return;
+      this.importing = true;
+      try {
+        await this.continueCardPackImport();
+      } catch (err) {
+        const cardId = this.pendingCardPackImport?.app?.id || '';
+        this.showToast(`卡片 ${cardId} 已创建，自动绑定尚未完成；修复问题后点击“重试绑定”。${err.message || ''}`, 'error', 6000);
+      } finally {
+        this.importing = false;
+      }
+    },
+
     async onImportFile(event) {
       const file = event.target.files?.[0];
       event.target.value = '';
       if (!file) return;
       this.importing = true;
       try {
+        if (isCardPackFilename(file.name)) {
+          await this.beginCardPackImport(file);
+          return;
+        }
         let r;
         if (file.type === 'image/png' || file.name.toLowerCase().endsWith('.png')) {
           const cardFile = await fileToDataUrl(file);
@@ -672,14 +742,18 @@ function createPage() {
           const text = await file.text();
           let card;
           try { card = JSON.parse(text); }
-          catch { throw new Error(this.creatorText('import_invalid_file', '文件不是有效的 JSON/PNG 角色卡')); }
+          catch { throw new Error(this.creatorText('import_invalid_file', '文件不是有效的 JSON/PNG 角色卡或 ZIP/TGP/TPG 资源包')); }
           r = await api.importCard(card);
         }
         const app = r?.data || r;
         this.showToast(this.creatorText('import_success', '导入成功，正在打开…'), 'success', 1200);
         setTimeout(() => { location.href = `/app/create.html?id=${encodeURIComponent(app.id)}`; }, 500);
       } catch (err) {
-        this.showToast(err.message || this.creatorText('import_failed', '导入失败'), 'error');
+        if (this.pendingCardPackImport?.app?.id) {
+          this.showToast(`卡片 ${this.pendingCardPackImport.app.id} 已创建，自动绑定尚未完成；点击“重试绑定”可从断点继续。${err.message || ''}`, 'error', 6000);
+        } else {
+          this.showToast(err.message || this.creatorText('import_failed', '导入失败'), 'error');
+        }
       } finally {
         this.importing = false;
       }
