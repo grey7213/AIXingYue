@@ -8,7 +8,7 @@
 - [x] 完成单元测试、语法检查和临时后端 E2E。
 - [x] 完成桌面/390px 浏览器导入、断点结构审查和 JSON/PNG 原入口回归。
 - [x] 备份并部署，验证线上服务、health、MJS MIME、`CONTENT_MODE` 和 SQLite。
-- [ ] 提交并推送 Git。
+- [x] 提交并推送 Git（`f0ad6d0`）。
 
 ## 验证记录
 
