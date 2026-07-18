@@ -39,7 +39,7 @@
 - `reverse-analysis/base-apk/unpacked/assets/.jgapp`: jiagu marker asset.
 - `reverse-analysis/base-apk/unpacked/lib/*/libapp.so`: Flutter/Dart AOT business logic.
 - `reverse-analysis/base-1-apk/unpacked/`: decoded Compose APK.
-- `specs/`: project requirements, design, and task tracking.
+- `specs/`: project requirements, design, and task tracking. Start from `specs/README.md`; most dated task triplets are historical and should not be read unless their feature is in scope.
 - `tools/ai_fengyue_local_server.py`: AI星月 Web/backend implementation, including `site_settings` admin/public APIs, rewards, credits, role cards, chat, and admin operations.
 - `frontend/assets/js/site-settings.js`: public homepage hydrator for admin-managed site copy and links.
 - `frontend/app/assets/js/layout.js`: shared Web App shell navigation and admin-managed announcement injection.

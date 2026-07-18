@@ -2,6 +2,7 @@
 output/
 git-backups/
 .playwright-mcp/
+.playwright-cli/
 android-sdk/
 apk_analysis/
 reverse-analysis/
