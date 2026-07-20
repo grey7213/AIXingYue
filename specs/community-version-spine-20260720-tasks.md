@@ -13,8 +13,8 @@
 - [x] 完成 Python/JS 语法、临时 SQLite、API、并发/越权和媒体引用测试。
 - [x] 使用真实浏览器完成桌面/390px 历史、社区、创作、详情、聊天 Mod、版本选择与 Spine 验收。
 - [x] 更新 AGENTS/导航/任务验证记录。
-- [ ] 提交并推送。
-- [ ] 备份并部署生产，验证服务、Nginx、health、MIME、`CONTENT_MODE` 和 SQLite。
+- [x] 提交并推送。
+- [x] 备份并部署生产，验证服务、Nginx、health、MIME、`CONTENT_MODE` 和 SQLite。
 
 ## 当前审计结论
 
@@ -37,3 +37,12 @@
 - `output/verify_backend_mobile_reliability_local.py`、`verify_chat_rollback_local.py`、`verify_tavo_plugin_local.py`、`verify_card_png_metadata.py` 均通过；后端流式中断清理、续写、回溯、Tavo 插件与 PNG 角色卡兼容未回退。
 - 相关 13 个 Python 文件 `py_compile`、13 个 JS/MJS `node --check`、`git diff --check` 全部通过。
 - `output/homer-community-browser/run_browser_acceptance.py` 在真实 Chromium 完成桌面 1440px 与移动端 390px 共 94 项断言：历史三点菜单、工坊新建、三类社区作品与隔离 UI 演示、赛事榜、开源/赛事/收藏预设与 UI、角色历史版本/票数/选择、聊天版本锁定与双列 Mod 均通过；failure/pageerror/console error 均为 0，共生成 17 张验收截图。
+
+## 生产部署记录（2026-07-20）
+
+- 功能提交 `e3d04b5` 已推送至 `origin/main`；部署使用 `tools/deploy_ai_fengyue_villainy.py --skip-apk --skip-mail-install --skip-certbot`，未重建 APK。
+- 部署前 SQLite Online Backup：`/opt/ai-fengyue-backend/backups/ai_fengyue-before-community-versions-20260720-130848.sqlite3`，live/backup `quick_check=ok`；同时备份前端源码 tar、systemd unit、Nginx 和原后端模块。
+- 部署后 `ai-fengyue-backend.service`、Nginx 均 active，内外 `/health` 为 `OK`，`CONTENT_MODE=local_only`，线上 SQLite `quick_check=ok`。
+- Nginx 素材 PUT 路由为 `client_max_body_size 60M`；`.mjs` 返回 `text/javascript`，固定 Spine runtime 返回 JavaScript MIME，许可证 HTTP 200。
+- 线上后端 SHA-256 与本地一致：`2B13BA675D4BACB80CBDA9AB4C2802AEEF433E0BD4011A7FEFB85711476D33DF`；线上 Spine runtime SHA-256 为 `FACCF252486DE234C69A045AA6024B6688DED578EFF09103607ADFAEDD7752B6`。
+- 生产真实 Chromium 只读烟测在桌面 1440px/移动端 390px 共 14 项通过：工坊九入口和四类新建、社区四页签及无横向溢出、制卡开源/赛事/Spine 入口均正常，console/page error 为 0。

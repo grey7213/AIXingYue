@@ -71,7 +71,7 @@
 - Symptom: 制卡页允许选择 60 MiB 内的 `.spine.zip`，但较大包线上返回 Nginx `413 Request Entity Too Large`；某些 Windows/Chromium 上的 ZIP 还会在创建上传意图时报 `invalid media type or size`.
   Cause: 后端原始素材 PUT 路由已放宽到 60 MiB，但部署生成的 Nginx 仍全局限制 32 MiB；浏览器对 ZIP 的 `File.type` 可能是空字符串或 `application/octet-stream`，与服务端接受的 ZIP MIME 不一致。
   Fix: Nginx 仅对 `/console/api/web/card-assets/<id>/content` 设置 `client_max_body_size 60M`，其余 API 保持 32 MiB；前端对已校验 `.spine.zip` 文件将空/octet-stream MIME 规范为 `application/zip`，服务端仍校验 ZIP 文件头、声明大小和 SHA-256。
-  Verify: 2026-07-20 部署配置生成断言同时命中全局 `32M` 和素材 PUT `60M`；`py_compile`、`node --check`、Spine 20 包服务端自测和 Chromium 稳定性夹具全部通过。
+  Verify: 2026-07-20 部署配置生成断言同时命中全局 `32M` 和素材 PUT `60M`；生产 Nginx 实际配置命中素材路由 `60M`，`.mjs`/Spine JS MIME 正常；Spine 20 包服务端自测、Chromium 稳定性夹具和线上桌面/390px 烟测全部通过。
 
 - Symptom: 完整 HTML 开场卡点击“踏上旅程/确认设定”后提示“角色设定已生成，当前环境未提供发送接口”，不会把生成的设定发到聊天。
   Cause: 卡内脚本调用 SillyTavern/Tavo 兼容函数 `window.triggerSlash(message)`，现有安全 iframe bridge 只提供状态、通知和确认接口，没有受限发送桥。
