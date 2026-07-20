@@ -52,10 +52,18 @@
 - [x] 定位 Mod、UI 模板、预设、当前赛事共用样式仍沿用深色原型，导致浅色页面上出现近白文字。
 - [x] 统一修复分类标签、范围筛选、搜索框、作品卡、空状态、赛事信息和排行榜的浅色主题对比度。
 - [x] 完成桌面与 390px 四分类、三种范围筛选、空状态、hover/focus、无溢出及浏览器错误验证。
-- [ ] 提交、推送并部署生产，复查服务、Nginx、health、`CONTENT_MODE` 和 SQLite。
+- [x] 提交、推送并部署生产，复查服务、Nginx、health、`CONTENT_MODE` 和 SQLite。
 
 ### 本地浏览器验证
 
 - `output/homer-community-browser/run_browser_acceptance.py` 在真实 Chromium 完成 130 项断言，桌面 1440px 与移动端 390px 均无横向溢出，console/page error/failure 均为 0。
 - 四类标签最低对比度 `6.81:1`，三种范围筛选最低 `7.02:1`，作品空状态 `7.83:1`；作品卡最低 `5.70:1`，赛事与排行最低 `5.93:1`，全部高于普通文字 `4.5:1` 目标。
 - 截图：`output/playwright/homer-community-browser/desktop-community-preset-empty.png`、`mobile-390-community-preset-empty.png`、`desktop-community-contest.png`、`mobile-390-community-contest.png`。
+
+### 生产部署与复查
+
+- 功能提交 `f3343d5` 已推送至 `origin/main`；部署使用 `tools/deploy_ai_fengyue_villainy.py --skip-apk --skip-mail-install --skip-certbot`，未重建 APK。
+- 部署前 SQLite Online Backup：`/opt/ai-fengyue-backend/backups/ai_fengyue-before-community-versions-20260720-150359.sqlite3`，live/backup `quick_check=ok`。
+- 部署后 backend/Nginx 均 active，内外 `/health` 为 `OK`，`CONTENT_MODE=local_only`，线上 SQLite `quick_check=ok`。
+- 线上 `community.html` SHA-256 与本地一致：`D2F886E80BDE70F7F635DDC7416CA1CC87F8FDB8FDF0D352193E3DE7A5AEFFC5`。
+- 生产真实 Chromium 桌面/390px 共 26 项烟测通过：标签最低对比度 `6.81:1`、筛选 `7.02:1`、作品/赛事空状态 `7.83:1`，无横向溢出，console/page error 为 0。
