@@ -46,3 +46,16 @@
 - Nginx 素材 PUT 路由为 `client_max_body_size 60M`；`.mjs` 返回 `text/javascript`，固定 Spine runtime 返回 JavaScript MIME，许可证 HTTP 200。
 - 线上后端 SHA-256 与本地一致：`2B13BA675D4BACB80CBDA9AB4C2802AEEF433E0BD4011A7FEFB85711476D33DF`；线上 Spine runtime SHA-256 为 `FACCF252486DE234C69A045AA6024B6688DED578EFF09103607ADFAEDD7752B6`。
 - 生产真实 Chromium 只读烟测在桌面 1440px/移动端 390px 共 14 项通过：工坊九入口和四类新建、社区四页签及无横向溢出、制卡开源/赛事/Spine 入口均正常，console/page error 为 0。
+
+## 社区浅色主题可读性修复（2026-07-20）
+
+- [x] 定位 Mod、UI 模板、预设、当前赛事共用样式仍沿用深色原型，导致浅色页面上出现近白文字。
+- [x] 统一修复分类标签、范围筛选、搜索框、作品卡、空状态、赛事信息和排行榜的浅色主题对比度。
+- [x] 完成桌面与 390px 四分类、三种范围筛选、空状态、hover/focus、无溢出及浏览器错误验证。
+- [ ] 提交、推送并部署生产，复查服务、Nginx、health、`CONTENT_MODE` 和 SQLite。
+
+### 本地浏览器验证
+
+- `output/homer-community-browser/run_browser_acceptance.py` 在真实 Chromium 完成 130 项断言，桌面 1440px 与移动端 390px 均无横向溢出，console/page error/failure 均为 0。
+- 四类标签最低对比度 `6.81:1`，三种范围筛选最低 `7.02:1`，作品空状态 `7.83:1`；作品卡最低 `5.70:1`，赛事与排行最低 `5.93:1`，全部高于普通文字 `4.5:1` 目标。
+- 截图：`output/playwright/homer-community-browser/desktop-community-preset-empty.png`、`mobile-390-community-preset-empty.png`、`desktop-community-contest.png`、`mobile-390-community-contest.png`。
