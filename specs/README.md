@@ -10,6 +10,7 @@
 - 积分、充值和兑换：`credits-redemption-requirements.md`、`credits-redemption-design.md`、`credits-redemption-tasks.md`
 - 完整角色资源包：`card-resource-pack-import-20260718-requirements.md`、`card-resource-pack-import-20260718-design.md`、`card-resource-pack-import-20260718-tasks.md`
 - Spine/卡内发送桥：`spine-card-runtime-20260718-requirements.md`、`spine-card-runtime-20260718-design.md`、`spine-card-runtime-20260718-tasks.md`
+- 社区工坊/不可变版本/Spine 稳定化：`community-version-spine-20260720-requirements.md`、`community-version-spine-20260720-design.md`、`community-version-spine-20260720-tasks.md`
 - APK/早期逆向主线：`requirements.md`、`design.md`、`tasks.md`、`zip-1-repack-*`
 
 ## 运维 Runbook
@@ -27,5 +28,5 @@
 
 ## 当前未完成事项
 
-- `spine-card-runtime-20260718-tasks.md`：等待实际 Spine 导出包和明确版本后完成资源组导入与合法运行时接入。
+- `community-version-spine-20260720-tasks.md`：新交接 ZIP 已提供 4.2 Spine 样本、社区和版本草案，当前按安全审计结果重构并验收。
 - `tavo-worldbook-full-tasks.md`：本机未跟踪的待续草案，确认范围后再决定是否纳入 Git。

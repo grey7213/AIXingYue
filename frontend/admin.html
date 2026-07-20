@@ -10,7 +10,7 @@
   <script src="/assets/vendor/tailwindcss-browser.js?v=20260713-local"></script>
   <link rel="stylesheet" href="/assets/css/custom.css?v=20260703-fengyue-ui2">
   <link rel="stylesheet" href="/assets/css/admin.css?v=20260711-reference-ui1">
-  <script type="module" src="/assets/js/admin-app.js?v=20260717-handoff-merge"></script>
+  <script type="module" src="/assets/js/admin-app.js?v=20260720-community-versions"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="xy-admin min-h-screen">
@@ -454,6 +454,32 @@
           </div>
 
           <!-- 兑换码 -->
+          <div x-show="activeTab === 'contests'">
+            <div class="flex items-center justify-between mb-6">
+              <div><h1 class="text-2xl font-bold xy-gradient-text">赛事管理</h1><p class="text-sm text-slate-400 mt-1">发布角色卡赛事，管理起止时间、奖励和当前状态</p></div>
+              <button @click="loadContests" class="xy-btn xy-btn-ghost text-sm" :disabled="loading">刷新</button>
+            </div>
+            <div class="grid lg:grid-cols-[minmax(0,420px)_minmax(0,1fr)] gap-5">
+              <section class="xy-glass p-5">
+                <h2 class="font-semibold mb-4">发布新赛事</h2>
+                <div class="space-y-4">
+                  <label class="block"><span class="xy-label">赛事标题 *</span><input class="xy-input" maxlength="120" x-model="contestForm.title" placeholder="例如：盛夏幻想角色创作赛"></label>
+                  <label class="block"><span class="xy-label">赛事内容</span><textarea class="xy-input min-h-28" maxlength="4000" x-model="contestForm.content" placeholder="主题、规则、参赛要求"></textarea></label>
+                  <label class="block"><span class="xy-label">赛事奖励</span><textarea class="xy-input min-h-20" maxlength="1000" x-model="contestForm.reward" placeholder="名次奖励与发放说明"></textarea></label>
+                  <div class="grid sm:grid-cols-2 gap-3"><label><span class="xy-label">开始时间 *</span><input type="datetime-local" class="xy-input" x-model="contestForm.start_at_local"></label><label><span class="xy-label">结束时间 *</span><input type="datetime-local" class="xy-input" x-model="contestForm.end_at_local"></label></div>
+                  <button class="xy-btn xy-btn-primary w-full justify-center" @click="createContest" :disabled="contestSaving"><span x-text="contestSaving ? '发布中…' : '发布赛事'"></span></button>
+                </div>
+              </section>
+              <section class="xy-glass p-5 min-w-0">
+                <div class="flex items-center justify-between mb-4"><h2 class="font-semibold">赛事列表</h2><span class="text-xs text-slate-400" x-text="contestActive ? `当前：${contestActive.title}` : '当前无进行中赛事'"></span></div>
+                <div class="overflow-x-auto"><table class="xy-table"><thead><tr><th>赛事</th><th>起止时间</th><th>状态</th><th>奖励</th><th>操作</th></tr></thead><tbody>
+                  <template x-if="!contests.length && !loading"><tr><td colspan="5" class="text-center text-slate-500 py-8">暂无赛事</td></tr></template>
+                  <template x-for="contest in contests" :key="contest.id"><tr><td><div class="font-medium" x-text="contest.title"></div><div class="text-xs text-slate-500 max-w-xs truncate" x-text="contest.content || '未填写内容'"></div></td><td><div class="text-xs" x-text="formatTime(contest.start_at)"></div><div class="text-xs text-slate-500" x-text="formatTime(contest.end_at)"></div></td><td><span class="xy-badge" :class="contestPhaseClass(contest)" x-text="contestPhaseLabel(contest)"></span></td><td><div class="text-xs max-w-xs whitespace-pre-wrap" x-text="contest.reward || '—'"></div></td><td><button class="xy-btn xy-btn-ghost text-xs py-1.5 px-3" x-show="contest.status === 'active'" @click="closeContest(contest)">关闭</button></td></tr></template>
+                </tbody></table></div>
+              </section>
+            </div>
+          </div>
+
           <div x-show="activeTab === 'redeem'">
             <div class="flex items-center justify-between mb-6 flex-wrap gap-3">
               <div>

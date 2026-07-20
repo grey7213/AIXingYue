@@ -186,6 +186,9 @@ export const api = {
       request('/admin/api/redeem-codes/create', { method: 'POST', body: payload }),
     disableRedeemCode: (code) =>
       request(`/admin/api/redeem-codes/${encodeURIComponent(code)}/disable`, { method: 'POST', body: {} }),
+    communityContests: () => request('/console/api/web/community/contests'),
+    createCommunityContest: (payload) => request('/console/api/web/community/contests', { method: 'POST', body: payload }),
+    closeCommunityContest: (contestId) => request(`/console/api/web/community/contests/${encodeURIComponent(contestId)}/close`, { method: 'POST', body: {} }),
     siteSettings: () => request('/admin/api/site-settings'),
     saveSiteSettings: (payload) =>
       request('/admin/api/site-settings', { method: 'POST', body: payload }),

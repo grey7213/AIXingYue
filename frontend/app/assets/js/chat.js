@@ -1,6 +1,6 @@
-import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js?v=20260717-handoff-merge';
+import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js?v=20260720-community-versions';
 import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-channels-closed';
-import { cleanCardExperienceText, consumeCardExperienceText, mountCardExperience } from '/app/assets/js/card-experience-runtime.mjs?v=20260717-handoff-merge';
+import { cleanCardExperienceText, consumeCardExperienceText, mountCardExperience } from '/app/assets/js/card-experience-runtime.mjs?v=20260720-community-versions';
 
 const STATUS_LABELS = {
   name: '姓名',
@@ -1169,6 +1169,18 @@ function chatPage() {
     galgameBusy: false,
     globalPresetEnabled: true,
     globalPresetBusy: false,
+    modPanelOpen: false,
+    modLibrary: [],
+    modLibrarySearch: '',
+    modActive: [],
+    modActiveSearch: '',
+    modLoading: false,
+    modSaving: false,
+    modDragId: '',
+    versionPickOpen: false,
+    versionPickList: [],
+    versionPickSelectedId: '',
+    versionPickLoading: false,
     quickReplies: [],
     editingId: '',
     editingText: '',
@@ -1253,12 +1265,13 @@ function chatPage() {
       const params = new URLSearchParams(location.search);
       const incomingAppId = params.get('app_id');
       const incomingConvId = params.get('conv_id') || params.get('conversation_id');
+      const incomingVersionId = params.get('version_id') || '';
       if (incomingConvId) {
         const c = this.conversations.find(x => x.id === incomingConvId);
         if (c) { await this.selectConversation(c, { forceBottom: true }); return; }
       }
       if (incomingAppId) {
-        await this.startWithApp(incomingAppId);
+        await this.startWithApp(incomingAppId, { versionId: incomingVersionId });
       } else if (this.conversations.length > 0) {
         await this.selectConversation(this.conversations[0], { forceBottom: true });
       }
@@ -1302,6 +1315,155 @@ function chatPage() {
 
     toggleAdvancedRenderEnabled() {
       this.updateAdvancedRenderSettings({ enabled: !this.advancedRenderSettings.enabled });
+    },
+
+    async openModPanel() {
+      this.rightMenuOpen = false;
+      if (!this.conversation?.id) {
+        alert('请先创建或选择一个对话，再管理当前对话使用的 Mod。');
+        return;
+      }
+      this.modPanelOpen = true;
+      this.modLibrarySearch = '';
+      this.modActiveSearch = '';
+      await this.loadMods();
+    },
+
+    closeModPanel() {
+      if (this.modSaving) return;
+      this.modPanelOpen = false;
+      this.modDragId = '';
+    },
+
+    modId(mod) {
+      return String(mod?.id || mod?.work_id || mod?.community_work_id || '');
+    },
+
+    modVersionId(mod) {
+      return String(mod?.version_id || mod?.current_version_id || mod?.work_version_id || '');
+    },
+
+    modBindingKey(mod) {
+      return `${this.modId(mod)}:${this.modVersionId(mod)}`;
+    },
+
+    modTitle(mod) {
+      return mod?.name || mod?.title || mod?.work_name || '未命名 Mod';
+    },
+
+    modDescription(mod) {
+      return mod?.summary || mod?.description || mod?.intro || '';
+    },
+
+    modEntryCount(mod) {
+      const value = Number(mod?.entry_count ?? mod?.world_info_count ?? mod?.entries_count ?? 0);
+      return Number.isFinite(value) ? Math.max(0, value) : 0;
+    },
+
+    async loadMods() {
+      if (!this.conversation?.id) return;
+      const conversationId = this.conversation.id;
+      this.modLoading = true;
+      try {
+        const [libraryResponse, activeResponse] = await Promise.all([
+          api.chatModLibrary(),
+          api.conversationMods(conversationId),
+        ]);
+        if (this.conversation?.id !== conversationId) return;
+        const libraryData = libraryResponse?.data || libraryResponse || {};
+        const activeData = activeResponse?.data || activeResponse || {};
+        this.modLibrary = (Array.isArray(libraryData.list) ? libraryData.list : []).map(item => ({ ...item }));
+        this.modActive = (Array.isArray(activeData.list) ? activeData.list : []).map(item => ({ ...item }));
+      } catch (err) {
+        if (this.conversation?.id !== conversationId) return;
+        this.modLibrary = [];
+        this.modActive = [];
+        alert(err?.message || 'Mod 列表加载失败');
+      } finally {
+        if (this.conversation?.id === conversationId) this.modLoading = false;
+      }
+    },
+
+    filteredModLibrary() {
+      const query = this.modLibrarySearch.trim().toLowerCase();
+      const activeIds = new Set(this.modActive.map(item => this.modId(item)));
+      return this.modLibrary.filter(item => {
+        if (!this.modId(item) || activeIds.has(this.modId(item))) return false;
+        return !query || `${this.modTitle(item)} ${this.modDescription(item)}`.toLowerCase().includes(query);
+      });
+    },
+
+    filteredModActive() {
+      const query = this.modActiveSearch.trim().toLowerCase();
+      if (!query) return this.modActive;
+      return this.modActive.filter(item => `${this.modTitle(item)} ${this.modDescription(item)}`.toLowerCase().includes(query));
+    },
+
+    addModToActive(mod) {
+      const id = this.modId(mod);
+      if (!id || this.modActive.some(item => this.modId(item) === id)) return;
+      const versionId = this.modVersionId(mod);
+      if (!versionId) {
+        alert('该 Mod 尚无可锁定版本，暂时无法启用。');
+        return;
+      }
+      this.modActive = [...this.modActive, { ...mod, work_id: id, version_id: versionId }];
+    },
+
+    removeModFromActive(mod) {
+      const id = this.modId(mod);
+      if (!id) return;
+      this.modActive = this.modActive.filter(item => this.modId(item) !== id);
+    },
+
+    onModDragStart(mod) {
+      this.modDragId = this.modId(mod);
+    },
+
+    onModDrop(target) {
+      const fromId = this.modDragId;
+      const targetId = this.modId(target);
+      this.modDragId = '';
+      if (!fromId || !targetId || fromId === targetId) return;
+      const list = [...this.modActive];
+      const fromIndex = list.findIndex(item => this.modId(item) === fromId);
+      const targetIndex = list.findIndex(item => this.modId(item) === targetId);
+      if (fromIndex < 0 || targetIndex < 0) return;
+      const [moved] = list.splice(fromIndex, 1);
+      list.splice(targetIndex, 0, moved);
+      this.modActive = list;
+    },
+
+    moveMod(mod, offset) {
+      const id = this.modId(mod);
+      const list = [...this.modActive];
+      const fromIndex = list.findIndex(item => this.modId(item) === id);
+      const targetIndex = fromIndex + offset;
+      if (fromIndex < 0 || targetIndex < 0 || targetIndex >= list.length) return;
+      [list[fromIndex], list[targetIndex]] = [list[targetIndex], list[fromIndex]];
+      this.modActive = list;
+    },
+
+    async saveActiveMods() {
+      const conversationId = this.conversation?.id;
+      if (!conversationId || this.modSaving) return;
+      this.modSaving = true;
+      try {
+        const mods = this.modActive.map(item => ({
+          work_id: this.modId(item),
+          version_id: this.modVersionId(item),
+        })).filter(item => item.work_id && item.version_id);
+        if (mods.length !== this.modActive.length) throw new Error('存在未锁定具体版本的 Mod，请移除后重试');
+        const response = await api.saveConversationMods(conversationId, mods);
+        if (this.conversation?.id !== conversationId) return;
+        const data = response?.data || response || {};
+        if (Array.isArray(data.list)) this.modActive = data.list.map(item => ({ ...item }));
+        this.modPanelOpen = false;
+      } catch (err) {
+        alert(err?.message || '当前对话的 Mod 保存失败');
+      } finally {
+        this.modSaving = false;
+      }
     },
 
     setAdvancedJsMode(mode) {
@@ -1703,6 +1865,41 @@ function chatPage() {
       if (!Number.isNaN(next)) this.points = next;
     },
 
+    applyRuntimeCard(payload = {}) {
+      const data = payload?.card || payload?.runtime_card || payload?.snapshot || payload;
+      if (!data || typeof data !== 'object' || !Object.keys(data).length) return false;
+      if (data.id || data.app_id) this.appId = String(data.id || data.app_id);
+      this.appName = data.name || data.app_name || this.appName;
+      this.appDesc = data.description || data.summary || this.appDesc || '';
+      this.appIcon = data.icon || data.icon_url || data.cover || data.cover_url || this.appIcon || '';
+      this.appHero = data.bg_url || data.cover || data.cover_url || data.banner || data.background || '';
+      if ('favorited' in data) this.appFavorited = !!data.favorited;
+      this.quickReplies = Array.isArray(data.quick_replies)
+        ? data.quick_replies.filter(item => item?.enabled !== false && item?.message)
+        : [];
+      mountCardExperience(data);
+      if (data.tts_voice_id && this.ttsVoices.some(voice => voice.id === data.tts_voice_id)) {
+        this.currentTtsVoice = data.tts_voice_id;
+      }
+      return true;
+    },
+
+    async loadConversationRuntimeCard(conversationId, fallbackAppId = '') {
+      if (!conversationId) return false;
+      try {
+        const response = await api.conversationRuntimeCard(conversationId);
+        return this.applyRuntimeCard(response?.data || response || {});
+      } catch {
+        if (!fallbackAppId) return false;
+        try {
+          const response = await api.appDetails(fallbackAppId);
+          return this.applyRuntimeCard(response?.data || response || {});
+        } catch {
+          return false;
+        }
+      }
+    },
+
     async loadConversations() {
       try {
         const r = await api.conversations();
@@ -1716,7 +1913,7 @@ function chatPage() {
       }
     },
 
-    async startWithApp(appId) {
+    async startWithApp(appId, { versionId = '' } = {}) {
       this.appId = appId;
       // 拉详情用于头图展示
       try {
@@ -1739,23 +1936,75 @@ function chatPage() {
         mountCardExperience({});
         this.restoreModelSelection();
       }
+      // URL 指定版本时必须创建并锁定到该版本，不复用已有会话。
+      if (versionId) {
+        await this.newChat(versionId);
+        return;
+      }
       // 已有该角色的会话 → 直接进入最近一个
       const existing = this.conversations.find(c => c.app_id === this.appId || c.app_id === appId);
       if (existing) {
         await this.selectConversation(existing);
         return;
       }
-      // 否则开新会话（后端会把开场白写成首条消息）
-      await this.newChat();
+      await this.openVersionPicker();
     },
 
-    async newChat() {
+    versionId(version) {
+      return String(version?.version_id || version?.id || '');
+    },
+
+    versionTitle(version) {
+      return version?.version_name || version?.name || version?.label || `版本 v${version?.version_no || '?'}`;
+    },
+
+    versionDescription(version) {
+      return version?.author_description || version?.description || version?.introduction || version?.note || version?.change_summary || '作者未填写本版本说明';
+    },
+
+    async openVersionPicker() {
+      if (!this.appId || this.versionPickLoading) return;
+      this.versionPickLoading = true;
+      this.versionPickList = [];
+      this.versionPickSelectedId = '';
+      try {
+        const response = await api.cardVersions(this.appId);
+        const data = response?.data || response || {};
+        const list = Array.isArray(data.list) ? data.list : (Array.isArray(data.versions) ? data.versions : []);
+        this.versionPickList = list.filter(version => this.versionId(version));
+        const currentId = String(data.current_version_id || data.latest_version_id || '');
+        const preferred = this.versionPickList.find(version => this.versionId(version) === currentId)
+          || this.versionPickList.find(version => version?.is_current || version?.is_latest)
+          || this.versionPickList[0];
+        if (!preferred) {
+          await this.newChat();
+          return;
+        }
+        this.versionPickSelectedId = this.versionId(preferred);
+        this.versionPickOpen = true;
+      } catch {
+        await this.newChat();
+      } finally {
+        this.versionPickLoading = false;
+      }
+    },
+
+    async confirmVersionAndStart() {
+      const versionId = this.versionPickSelectedId;
+      if (!versionId || this.busy) return;
+      this.versionPickOpen = false;
+      await this.newChat(versionId);
+    },
+
+    async newChat(versionId = '') {
       if (!this.appId) return;
       this.busy = true;
       this.galgameEnabled = false;
       this.globalPresetEnabled = true;
       try {
-        const r = await api.startConversation({ app_id: this.appId, app_name: this.appName, app_icon: this.appIcon });
+        const payload = { app_id: this.appId, app_name: this.appName, app_icon: this.appIcon };
+        if (versionId) payload.version_id = versionId;
+        const r = await api.startConversation(payload);
         const data = r?.data || r;
         this.conversation = {
           id: data.conversation_id,
@@ -1765,10 +2014,12 @@ function chatPage() {
           title: this.appName || this.chatText('new_chat_title', '新对话'),
           galgame_enabled: !!data.galgame_enabled,
           global_preset_enabled: data.global_preset_enabled !== false,
+          version_id: data.version_id || versionId || '',
         };
         this.galgameEnabled = !!data.galgame_enabled;
         this.globalPresetEnabled = data.global_preset_enabled !== false;
         this.messages = (data.messages || []).map(this.normMsg);
+        await this.loadConversationRuntimeCard(data.conversation_id, this.appId);
         this.syncCardExperience();
         this.messageTotal = this.messages.length;
         this.hasOlderMessages = false;
@@ -1816,25 +2067,19 @@ function chatPage() {
       this.restoreModelSelection();
       this.listOpen = false;
       this.rightMenuOpen = false;
+      this.modPanelOpen = false;
+      this.versionPickOpen = false;
       try { localStorage.setItem('ai_xingyue_last_conversation_id', c.id); } catch { /* ignore storage errors */ }
       this.messages = [];
       this.messageTotal = 0;
       this.hasOlderMessages = false;
-      // 补头图：拉一次角色详情（容错）
-      try {
-        const r = await api.appDetails(c.app_id);
-        if (loadSeq !== this._conversationLoadSeq || this.conversation?.id !== c.id) return;
-        const data = r?.data || r;
-        this.appHero = data?.bg_url || data?.cover || data?.cover_url || '';
-        this.appDesc = data?.description || data?.summary || '';
-        if (!this.appIcon) this.appIcon = data?.icon || data?.cover || '';
-        this.appFavorited = !!data?.favorited;
-        this.quickReplies = Array.isArray(data?.quick_replies) ? data.quick_replies.filter(q => q.enabled !== false && q.message) : [];
-        mountCardExperience(data);
-        if (data?.tts_voice_id && this.ttsVoices.some(v => v.id === data.tts_voice_id)) this.currentTtsVoice = data.tts_voice_id;
-      } catch {
-        if (loadSeq !== this._conversationLoadSeq || this.conversation?.id !== c.id) return;
-        this.appHero = ''; this.quickReplies = []; this.appFavorited = false;
+      // 历史会话必须挂载其锁定版本的运行时卡；旧后端临时回退当前角色详情。
+      const runtimeLoaded = await this.loadConversationRuntimeCard(c.id, c.app_id);
+      if (loadSeq !== this._conversationLoadSeq || this.conversation?.id !== c.id) return;
+      if (!runtimeLoaded) {
+        this.appHero = '';
+        this.quickReplies = [];
+        this.appFavorited = false;
         mountCardExperience({});
       }
       try {

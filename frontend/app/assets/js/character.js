@@ -1,4 +1,4 @@
-import { api, requireAuth, getCachedUser, setCachedUser, formatDateTime, ApiError } from '/app/assets/js/app-core.js?v=20260717-handoff-merge';
+import { api, requireAuth, getCachedUser, setCachedUser, formatDateTime, ApiError } from '/app/assets/js/app-core.js?v=20260720-community-versions';
 import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260710-resume-chat';
 
 const FIELD_LABELS = {
@@ -174,6 +174,7 @@ function normalizeCard(raw) {
     favorited: !!data.favorited,
     liked: !!data.liked,
     like_count: Number(data.like_count || 0),
+    currentVersionId: String(data.current_version_id || ''),
     hasOpening: data.has_opening != null ? !!data.has_opening : (flags.opening != null ? !!flags.opening : !!String(opening).trim()),
     hasWorldInfo: data.has_world_info != null ? !!data.has_world_info : (flags.world_info != null ? !!flags.world_info : worldInfo.length > 0),
     hasRegex: data.has_regex != null ? !!data.has_regex : (flags.regex != null ? !!flags.regex : regexScripts.length > 0),
@@ -198,6 +199,21 @@ function characterPage() {
     commentLikingId: '',
     userTagDraft: '',
     userTagSaving: false,
+    extraFlags: {
+      is_open_source: false,
+      contest_opt_in: false,
+      contest_id: '',
+      votes: 0,
+      voted: false,
+      open_source_entries: [],
+    },
+    versions: [],
+    currentVersionId: '',
+    contest: null,
+    versionPickerOpen: false,
+    selectedVersionId: '',
+    startingVersion: false,
+    startError: '',
 
     async init() {
       injectLayout('explore');
@@ -231,7 +247,7 @@ function characterPage() {
         this.card = card.id ? card : null;
         if (this.card?.id) {
           this.userTagDraft = (this.card.user_tags || []).join('，');
-          await this.loadComments(false);
+          await Promise.all([this.loadComments(false), this.loadExtendedDetails()]);
         }
       } catch (err) {
         this.card = null;
@@ -239,6 +255,39 @@ function characterPage() {
         this.loadError = err?.code === 404 ? '这个角色不存在或已经下架' : '角色加载失败，请稍后重试';
       } finally {
         this.loading = false;
+      }
+    },
+
+    async loadExtendedDetails() {
+      if (!this.card?.id) return;
+      const [flagsResult, versionsResult, contestsResult] = await Promise.allSettled([
+        api.cardExtraFlags(this.card.id),
+        api.cardVersions(this.card.id),
+        api.communityContests(),
+      ]);
+      if (flagsResult.status === 'fulfilled') {
+        const flags = flagsResult.value?.data || flagsResult.value || {};
+        this.extraFlags = {
+          ...this.extraFlags,
+          ...flags,
+          votes: Number(flags.votes || 0),
+          voted: !!flags.voted,
+          open_source_entries: Array.isArray(flags.open_source_entries) ? flags.open_source_entries : [],
+        };
+      }
+      if (versionsResult.status === 'fulfilled') {
+        const data = versionsResult.value?.data || versionsResult.value || {};
+        this.versions = Array.isArray(data.list) ? data.list : [];
+        this.currentVersionId = String(data.current_version_id || this.card.currentVersionId || this.versions[0]?.id || '');
+      } else {
+        this.versions = [];
+        this.currentVersionId = this.card.currentVersionId || '';
+      }
+      if (contestsResult.status === 'fulfilled') {
+        const data = contestsResult.value?.data || contestsResult.value || {};
+        const contests = Array.isArray(data.list) ? data.list : [];
+        this.contest = contests.find(item => String(item.id) === String(this.extraFlags.contest_id))
+          || (data.active && String(data.active.id) === String(this.extraFlags.contest_id) ? data.active : null);
       }
     },
 
@@ -261,6 +310,62 @@ function characterPage() {
 
     favoriteLabel() {
       return this.card?.favorited ? '已收藏' : '收藏';
+    },
+
+    voteLabel() {
+      const votes = Number(this.extraFlags?.votes || 0);
+      return `${this.extraFlags?.voted ? '已投票' : '投票'}${votes ? ` ${votes}` : ''}`;
+    },
+
+    async toggleContestVote() {
+      if (!this.card?.id || !this.extraFlags?.contest_id) return;
+      try {
+        const result = await api.voteCommunityContest(this.extraFlags.contest_id, this.card.id);
+        const data = result?.data || result || {};
+        this.extraFlags = {
+          ...this.extraFlags,
+          voted: !!data.voted,
+          votes: Number(data.votes ?? this.extraFlags.votes ?? 0),
+        };
+      } catch (error) {
+        this.startError = error?.message || '投票失败，请稍后重试';
+      }
+    },
+
+    openVersionPicker(preferredVersionId = '') {
+      if (!this.card?.id) return;
+      this.startError = '';
+      this.selectedVersionId = String(preferredVersionId || this.currentVersionId || this.versions[0]?.id || '');
+      this.versionPickerOpen = true;
+    },
+
+    versionName(version) {
+      return version?.version_name || version?.label || `v${version?.version_no || '?'}`;
+    },
+
+    isCurrentVersion(version) {
+      return !!version?.id && String(version.id) === String(this.currentVersionId);
+    },
+
+    async startSelectedVersion() {
+      if (!this.card?.id || this.startingVersion) return;
+      this.startingVersion = true;
+      this.startError = '';
+      try {
+        const result = await api.startConversation({
+          app_id: this.card.id,
+          app_name: this.card.name,
+          app_icon: this.card.icon || this.card.cover || '',
+          version_id: this.selectedVersionId || this.currentVersionId || '',
+        });
+        const data = result?.data || result || {};
+        if (!data.conversation_id) throw new Error('未能创建会话');
+        location.href = `/app/chat.html?conv_id=${encodeURIComponent(data.conversation_id)}`;
+      } catch (error) {
+        this.startError = error?.message || '创建版本会话失败，请稍后重试';
+      } finally {
+        this.startingVersion = false;
+      }
     },
 
     async copyCardId() {

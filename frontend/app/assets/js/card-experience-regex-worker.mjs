@@ -1,4 +1,4 @@
-import { safeRegExp } from './card-experience-schema.mjs?v=20260717-handoff-merge';
+import { safeRegExp } from './card-experience-schema.mjs?v=20260720-community-versions';
 
 self.onmessage = (event) => {
   const data = event?.data || {};

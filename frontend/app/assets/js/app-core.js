@@ -1,5 +1,5 @@
 // 惑梦（Homer） Web App 共享核心 - 在所有 /app/*.html 顶部加载
-import { api as baseApi, getToken, setToken, clearAuth, isLoggedIn, getCachedUser, setCachedUser, formatDateTime, ApiError } from '/assets/js/api.js?v=20260717-handoff-merge';
+import { api as baseApi, getToken, setToken, clearAuth, isLoggedIn, getCachedUser, setCachedUser, formatDateTime, ApiError } from '/assets/js/api.js?v=20260720-community-versions';
 
 function redirectAfterUnauthorized() {
   clearAuth();
@@ -292,6 +292,42 @@ export const api = {
   }),
   exportCard: (appId) => rawRequest(`/console/api/web/my-apps/${encodeURIComponent(appId)}/export`),
   exportCardPng: (appId) => rawRequest(`/console/api/web/my-apps/${encodeURIComponent(appId)}/export-png`),
+  // 社区作品：Mod、UI 模板与预设。
+  communityWorks: (params = {}) => {
+    const qs = new URLSearchParams(params);
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return rawRequest(`/console/api/web/community/works${suffix}`);
+  },
+  communityWork: (workId) => rawRequest(`/console/api/web/community/works/${encodeURIComponent(workId)}`),
+  communityWorkVersions: (workId) => rawRequest(`/console/api/web/community/works/${encodeURIComponent(workId)}/versions`),
+  communityWorkVersion: (workId, versionId) => rawRequest(`/console/api/web/community/works/${encodeURIComponent(workId)}/versions/${encodeURIComponent(versionId)}`),
+  createCommunityWork: (payload) => rawRequest('/console/api/web/community/works', { method: 'POST', body: payload }),
+  updateCommunityWork: (workId, payload) => rawRequest(`/console/api/web/community/works/${encodeURIComponent(workId)}/update`, { method: 'POST', body: payload }),
+  deleteCommunityWork: (workId) => rawRequest(`/console/api/web/community/works/${encodeURIComponent(workId)}/delete`, { method: 'POST', body: {} }),
+  toggleCommunityWorkFavorite: (workId) => rawRequest(`/console/api/web/community/works/${encodeURIComponent(workId)}/favorite`, { method: 'POST', body: {} }),
+  communityContests: () => rawRequest('/console/api/web/community/contests'),
+  communityContest: (contestId) => rawRequest(`/console/api/web/community/contests/${encodeURIComponent(contestId)}`),
+  createCommunityContest: (payload) => rawRequest('/console/api/web/community/contests', { method: 'POST', body: payload }),
+  communityContestRankings: (contestId) => rawRequest(`/console/api/web/community/contests/${encodeURIComponent(contestId)}/rankings`),
+  voteCommunityContest: (contestId, appId) => rawRequest(`/console/api/web/community/contests/${encodeURIComponent(contestId)}/vote`, { method: 'POST', body: { app_id: appId } }),
+  // 角色卡增强信息与不可变版本。
+  cardExtraFlags: (appId) => rawRequest(`/console/api/web/card-extra/flags/${encodeURIComponent(appId)}`),
+  saveCardExtraFlags: (appId, payload = {}) => rawRequest(`/console/api/web/card-extra/flags/${encodeURIComponent(appId)}`, { method: 'PUT', body: payload }),
+  cardVersions: (appId) => rawRequest(`/console/api/web/card-versions/${encodeURIComponent(appId)}`),
+  cardVersion: (appId, versionId) => rawRequest(`/console/api/web/card-versions/${encodeURIComponent(appId)}/${encodeURIComponent(versionId)}`),
+  publishCardVersion: (appId, payload = {}) => rawRequest(`/console/api/web/card-versions/${encodeURIComponent(appId)}`, { method: 'POST', body: payload }),
+  // 当前会话使用的社区 Mod（保存时由服务端锁定具体不可变版本）。
+  chatModLibrary: (params = {}) => {
+    const qs = new URLSearchParams(params);
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return rawRequest(`/console/api/web/chat-mods/library${suffix}`);
+  },
+  conversationMods: (conversationId) => rawRequest(`/console/api/web/chat-mods/conversation/${encodeURIComponent(conversationId)}`),
+  conversationRuntimeCard: (conversationId) => rawRequest(`/console/api/web/conversations/${encodeURIComponent(conversationId)}/runtime-card`),
+  saveConversationMods: (conversationId, mods = []) => rawRequest(`/console/api/web/chat-mods/conversation/${encodeURIComponent(conversationId)}`, {
+    method: 'POST',
+    body: { mods },
+  }),
 };
 
 // 全局工具：要求登录否则跳转到 login

@@ -14,6 +14,11 @@ import paramiko
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BACKEND = ROOT / "tools" / "ai_fengyue_local_server.py"
 DEFAULT_CARD_MEDIA_EXTENSION = ROOT / "tools" / "card_experience_extension.py"
+DEFAULT_CARD_VERSION_WORKSHOP = ROOT / "tools" / "card_version_workshop.py"
+DEFAULT_COMMUNITY_WORKSHOP = ROOT / "tools" / "community_workshop.py"
+DEFAULT_CARD_EXTRA_WORKSHOP = ROOT / "tools" / "card_extra_workshop.py"
+DEFAULT_CHAT_MOD_WORKSHOP = ROOT / "tools" / "chat_mod_workshop.py"
+DEFAULT_SPINE_MEDIA_SUPPORT = ROOT / "tools" / "spine_media_support.py"
 DEFAULT_REQUIRED_WORLD_BOOK = ROOT / "tools" / "data" / "tavo_anti_scrape_worldbook.json"
 DEFAULT_FRONTEND = ROOT / "frontend"
 DEFAULT_APK = ROOT / "output" / "zip-1-repack" / "ai-xingyue-patcher-signed.apk"
@@ -123,6 +128,21 @@ def validate_deploy_args(args: argparse.Namespace) -> None:
 def proxy_locations(port: int) -> str:
     proxy = f"http://127.0.0.1:{port}"
     return f"""    location = /health {{
+        proxy_pass {proxy};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+    }}
+
+    # Keep the normal API body limit at 32 MiB, but allow the raw card-asset
+    # upload endpoint to carry a validated Spine package up to 60 MiB.  The
+    # backend still enforces the per-intent declared size, MIME and SHA-256.
+    location ~ ^/console/api/web/card-assets/[^/]+/content$ {{
+        client_max_body_size 60M;
         proxy_pass {proxy};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -369,6 +389,11 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8008)
     parser.add_argument("--backend", type=Path, default=DEFAULT_BACKEND)
     parser.add_argument("--card-media-extension", type=Path, default=DEFAULT_CARD_MEDIA_EXTENSION)
+    parser.add_argument("--card-version-workshop", type=Path, default=DEFAULT_CARD_VERSION_WORKSHOP)
+    parser.add_argument("--community-workshop", type=Path, default=DEFAULT_COMMUNITY_WORKSHOP)
+    parser.add_argument("--card-extra-workshop", type=Path, default=DEFAULT_CARD_EXTRA_WORKSHOP)
+    parser.add_argument("--chat-mod-workshop", type=Path, default=DEFAULT_CHAT_MOD_WORKSHOP)
+    parser.add_argument("--spine-media-support", type=Path, default=DEFAULT_SPINE_MEDIA_SUPPORT)
     parser.add_argument("--frontend", type=Path, default=DEFAULT_FRONTEND, help="前端目录，会上传到 /var/www/ai-fengyue-frontend")
     parser.add_argument("--apk", type=Path, default=DEFAULT_APK, help="要发布到 /download/ai-xingyue-latest.apk 的 APK 文件")
     parser.add_argument("--skip-frontend", action="store_true", help="跳过前端上传")
@@ -383,10 +408,18 @@ def main() -> int:
 
     validate_deploy_args(args)
 
-    if not args.backend.exists():
-        raise FileNotFoundError(args.backend)
-    if not args.card_media_extension.exists():
-        raise FileNotFoundError(args.card_media_extension)
+    backend_modules = [
+        ("ai_fengyue_local_server.py", args.backend),
+        ("card_experience_extension.py", args.card_media_extension),
+        ("card_version_workshop.py", args.card_version_workshop),
+        ("community_workshop.py", args.community_workshop),
+        ("card_extra_workshop.py", args.card_extra_workshop),
+        ("chat_mod_workshop.py", args.chat_mod_workshop),
+        ("spine_media_support.py", args.spine_media_support),
+    ]
+    for _, local_path in backend_modules:
+        if not local_path.is_file():
+            raise FileNotFoundError(local_path)
     if not args.key.exists():
         raise FileNotFoundError(args.key)
 
@@ -396,22 +429,34 @@ def main() -> int:
         timestamp = time.strftime("%Y%m%d-%H%M%S")
         run(ssh, "hostname && python3 --version && nginx -t")
         run(ssh, f"mkdir -p {args.deploy_dir}/data")
+        backup_dir = posixpath.join(args.deploy_dir, "backups")
+        run(ssh, f"mkdir -p {backup_dir} && chmod 700 {backup_dir}")
+        unit_path = "/etc/systemd/system/ai-fengyue-backend.service"
+        run(ssh, f"[ -f {unit_path} ] && cp {unit_path} {unit_path}.bak-{timestamp} || true")
+        remote_db = posixpath.join(args.deploy_dir, "data", "ai_fengyue.sqlite3")
+        remote_db_backup = posixpath.join(backup_dir, f"ai_fengyue-before-community-versions-{timestamp}.sqlite3")
+        run(
+            ssh,
+            f"if [ -f {remote_db} ]; then "
+            "python3 -c 'import sqlite3,sys; "
+            "src=sqlite3.connect(sys.argv[1]); dst=sqlite3.connect(sys.argv[2]); "
+            "src.backup(dst); a=src.execute(\"pragma quick_check\").fetchone()[0]; "
+            "b=dst.execute(\"pragma quick_check\").fetchone()[0]; "
+            "print(\"sqlite backup quick_check: live=%s backup=%s\"%(a,b)); "
+            "assert a==\"ok\" and b==\"ok\"; dst.close(); src.close()' "
+            f"{remote_db} {remote_db_backup}; chmod 600 {remote_db_backup}; fi",
+        )
         run(ssh, "id -u ai-xingyue >/dev/null 2>&1 || useradd --system --home /nonexistent --shell /usr/sbin/nologin ai-xingyue")
         run(ssh, f"cp {NGINX_CONF} {NGINX_CONF}.bak-ai-xingyue-{timestamp}")
         run(ssh, f"[ -f {PATCHER_NGINX_CONF} ] && cp {PATCHER_NGINX_CONF} {PATCHER_NGINX_CONF}.bak-{timestamp} || true")
 
-        remote_backend = posixpath.join(args.deploy_dir, "ai_fengyue_local_server.py")
-        remote_card_media_extension = posixpath.join(args.deploy_dir, "card_experience_extension.py")
-        run(ssh, f"[ -f {remote_backend} ] && cp {remote_backend} {remote_backend}.bak-{timestamp} || true")
-        run(
-            ssh,
-            f"[ -f {remote_card_media_extension} ] && cp {remote_card_media_extension} "
-            f"{remote_card_media_extension}.bak-{timestamp} || true",
-        )
-        log(f"uploading backend to {remote_backend}")
-        put_file(sftp, args.backend, remote_backend)
-        log(f"uploading card media extension to {remote_card_media_extension}")
-        put_file(sftp, args.card_media_extension, remote_card_media_extension)
+        remote_backend_modules = []
+        for remote_name, local_path in backend_modules:
+            remote_path = posixpath.join(args.deploy_dir, remote_name)
+            remote_backend_modules.append(remote_path)
+            run(ssh, f"[ -f {remote_path} ] && cp {remote_path} {remote_path}.bak-{timestamp} || true")
+            log(f"uploading backend module {local_path.name} to {remote_path}")
+            put_file(sftp, local_path, remote_path, 0o644)
         if DEFAULT_REQUIRED_WORLD_BOOK.exists():
             remote_worldbook = posixpath.join(args.deploy_dir, "data", "tavo_anti_scrape_worldbook.json")
             log(f"uploading required world book to {remote_worldbook}")
@@ -451,7 +496,6 @@ def main() -> int:
                 template = template.replace("ADMIN_EMAILS=local@ctf.test", f"ADMIN_EMAILS={args.admin_emails}")
             upload_text(sftp, env_path, template, 0o600)
 
-        unit_path = "/etc/systemd/system/ai-fengyue-backend.service"
         log(f"writing systemd unit: {unit_path}")
         upload_text(sftp, unit_path, service_unit(args.deploy_dir, args.port))
 
@@ -465,6 +509,14 @@ def main() -> int:
             if not args.frontend.exists():
                 log(f"warning: frontend dir not found: {args.frontend}; skip frontend upload")
             else:
+                frontend_backup = posixpath.join(backup_dir, f"frontend-source-before-community-versions-{timestamp}.tgz")
+                run(
+                    ssh,
+                    f"if [ -d {FRONTEND_REMOTE} ]; then tar -C {posixpath.dirname(FRONTEND_REMOTE)} -czf {frontend_backup} "
+                    f"--exclude='{posixpath.basename(FRONTEND_REMOTE)}/media-cache' "
+                    f"--exclude='{posixpath.basename(FRONTEND_REMOTE)}/download' "
+                    f"{posixpath.basename(FRONTEND_REMOTE)}; chmod 600 {frontend_backup}; fi",
+                )
                 log(f"uploading frontend from {args.frontend} -> {FRONTEND_REMOTE}")
                 run(ssh, f"mkdir -p {FRONTEND_REMOTE}/download")
                 count = upload_dir(sftp, ssh, args.frontend, FRONTEND_REMOTE)
@@ -518,10 +570,26 @@ def main() -> int:
             f"find {FRONTEND_REMOTE}/media-cache/card-assets -type f -exec chmod 640 {{}} +",
         )
         run(ssh, f"chown root:ai-xingyue {env_path} && chmod 640 {env_path}")
-        run(ssh, f"python3 -m py_compile {remote_backend} {remote_card_media_extension}")
+        run(ssh, f"python3 -m py_compile {' '.join(remote_backend_modules)}")
         run(ssh, "systemctl enable --now ai-fengyue-backend.service")
         run(ssh, "systemctl restart ai-fengyue-backend.service")
-        run(ssh, "sleep 1; systemctl --no-pager --full status ai-fengyue-backend.service | sed -n '1,18p'")
+        run(
+            ssh,
+            f"ok=0; for i in $(seq 1 90); do "
+            f"if curl -fsS http://127.0.0.1:{args.port}/health >/tmp/ai-fengyue-health.txt 2>/dev/null; then "
+            "cat /tmp/ai-fengyue-health.txt; ok=1; break; fi; sleep 1; done; "
+            "if [ \"$ok\" -ne 1 ]; then "
+            "systemctl --no-pager --full status ai-fengyue-backend.service | sed -n '1,40p'; "
+            "journalctl -u ai-fengyue-backend.service -n 80 --no-pager; "
+            f"ss -ltnp | grep ':{args.port} ' || true; exit 1; fi",
+        )
+        run(ssh, "systemctl --no-pager --full status ai-fengyue-backend.service | sed -n '1,18p'")
+        run(
+            ssh,
+            f"python3 -c 'import sqlite3; db=sqlite3.connect(\"{remote_db}\"); "
+            "result=db.execute(\"pragma quick_check\").fetchone()[0]; print(\"live sqlite quick_check:\",result); "
+            "assert result==\"ok\"; db.close()'",
+        )
         run(ssh, "nginx -t")
         if not args.skip_certbot:
             run(ssh, f"certbot --nginx -d {args.domain_name} --non-interactive --agree-tos -m admin@{args.domain_name} --redirect", check=False)
@@ -529,11 +597,23 @@ def main() -> int:
         run(ssh, "systemctl reload nginx")
         run(ssh, f"curl -k -sS http://127.0.0.1:{args.port}/health")
         run(ssh, f"curl -k -sS {args.domain}/health")
+        run(ssh, f"grep -qx 'CONTENT_MODE=local_only' {env_path}")
         # 验证前端
         if not args.skip_frontend:
             run(ssh, f"curl -k -sI {args.domain}/ | head -n 5", check=False)
             run(ssh, f"curl -k -sI {args.domain}/dashboard.html | head -n 5", check=False)
             run(ssh, f"curl -k -sI {args.domain}/admin.html | head -n 5", check=False)
+            run(
+                ssh,
+                f"curl -k -fsSI {args.domain}/app/assets/js/card-experience-runtime.mjs | "
+                "tr -d '\\r' | grep -iE '^content-type: (text|application)/(javascript|x-javascript)'",
+            )
+            run(
+                ssh,
+                f"curl -k -fsSI {args.domain}/app/assets/vendor/spine-webgl.js | "
+                "tr -d '\\r' | grep -iE '^content-type: (text|application)/(javascript|x-javascript)'",
+            )
+            run(ssh, f"curl -k -fsSI {args.domain}/app/assets/vendor/SPINE-RUNTIMES-LICENSE.txt | head -n 5")
         # Keep deploy verification read-only. Registration/email probes send real
         # messages and consume abuse-control quotas, so they belong in an explicit
         # post-deploy acceptance test rather than the deploy helper.

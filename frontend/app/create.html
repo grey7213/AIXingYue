@@ -7,11 +7,11 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
   <link rel="icon" href="/favicon.ico">
   <script src="/assets/vendor/tailwindcss-browser.js?v=20260713-local"></script>
-  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260717-handoff-merge">
+  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260720-community-versions">
   <link rel="stylesheet" href="/app/assets/css/worldbook-editor.css?v=20260713">
   <link rel="stylesheet" href="/app/assets/css/card-experience-editor.css?v=20260716">
   <script src="/app/assets/vendor/jszip-3.10.1.min.js?v=3.10.1"></script>
-  <script type="module" src="/app/assets/js/create.js?v=20260718-card-pack"></script>
+  <script type="module" src="/app/assets/js/create.js?v=20260720-community-versions"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen creator-editor-page">
@@ -55,6 +55,10 @@
         <button type="button" class="editor-toolbar__btn" @click="previewOpen = true" :title="creatorText('preview_title', '预览当前角色卡')">
           <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M1.5 12s4-7 10.5-7 10.5 7 10.5 7-4 7-10.5 7S1.5 12 1.5 12z"/><circle cx="12" cy="12" r="3" stroke-width="2"/></svg>
           <span x-text="creatorText('preview_text', '预览')"></span>
+        </button>
+        <button type="button" class="editor-pill" :class="form.is_open_source ? 'is-public' : 'is-private'" @click="form.is_open_source = !form.is_open_source" :title="form.is_open_source ? '开源后，详情页会只读展示世界书和提示词条目正文' : '闭源时，正文只对创作者和管理员可见'">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9V7a4 4 0 118 0v2m-9 0h10a2 2 0 012 2v8H5v-8a2 2 0 012-2z"/></svg>
+          <span x-text="form.is_open_source ? '开源' : '闭源'"></span>
         </button>
         <button class="editor-pill" :class="form.is_public ? 'is-public' : 'is-private'" @click="toggleVisibility" :title="form.is_public ? creatorText('public_title', '公开发布到探索页') : creatorText('private_title', '仅自己可见')">
           <template x-if="form.is_public">
@@ -148,6 +152,10 @@
             </div>
           </label>
         </div>
+        <label class="editor-checkbox" style="margin-top:12px">
+          <input type="checkbox" x-model="form.contest_opt_in" :disabled="!form.is_public">
+          <div class="editor-checkbox__text"><div class="editor-checkbox__title">参加当前赛事</div><div class="editor-checkbox__desc">公开发布时将当前版本报名正在进行的赛事；赛事结束或转为私密时不会接受投票。</div></div>
+        </label>
 
         <!-- 视觉素材 -->
         <div class="editor-section-title" id="creator-media" x-text="creatorText('media_section_title', '视觉素材')"></div>
@@ -354,19 +362,19 @@
                 <section class="world-media-panel" x-show="canUseAdvancedCreation()">
                   <div class="world-media-panel__head"><div><strong>关联素材</strong><small>把角色立绘、地点背景或剧情 BGM 绑定到这个设定条目</small></div><span x-show="uploadingMedia">上传中…</span></div>
                   <div class="world-media-panel__actions">
-                    <template x-for="kind in ['portrait', 'background', 'bgm']" :key="kind">
+                    <template x-for="kind in ['portrait', 'spine', 'background', 'bgm']" :key="kind">
                       <div class="world-media-action">
-                        <strong x-text="kind === 'portrait' ? '角色立绘' : (kind === 'background' ? '地点背景' : '条目 BGM')"></strong>
+                        <strong x-text="kind === 'portrait' ? '角色立绘' : (kind === 'spine' ? 'Spine 立绘' : (kind === 'background' ? '地点背景' : '条目 BGM'))"></strong>
                         <select class="xy-input text-sm" :disabled="uploadingMedia" @change="bindAssetToWorld(i, kind, $event.target.value); $event.target.value = ''">
                           <option value="">从素材库选择</option>
                           <template x-for="asset in assetsByKind(kind)" :key="asset.id"><option :value="asset.id" x-text="asset.name"></option></template>
                         </select>
-                        <label class="experience-upload"><input type="file" :accept="kind === 'bgm' ? '.mp3,audio/mpeg' : '.png,.jpg,.jpeg,.webp,.gif,image/*'" :disabled="uploadingMedia" @change="onWorldAssetChange($event, i, kind)"><span x-text="kind === 'bgm' ? '上传 MP3 并关联' : '上传图片并关联'"></span></label>
+                        <label class="experience-upload"><input type="file" :accept="kind === 'bgm' ? '.mp3,audio/mpeg' : (kind === 'spine' ? '.spine.zip,application/zip,application/x-zip-compressed' : '.png,.jpg,.jpeg,.webp,.gif,image/*')" :disabled="uploadingMedia" @change="onWorldAssetChange($event, i, kind)"><span x-text="kind === 'bgm' ? '上传 MP3 并关联' : (kind === 'spine' ? '上传 .spine.zip 并关联' : '上传图片并关联')"></span></label>
                       </div>
                     </template>
                   </div>
                   <div class="world-media-panel__bound" x-show="worldAssetBindings(i).length">
-                    <template x-for="binding in worldAssetBindings(i)" :key="binding.id"><span><b x-text="binding.kind === 'portrait' ? '立绘' : (binding.kind === 'background' ? '背景' : 'BGM')"></b><em x-text="binding.asset.name"></em><button type="button" @click="removeWorldAssetBinding(i, binding.id)" aria-label="解除关联">×</button></span></template>
+                    <template x-for="binding in worldAssetBindings(i)" :key="binding.id"><span><b x-text="binding.kind === 'portrait' ? '立绘' : (binding.kind === 'spine' ? 'Spine' : (binding.kind === 'background' ? '背景' : 'BGM'))"></b><em x-text="binding.asset.name"></em><button type="button" @click="removeWorldAssetBinding(i, binding.id)" aria-label="解除关联">×</button></span></template>
                   </div>
                 </section>
                 <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
@@ -417,6 +425,15 @@
           </div>
           <div class="editor-group__body experience-editor" x-show="expand.experience">
             <div class="experience-guide" x-show="!canUseAdvancedCreation()"><strong>高级创作未开放</strong><span x-text="advancedCreationHint()"></span></div>
+            <section class="experience-section">
+              <div class="experience-section__head"><div><strong>Spine 动态立绘</strong><small>所有创作者可用；上传经校验的 .spine.zip，可设为默认立绘或绑定世界书条目。</small></div></div>
+              <div class="experience-upload-row"><label class="experience-upload"><input type="file" accept=".spine.zip,application/zip,application/x-zip-compressed" :disabled="uploadingMedia" @change="onAssetLibraryChange($event, 'spine')"><span>＋ 上传 Spine 立绘</span></label></div>
+              <div class="experience-bgm-grid">
+                <label class="editor-checkbox"><input type="checkbox" x-model="form.card_experience.galgame.enabled"><div class="editor-checkbox__text"><div class="editor-checkbox__title">启用动态立绘舞台</div><div class="editor-checkbox__hint">作为默认立绘显示时需要启用</div></div></label>
+                <label><span>默认 Spine 立绘</span><select class="xy-input text-sm" x-model="form.card_experience.galgame.default_portrait_id"><option value="">不设置</option><template x-for="asset in assetsByKind('spine')" :key="asset.id"><option :value="asset.id" x-text="asset.metadata?.emotion ? `${asset.name}（${asset.metadata.emotion}）` : asset.name"></option></template></select></label>
+              </div>
+              <div class="experience-assets" x-show="assetsByKind('spine').length"><template x-for="asset in assetsByKind('spine')" :key="asset.id"><div style="flex-wrap:wrap"><span class="experience-assets__kind">Spine</span><strong x-text="asset.name"></strong><small x-text="asset.size_bytes ? `${(asset.size_bytes / 1048576).toFixed(1)} MB` : ''"></small><input class="xy-input text-sm" style="max-width:140px;margin-left:auto" :value="asset.metadata?.emotion || ''" @input="setAssetEmotion(asset.id, $event.target.value)" placeholder="情绪标签"><button type="button" @click="removeMediaAsset(asset.id)">删除</button></div></template></div>
+            </section>
             <fieldset :disabled="!canUseAdvancedCreation()" style="display:contents" :style="!canUseAdvancedCreation() ? 'opacity:.55' : ''">
             <div class="experience-guide"><strong>怎么触发？</strong><span>让模型回复类似 <code>[POPUP:notice]</code> 的标记，再用下方正则匹配。标记会从正文隐藏。卡内只支持声明式按钮，不执行作者 JavaScript。</span></div>
 
@@ -435,7 +452,7 @@
                 <label class="editor-checkbox"><input type="checkbox" x-model="form.card_experience.bgm.show_floating_player"><div class="editor-checkbox__text"><div class="editor-checkbox__title">显示迷你播放器</div></div></label>
               </div>
               <div class="experience-assets" x-show="form.media_assets.length">
-                <template x-for="asset in form.media_assets" :key="asset.id"><div style="flex-wrap:wrap"><span class="experience-assets__kind" x-text="asset.kind === 'bgm' ? 'BGM' : (asset.kind === 'portrait' ? '立绘' : '背景')"></span><strong x-text="asset.name"></strong><small x-text="asset.size_bytes ? `${(asset.size_bytes / 1048576).toFixed(1)} MB` : ''"></small><input x-show="asset.kind === 'portrait'" class="xy-input text-sm" style="max-width:140px;margin-left:auto" :value="asset.metadata?.emotion || ''" @input="setAssetEmotion(asset.id, $event.target.value)" placeholder="情绪标签，如 微笑"><button type="button" @click="removeMediaAsset(asset.id)">删除</button></div></template>
+                <template x-for="asset in form.media_assets" :key="asset.id"><div style="flex-wrap:wrap"><span class="experience-assets__kind" x-text="asset.kind === 'bgm' ? 'BGM' : (asset.kind === 'portrait' ? '立绘' : (asset.kind === 'spine' ? 'Spine' : '背景'))"></span><strong x-text="asset.name"></strong><small x-text="asset.size_bytes ? `${(asset.size_bytes / 1048576).toFixed(1)} MB` : ''"></small><input x-show="asset.kind === 'portrait' || asset.kind === 'spine'" class="xy-input text-sm" style="max-width:140px;margin-left:auto" :value="asset.metadata?.emotion || ''" @input="setAssetEmotion(asset.id, $event.target.value)" placeholder="情绪标签，如 微笑"><button type="button" @click="removeMediaAsset(asset.id)">删除</button></div></template>
                 <div class="experience-guide" style="margin-top:6px"><small>给立绘打上情绪/姿态标签（如 微笑、生气、害羞），启用 galgame 模式后，AI 回复中的 <code>[立绘:微笑]</code> 标记会自动切换到对应立绘。</small></div>
               </div>
             </section>
@@ -541,6 +558,36 @@
         </div>
 
         <!-- 默认模型设置（折叠） -->
+        <div class="editor-group" id="creator-community-favorites" :class="{ 'is-open': expand.communityFav }">
+          <div class="editor-group__head" @click="expand.communityFav = !expand.communityFav">
+            <div class="editor-group__title"><span class="editor-group__title-mark"></span><span>使用我收藏的社区作品</span><span class="text-xs text-violet-300/60 font-normal">预设限一个 · UI 模板可多选</span></div>
+            <span class="editor-group__chevron">⌄</span>
+          </div>
+          <div class="editor-group__body" x-show="expand.communityFav">
+            <div class="editor-field__hint">选择即应用并锁定不可变版本：预设在服务端生成提示词时注入，UI 模板在对话运行时安全合并；都不会覆盖你已经手工填写的内容。</div>
+            <div class="experience-section" style="margin-top:12px">
+              <div class="experience-section__head"><div><strong>预设</strong><small x-text="`已收藏 ${favoritePresets.length} 个`"></small></div></div>
+              <div class="editor-field__hint" x-show="communityFavLoading">加载中…</div>
+              <div class="editor-field__hint" x-show="!communityFavLoading && !favoritePresets.length">暂无收藏预设，可先去社区收藏。</div>
+              <div class="community-reference-list" x-show="favoritePresets.length">
+                <template x-for="item in favoritePresets" :key="item.id">
+                  <label class="editor-checkbox"><input type="radio" name="community-preset" :checked="form.applied_preset_id === item.id" @click.prevent="selectAppliedPreset(item.id)"><div class="editor-checkbox__text"><div class="editor-checkbox__title" x-text="item.name"></div><div class="editor-checkbox__desc" x-text="item.summary || '未填写简介'"></div></div></label>
+                </template>
+              </div>
+              <div class="editor-field__hint" x-show="form.applied_preset_id" x-text="`已应用：${appliedPresetName()} · 版本 ${form.applied_preset_version_id || '待锁定'}`"></div>
+            </div>
+            <div class="experience-section" style="margin-top:12px">
+              <div class="experience-section__head"><div><strong>UI 模板</strong><small x-text="`已收藏 ${favoriteUiTemplates.length} 个`"></small></div></div>
+              <div class="editor-field__hint" x-show="!communityFavLoading && !favoriteUiTemplates.length">暂无收藏 UI 模板。</div>
+              <div class="community-reference-list" x-show="favoriteUiTemplates.length">
+                <template x-for="item in favoriteUiTemplates" :key="item.id">
+                  <label class="editor-checkbox"><input type="checkbox" :checked="(form.applied_ui_template_ids || []).includes(item.id)" @change="toggleAppliedUiTemplate(item.id)"><div class="editor-checkbox__text"><div class="editor-checkbox__title" x-text="item.name"></div><div class="editor-checkbox__desc" x-text="item.summary || '未填写简介'"></div></div></label>
+                </template>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div class="editor-section-title" id="creator-settings" x-text="creatorText('settings_section_title', '模型与发布设置')"></div>
         <div class="editor-group" :class="{ 'is-open': expand.sampling }">
           <div class="editor-group__head" @click="expand.sampling = !expand.sampling">
@@ -707,12 +754,34 @@
                 <div><dt>世界书</dt><dd x-text="`${form.world_info.length} 条`"></dd></div>
                 <div><dt>正则</dt><dd x-text="`${form.regex_scripts.length} 条`"></dd></div>
               </dl>
+              <div x-show="editingId" style="margin-top:14px;padding-top:12px;border-top:1px solid var(--fy-border)">
+                <button type="button" class="xy-btn xy-btn-ghost text-xs" @click="expand.versions = !expand.versions" x-text="`版本历史（${cardVersions.length}）`"></button>
+                <div x-show="expand.versions" style="margin-top:8px;display:grid;gap:7px">
+                  <div class="editor-field__hint" x-show="cardVersionsLoading">正在读取版本…</div>
+                  <template x-for="version in cardVersions" :key="version.id">
+                    <div style="padding:8px 10px;border:1px solid var(--fy-border);border-radius:9px;background:var(--fy-panel-2)">
+                      <strong x-text="version.version_name || version.label || `v${version.version_no}`"></strong>
+                      <div class="editor-field__hint" x-text="version.author_description || version.note || '未填写版本介绍'"></div>
+                    </div>
+                  </template>
+                </div>
+              </div>
               <a x-show="editingId" class="creator-preview__chat" :href="`/app/chat.html?app_id=${encodeURIComponent(editingId)}`">保存后进入对话预览</a>
             </div>
           </aside>
           <button type="button" class="creator-preview__backdrop" :class="{ 'is-open': previewOpen }" @click="previewOpen = false" aria-label="关闭预览"></button>
         </div>
       </div>
+
+      <div class="xy-modal-mask" x-show="publishDialogOpen" x-transition.opacity @click="publishDialogOpen = false" x-cloak></div>
+      <section class="xy-modal" x-show="publishDialogOpen" x-transition @click.stop x-cloak aria-label="发布角色新版本">
+        <div class="xy-modal__head"><div><strong>发布新版本</strong><span>当前公开版本不会被直接覆盖；已有会话继续使用原版本。</span></div><button type="button" @click="publishDialogOpen = false">×</button></div>
+        <div class="xy-modal__body" style="display:grid;gap:14px">
+          <label class="editor-field"><span class="editor-field__label">版本名称</span><input class="xy-input" maxlength="80" x-model="versionName" placeholder="例如：v2.0 · 新剧情线"></label>
+          <label class="editor-field"><span class="editor-field__label">作者介绍 / 更新说明</span><textarea class="xy-input" rows="5" maxlength="4000" x-model="versionDescription" placeholder="说明这个版本改了什么、适合怎样游玩。玩家会在版本历史和选择弹窗中看到。"></textarea></label>
+          <div style="display:flex;justify-content:flex-end;gap:10px"><button type="button" class="xy-btn xy-btn-ghost" @click="publishDialogOpen = false">取消</button><button type="button" class="xy-btn xy-btn-primary" @click="publishEditedVersion" :disabled="loading"><span x-show="!loading">确认发布</span><span x-show="loading" class="xy-loading"></span></button></div>
+        </div>
+      </section>
     </main>
     <nav class="app-bottom-nav" data-app-bottom-nav></nav>
   </div>

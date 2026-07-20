@@ -1,6 +1,6 @@
 export const CARD_EXPERIENCE_VERSION = 1;
 
-export const MEDIA_KINDS = Object.freeze(['bgm', 'portrait', 'background']);
+export const MEDIA_KINDS = Object.freeze(['bgm', 'portrait', 'background', 'spine']);
 export const UI_ACTIONS = Object.freeze(['open_popup', 'show_floating', 'switch_bgm', 'open_sidebar', 'set_scene']);
 
 const clamp = (value, min, max, fallback) => {

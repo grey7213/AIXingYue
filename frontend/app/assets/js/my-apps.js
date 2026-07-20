@@ -1,4 +1,4 @@
-import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js?v=20260717-handoff-merge';
+import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js?v=20260720-community-versions';
 import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-channels-closed';
 
 function myAppsPage() {
@@ -71,6 +71,8 @@ function myAppsPage() {
       this.editing = {
         ...app,
         tagsText: (app.tags || []).join('，'),
+        versionName: '',
+        versionDescription: '',
       };
     },
 
@@ -79,6 +81,14 @@ function myAppsPage() {
       const app = this.editing;
       if (!app.name?.trim()) {
         this.showToast(this.myText('validate_name', '请填写角色名称'), 'error');
+        return;
+      }
+      if (!String(app.versionName || '').trim()) {
+        this.showToast('请填写新版本名称', 'error');
+        return;
+      }
+      if (!String(app.versionDescription || '').trim()) {
+        this.showToast('请填写版本作者介绍或更新说明', 'error');
         return;
       }
       this.saving = true;
@@ -95,7 +105,11 @@ function myAppsPage() {
           status: 'published',
         };
         await api.updateApp(app.id, payload);
-        this.showToast(this.myText('saved_success', '已保存'), 'success');
+        await api.publishCardVersion(app.id, {
+          version_name: String(app.versionName || '').trim(),
+          version_description: String(app.versionDescription || '').trim(),
+        });
+        this.showToast('新版本已发布，已有会话仍保持原版本', 'success');
         this.editing = null;
         await this.loadApps();
       } catch (err) {

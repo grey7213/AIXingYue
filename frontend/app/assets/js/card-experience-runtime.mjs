@@ -5,11 +5,12 @@ import {
   parseGalgameDirectives,
   safeRegExp,
   stripExperienceDirectives,
-} from './card-experience-schema.mjs?v=20260717-handoff-merge';
+} from './card-experience-schema.mjs?v=20260720-community-versions';
+import { SpinePortraitLayer, spineManifestOf } from './spine-portrait.mjs?v=20260720-community-versions';
 
 const BLOCKED_ELEMENTS = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'BASE', 'FORM', 'META', 'LINK']);
 const URL_ATTRIBUTES = new Set(['href', 'src', 'poster']);
-const REGEX_WORKER_URL = new URL('./card-experience-regex-worker.mjs?v=20260717-handoff-merge', import.meta.url);
+const REGEX_WORKER_URL = new URL('./card-experience-regex-worker.mjs?v=20260720-community-versions', import.meta.url);
 
 function timedRegexMatches(patterns, input, timeoutMs = 120) {
   const safePatterns = Array.isArray(patterns) ? patterns.slice(0, 60) : [];
@@ -202,6 +203,7 @@ class CardExperienceRuntime {
     this.lastMessageSignature = '';
     this.lastRawMessage = '';
     this.lastCleanMessage = '';
+    this.spineLayer = null;
     this.userGestureHandler = () => this.tryAutoplay();
   }
 
@@ -267,10 +269,13 @@ class CardExperienceRuntime {
     box.classList.add(galgame.dialogue_position === 'top' ? 'pos-top' : 'pos-bottom');
     const nameEl = box.querySelector('.ce-galgame__name');
     if (nameEl) nameEl.textContent = this.card.name || '';
+    this.spineLayer?.dispose();
+    this.spineLayer = new SpinePortraitLayer(stage);
     // 默认背景 / 立绘
     const bg = this.findAsset(galgame.default_background_id, 'background');
     if (bg) this.applyBackground(bg);
-    const portrait = this.findAsset(galgame.default_portrait_id, 'portrait') || this.assets.find((a) => a.kind === 'portrait');
+    const portrait = this.findAsset(galgame.default_portrait_id)
+      || this.assets.find((asset) => asset.kind === 'portrait' || asset.kind === 'spine');
     if (portrait) this.applyPortrait(portrait);
   }
 
@@ -285,6 +290,11 @@ class CardExperienceRuntime {
   applyPortrait(asset) {
     if (!asset) return;
     const el = this.shadow.querySelector('.ce-portrait');
+    if (asset.kind === 'spine' || spineManifestOf(asset)) {
+      void this.spineLayer?.show(asset);
+      return;
+    }
+    this.spineLayer?.hide();
     if (!el) return;
     el.src = asset.url;
     el.alt = asset.name || this.card.name || '';
@@ -295,8 +305,9 @@ class CardExperienceRuntime {
   switchPortraitByEmotion(emotion) {
     const tag = String(emotion || '').trim().toLowerCase();
     if (!tag) return false;
-    const asset = this.assets.find((a) => a.kind === 'portrait' && String(a.metadata?.emotion || '').trim().toLowerCase() === tag)
-      || this.assets.find((a) => a.kind === 'portrait' && String(a.name || '').trim().toLowerCase().includes(tag));
+    const isPortrait = (asset) => asset.kind === 'portrait' || asset.kind === 'spine';
+    const asset = this.assets.find((a) => isPortrait(a) && String(a.metadata?.emotion || '').trim().toLowerCase() === tag)
+      || this.assets.find((a) => isPortrait(a) && String(a.name || '').trim().toLowerCase().includes(tag));
     if (!asset) return false;
     this.applyPortrait(asset);
     return true;
@@ -544,7 +555,8 @@ class CardExperienceRuntime {
     if (!world) return;
     const bindings = normalizeMediaBindings(world.media_bindings);
     const background = this.findAsset(bindings.find((item) => item.kind === 'background')?.asset_id, 'background');
-    const portrait = this.findAsset(bindings.find((item) => item.kind === 'portrait')?.asset_id, 'portrait');
+    const portraitBinding = bindings.find((item) => item.kind === 'portrait' || item.kind === 'spine');
+    const portrait = this.findAsset(portraitBinding?.asset_id);
     const bgm = this.findAsset(bindings.find((item) => item.kind === 'bgm')?.asset_id, 'bgm');
     const backgroundEl = this.shadow.querySelector('.ce-background');
     const portraitEl = this.shadow.querySelector('.ce-portrait');
@@ -552,11 +564,7 @@ class CardExperienceRuntime {
       backgroundEl.style.backgroundImage = `url("${background.url.replace(/["\\\n\r]/g, '')}")`;
       backgroundEl.classList.add('is-visible');
     }
-    if (portrait) {
-      portraitEl.src = portrait.url;
-      portraitEl.alt = world.name || this.card.name || '';
-      portraitEl.classList.add('is-visible');
-    }
+    if (portrait) this.applyPortrait(portrait);
     if (bgm) this.switchBgm(bgm.id, true);
   }
 
@@ -704,6 +712,8 @@ class CardExperienceRuntime {
       try { this.audio.load(); } catch { /* ignore */ }
     }
     this.audio = null;
+    this.spineLayer?.dispose();
+    this.spineLayer = null;
     this.shadow?.replaceChildren();
     this.host = null;
     this.shadow = null;

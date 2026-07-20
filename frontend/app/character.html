@@ -7,9 +7,36 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
   <link rel="icon" href="/favicon.ico">
   <script src="/assets/vendor/tailwindcss-browser.js?v=20260713-local"></script>
-  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260717-handoff-merge">
-  <script type="module" src="/app/assets/js/character.js?v=20260717-handoff-merge"></script>
+  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260720-community-versions">
+  <script type="module" src="/app/assets/js/character.js?v=20260720-community-versions"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
+  <style>
+    .character-extra-panel { border: 1px solid rgba(255,255,255,.1); border-radius: 20px; background: rgba(255,255,255,.045); }
+    .character-extra-panel__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 14px; }
+    .character-extra-panel__head h3 { margin: 0; color: #fff; font-size: 16px; font-weight: 800; }
+    .character-extra-panel__head p { margin: 5px 0 0; color: rgba(237,233,254,.52); font-size: 12px; }
+    .character-vote-count { color: #fbbf24; font-size: 18px; font-weight: 850; white-space: nowrap; }
+    .character-source-list, .character-version-list { display: grid; gap: 10px; }
+    .character-source-entry, .character-version-row { padding: 13px 14px; border: 1px solid rgba(255,255,255,.08); border-radius: 14px; background: rgba(255,255,255,.035); }
+    .character-source-entry strong, .character-source-entry small, .character-version-row strong, .character-version-row small { display: block; }
+    .character-source-entry small, .character-version-row small { margin-top: 4px; color: rgba(237,233,254,.48); font-size: 11px; }
+    .character-source-entry pre { max-height: 300px; margin: 10px 0 0; overflow: auto; color: #dbeafe; font: 12px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
+    .character-version-row { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 12px; }
+    .character-version-current { color: #86efac; }
+    .character-version-mask { position: fixed; inset: 0; z-index: 1150; display: grid; place-items: center; padding: 18px; background: rgba(6,7,13,.74); backdrop-filter: blur(9px); }
+    .character-version-dialog { display: flex; flex-direction: column; width: min(620px, 100%); max-height: calc(100dvh - 36px); overflow: hidden; border: 1px solid rgba(255,255,255,.12); border-radius: 22px; color: #fff; background: rgba(24,21,37,.985); box-shadow: 0 30px 100px rgba(0,0,0,.55); }
+    .character-version-dialog__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 15px; padding: 20px; border-bottom: 1px solid rgba(255,255,255,.08); }
+    .character-version-dialog__head h2 { margin: 0; font-size: 19px; font-weight: 850; }
+    .character-version-dialog__head p { margin: 5px 0 0; color: rgba(237,233,254,.5); font-size: 12px; }
+    .character-version-dialog__body { overflow: auto; padding: 17px 20px 20px; }
+    .character-version-choice { display: block; margin-bottom: 9px; cursor: pointer; }
+    .character-version-choice input { position: absolute; opacity: 0; pointer-events: none; }
+    .character-version-choice__body { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 12px; padding: 13px 14px; border: 1px solid rgba(255,255,255,.08); border-radius: 14px; background: rgba(255,255,255,.035); transition: .14s ease; }
+    .character-version-choice input:checked + .character-version-choice__body { border-color: rgba(251,113,133,.58); background: rgba(251,113,133,.1); }
+    .character-version-choice strong, .character-version-choice small { display: block; }
+    .character-version-choice small { margin-top: 4px; color: rgba(237,233,254,.48); line-height: 1.5; }
+    .character-dialog-close { width: 34px; height: 34px; flex: 0 0 auto; border: 0; border-radius: 10px; color: rgba(255,255,255,.7); background: rgba(255,255,255,.07); cursor: pointer; }
+  </style>
 </head>
 <body class="min-h-screen">
   <div class="xy-stars-bg"></div>
@@ -23,7 +50,7 @@
         <a href="/app/explore.html" class="xy-btn xy-btn-ghost text-sm px-3 py-2" @click.prevent="goBack">← <span x-text="characterText('back_text', '返回')"></span></a>
         <h1 x-text="characterText('page_title', '角色详情')"></h1>
         <div class="grow"></div>
-        <a :href="card ? `/app/chat.html?app_id=${encodeURIComponent(card.id)}` : '#'" class="xy-btn xy-btn-primary text-sm" x-text="characterText('start_chat_text', '开始聊天')"></a>
+        <button type="button" class="xy-btn xy-btn-primary text-sm" :disabled="!card" @click="openVersionPicker()" x-text="characterText('start_chat_text', '开始聊天')"></button>
       </header>
 
       <div x-show="loading" class="flex items-center justify-center py-24">
@@ -66,6 +93,7 @@
                 <div class="flex flex-wrap gap-2 mt-4">
                   <button type="button" class="xy-btn xy-btn-ghost text-xs" :class="{ 'is-active': card?.liked }" @click="toggleLike($event)" x-text="likeLabel()">点赞</button>
                   <button type="button" class="xy-btn xy-btn-ghost text-xs" :class="{ 'is-active': card?.favorited }" @click="toggleFavorite($event)" x-text="favoriteLabel()">收藏</button>
+                  <button type="button" class="xy-btn xy-btn-ghost text-xs" x-show="extraFlags?.contest_id" :class="{ 'is-active': extraFlags?.voted }" @click="toggleContestVote()" x-text="voteLabel()">投票</button>
                 </div>
               </div>
               <span class="xy-badge xy-badge-purple character-source-badge" x-text="card?.source === 'user' ? characterText('user_badge', '用户角色') : characterText('official_badge', '角色设定')"></span>
@@ -99,6 +127,35 @@
             </div>
           </div>
 
+          <section class="character-extra-panel p-6" x-show="extraFlags?.contest_id">
+            <div class="character-extra-panel__head">
+              <div><h3 x-text="contest?.title || '当前赛事参赛作品'"></h3><p x-text="contest?.reward ? `奖励：${contest.reward}` : '在赛事有效期内，每位用户都可以为喜欢的角色投票。'"></p></div>
+              <span class="character-vote-count" x-text="`${extraFlags?.votes || 0} 票`"></span>
+            </div>
+            <button type="button" class="xy-btn xy-btn-primary text-sm" :class="{ 'is-active': extraFlags?.voted }" @click="toggleContestVote()" x-text="extraFlags?.voted ? '取消投票' : '投票支持'"></button>
+          </section>
+
+          <section class="character-extra-panel p-6" x-show="extraFlags?.is_open_source && extraFlags?.open_source_entries?.length">
+            <div class="character-extra-panel__head"><div><h3>开源条目</h3><p>作者已公开以下条目的实际内容；浏览用户只能查看，无法更改。</p></div><span class="xy-badge xy-badge-purple">只读</span></div>
+            <div class="character-source-list">
+              <template x-for="(entry, index) in (extraFlags?.open_source_entries || [])" :key="`${entry.group || ''}-${entry.name || ''}-${index}`">
+                <article class="character-source-entry"><strong x-text="entry.name || '未命名条目'"></strong><small x-text="entry.group || '条目'"></small><pre x-text="entry.content || ''"></pre></article>
+              </template>
+            </div>
+          </section>
+
+          <section class="character-extra-panel p-6" x-show="versions.length">
+            <div class="character-extra-panel__head"><div><h3>历史版本</h3><p>每次发布都会保留独立版本；进入会话后不能更换。</p></div><span class="text-xs text-violet-100/45" x-text="`${versions.length} 个版本`"></span></div>
+            <div class="character-version-list">
+              <template x-for="version in versions" :key="version.id">
+                <article class="character-version-row">
+                  <div><strong><span x-text="versionName(version)"></span><span class="character-version-current ml-2 text-xs" x-show="isCurrentVersion(version)">当前</span></strong><small x-text="version.author_description || version.note || '作者未填写本版介绍'"></small><small x-text="formatTime(version.created_at)"></small></div>
+                  <button type="button" class="xy-btn xy-btn-ghost text-xs" @click="openVersionPicker(version.id)">游玩此版本</button>
+                </article>
+              </template>
+            </div>
+          </section>
+
           <div class="xy-glass p-7">
             <h3 class="font-semibold mb-3 text-violet-100 flex items-center gap-2"><span class="text-pink-300">✦</span> <span x-text="characterText('comment_title', '评论区')"></span></h3>
             <form class="space-y-3" @submit.prevent="submitComment">
@@ -129,7 +186,7 @@
           </div>
 
           <div class="flex gap-3">
-            <a :href="`/app/chat.html?app_id=${encodeURIComponent(card?.id || '')}`" class="xy-btn xy-btn-primary flex-1 justify-center" x-text="characterText('start_chat_text', '开始聊天')"></a>
+            <button type="button" class="xy-btn xy-btn-primary flex-1 justify-center" @click="openVersionPicker()" x-text="characterText('start_chat_text', '开始聊天')"></button>
             <a href="/app/create.html" class="xy-btn xy-btn-ghost" x-text="characterText('create_role_text', '创建角色')"></a>
           </div>
         </div>
@@ -143,6 +200,22 @@
     </main>
 
     <nav class="app-bottom-nav" data-app-bottom-nav></nav>
+
+    <template x-if="versionPickerOpen">
+      <div class="character-version-mask" @click.self="versionPickerOpen = false" @keydown.escape.window="versionPickerOpen = false">
+        <section class="character-version-dialog" role="dialog" aria-modal="true" aria-labelledby="character-version-title">
+          <header class="character-version-dialog__head"><div><h2 id="character-version-title">选择游玩版本</h2><p>新会话会永久锁定所选版本，游玩过程中无法更换。</p></div><button type="button" class="character-dialog-close" @click="versionPickerOpen = false" aria-label="关闭">×</button></header>
+          <div class="character-version-dialog__body">
+            <template x-if="versions.length">
+              <div><template x-for="version in versions" :key="version.id"><label class="character-version-choice"><input type="radio" name="character-version" :value="version.id" x-model="selectedVersionId"><span class="character-version-choice__body"><span><strong><span x-text="versionName(version)"></span><span class="character-version-current ml-2 text-xs" x-show="isCurrentVersion(version)">当前推荐</span></strong><small x-text="version.author_description || version.note || '作者未填写本版介绍'"></small></span><time class="text-xs text-violet-100/40" x-text="formatTime(version.created_at)"></time></span></label></template></div>
+            </template>
+            <template x-if="!versions.length"><label class="character-version-choice"><input type="radio" name="character-version" value="" x-model="selectedVersionId"><span class="character-version-choice__body"><span><strong>当前公开版本</strong><small>该角色尚无可展示的历史版本记录。</small></span></span></label></template>
+            <p class="mt-3 text-sm text-rose-200" x-show="startError" x-text="startError"></p>
+            <div class="flex gap-3 mt-5"><button type="button" class="xy-btn xy-btn-primary flex-1 justify-center" :disabled="startingVersion" @click="startSelectedVersion()" x-text="startingVersion ? '正在创建会话…' : '确认并开始'"></button><button type="button" class="xy-btn xy-btn-ghost" @click="versionPickerOpen = false">取消</button></div>
+          </div>
+        </section>
+      </div>
+    </template>
   </div>
 </body>
 </html>

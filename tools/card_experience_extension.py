@@ -17,11 +17,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, Protocol
 
+from spine_media_support import (
+    SPINE_MAX_UPLOAD_BYTES,
+    SPINE_MIMES,
+    SpineMediaError,
+    inspect_spine_zip,
+    materialize_spine_asset,
+    remove_spine_directory,
+)
+
 
 MEDIA_RULES = {
     "bgm": {"mimes": {"audio/mpeg", "audio/mp3"}, "max_size": 30 * 1024 * 1024},
     "portrait": {"mimes": {"image/png", "image/jpeg", "image/webp", "image/gif"}, "max_size": 20 * 1024 * 1024},
     "background": {"mimes": {"image/png", "image/jpeg", "image/webp", "image/gif"}, "max_size": 20 * 1024 * 1024},
+    "spine": {"mimes": set(SPINE_MIMES), "max_size": SPINE_MAX_UPLOAD_BYTES},
 }
 UI_ACTIONS = {"open_popup", "show_floating", "switch_bgm", "open_sidebar", "set_scene"}
 BAD_REGEX = re.compile(r"\((?:[^()]|\\.)*[+*](?:[^()]|\\.)*\)[+*{]")
@@ -33,13 +43,13 @@ MAX_PENDING_INTENTS_PER_HOUR = 40
 DEFAULT_STALE_SECONDS = 24 * 60 * 60
 
 
-MIGRATION_SQL = """
-CREATE TABLE IF NOT EXISTS card_media_assets (
+CARD_MEDIA_TABLE_SQL = """
+CREATE TABLE card_media_assets (
   id TEXT PRIMARY KEY,
   owner_user_id TEXT NOT NULL,
   app_id TEXT,
   draft_id TEXT,
-  kind TEXT NOT NULL CHECK(kind IN ('bgm','portrait','background')),
+  kind TEXT NOT NULL CHECK(kind IN ('bgm','portrait','background','spine')),
   original_name TEXT NOT NULL,
   object_key TEXT NOT NULL UNIQUE,
   public_url TEXT,
@@ -50,13 +60,18 @@ CREATE TABLE IF NOT EXISTS card_media_assets (
   metadata TEXT NOT NULL DEFAULT '{}',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
-);
+)
+"""
+
+CARD_MEDIA_INDEX_SQL = """
 CREATE INDEX IF NOT EXISTS idx_card_media_owner_app ON card_media_assets(owner_user_id, app_id, status);
 CREATE INDEX IF NOT EXISTS idx_card_media_owner_draft ON card_media_assets(owner_user_id, draft_id, status);
 CREATE INDEX IF NOT EXISTS idx_card_media_owner_status_created ON card_media_assets(owner_user_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_card_media_app_status ON card_media_assets(app_id, status);
 CREATE INDEX IF NOT EXISTS idx_card_media_status_updated ON card_media_assets(status, updated_at);
 """
+
+MIGRATION_SQL = CARD_MEDIA_TABLE_SQL.replace("CREATE TABLE card_media_assets", "CREATE TABLE IF NOT EXISTS card_media_assets") + ";" + CARD_MEDIA_INDEX_SQL
 
 
 class CardMediaError(ValueError):
@@ -117,10 +132,56 @@ class LocalObjectStorage:
             if path.exists():
                 path.unlink()
 
+    def materialize_spine(self, asset_id: str, object_key: str, parsed: dict) -> dict:
+        ready_zip = self._safe("ready", object_key)
+        destination = ready_zip.parent / str(asset_id)
+        public_zip = f"{self.public_prefix.rstrip('/')}/{object_key}"
+        public_dir = public_zip.rsplit("/", 1)[0] + f"/{asset_id}"
+        return materialize_spine_asset(parsed, destination, public_dir)
+
+    def delete_asset_artifacts(self, asset_id: str, object_key: str) -> None:
+        self.delete(object_key)
+        ready_zip = self._safe("ready", object_key)
+        remove_spine_directory(ready_zip.parent / str(asset_id))
+
 
 def migrate_card_media(conn: sqlite3.Connection) -> None:
-    conn.executescript(MIGRATION_SQL)
-    conn.commit()
+    existing = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='card_media_assets'"
+    ).fetchone()
+    if not existing:
+        conn.executescript(MIGRATION_SQL)
+        conn.commit()
+        return
+    create_sql = str(existing[0] or "")
+    if "'spine'" in create_sql:
+        conn.executescript(CARD_MEDIA_INDEX_SQL)
+        conn.commit()
+        return
+
+    # SQLite cannot ALTER a CHECK constraint.  Rebuild the table in one write
+    # transaction so existing assets remain intact and startup never observes
+    # a partially migrated schema.
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute(CARD_MEDIA_TABLE_SQL.replace("card_media_assets", "card_media_assets_spine_new", 1))
+        conn.execute(
+            """INSERT INTO card_media_assets_spine_new
+               (id,owner_user_id,app_id,draft_id,kind,original_name,object_key,public_url,
+                mime_type,size_bytes,sha256,status,metadata,created_at,updated_at)
+               SELECT id,owner_user_id,app_id,draft_id,kind,original_name,object_key,public_url,
+                      mime_type,size_bytes,sha256,status,metadata,created_at,updated_at
+               FROM card_media_assets"""
+        )
+        conn.execute("DROP TABLE card_media_assets")
+        conn.execute("ALTER TABLE card_media_assets_spine_new RENAME TO card_media_assets")
+        for statement in CARD_MEDIA_INDEX_SQL.split(";"):
+            if statement.strip():
+                conn.execute(statement)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def _clean_id(value: object, label: str, *, optional: bool = False) -> str:
@@ -154,6 +215,8 @@ def _sniff_mime(head: bytes) -> str:
         return "image/webp"
     if head.startswith(b"ID3") or (len(head) >= 2 and head[0] == 0xFF and head[1] & 0xE0 == 0xE0):
         return "audio/mpeg"
+    if head.startswith(b"PK\x03\x04"):
+        return "application/zip"
     return "application/octet-stream"
 
 
@@ -236,7 +299,11 @@ class CardMediaService:
         if not re.fullmatch(r"[0-9a-f]{64}", sha256):
             raise CardMediaError("invalid sha256")
         asset_id = f"asset-{uuid.uuid4()}"
-        extension = {"audio/mpeg": ".mp3", "audio/mp3": ".mp3", "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif"}[mime]
+        extension = {
+            "audio/mpeg": ".mp3", "audio/mp3": ".mp3", "image/png": ".png",
+            "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif",
+            "application/zip": ".spine.zip", "application/x-zip-compressed": ".spine.zip",
+        }[mime]
         object_key = f"{owner[:24]}/{asset_id}{extension}"
         self.conn.execute(
             """INSERT INTO card_media_assets
@@ -261,34 +328,88 @@ class CardMediaService:
     def complete_upload(self, owner_user_id: str, asset_id: str, payload: dict | None = None) -> dict:
         row = self._owned_asset(asset_id, owner_user_id, status="pending")
         rule = MEDIA_RULES[row["kind"]]
+        spine_parsed = None
         try:
             with self.storage.open_pending(asset_id, row["object_key"]) as stream:
                 size, digest, sniffed = _stream_fingerprint(stream, rule["max_size"])
         except FileNotFoundError as exc:
             raise CardMediaError("uploaded object not found") from exc
         if size != row["size_bytes"] or digest != row["sha256"] or sniffed not in rule["mimes"]:
-            now = int(time.time())
-            self.conn.execute(
-                "UPDATE card_media_assets SET status='deleted', public_url=NULL, updated_at=? "
-                "WHERE id=? AND owner_user_id=? AND status='pending'",
-                (now, asset_id, str(owner_user_id)),
-            )
-            self.conn.commit()
+            self._reject_pending_asset(row, owner_user_id)
+            raise CardMediaError("uploaded object verification failed")
+
+        if row["kind"] == "spine":
             try:
-                self.storage.delete(row["object_key"])
-                self.conn.execute("DELETE FROM card_media_assets WHERE id=? AND status='deleted'", (asset_id,))
-                self.conn.commit()
+                with self.storage.open_pending(asset_id, row["object_key"]) as stream:
+                    spine_parsed = inspect_spine_zip(stream.read(SPINE_MAX_UPLOAD_BYTES + 1))
+            except (FileNotFoundError, SpineMediaError) as exc:
+                self._reject_pending_asset(row, owner_user_id)
+                message = str(exc) if isinstance(exc, SpineMediaError) else "uploaded object not found"
+                raise CardMediaError(f"spine package invalid: {message}") from exc
+
+        object_key = row["object_key"]
+        public_url = ""
+        metadata: dict = {}
+        try:
+            object_key, public_url = self.storage.promote(asset_id, row["object_key"])
+            if row["kind"] == "spine":
+                materializer = getattr(self.storage, "materialize_spine", None)
+                if not callable(materializer):
+                    raise SpineMediaError("configured storage cannot materialize Spine assets")
+                metadata["spine"] = materializer(asset_id, object_key, spine_parsed)
+            now = int(time.time())
+            cursor = self.conn.execute(
+                """UPDATE card_media_assets
+                   SET object_key=?, public_url=?, mime_type=?, metadata=?, status='ready', updated_at=?
+                   WHERE id=? AND owner_user_id=? AND status='pending'""",
+                (
+                    object_key, public_url, "audio/mpeg" if sniffed == "audio/mp3" else sniffed,
+                    json.dumps(metadata, ensure_ascii=False, separators=(",", ":")),
+                    now, asset_id, str(owner_user_id),
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise CardMediaError("asset completion state changed")
+            self.conn.commit()
+        except Exception as exc:
+            self.conn.rollback()
+            try:
+                self._delete_storage_asset(asset_id, object_key)
             except Exception:
                 pass
-            raise CardMediaError("uploaded object verification failed")
-        object_key, public_url = self.storage.promote(asset_id, row["object_key"])
-        now = int(time.time())
+            self.conn.execute(
+                "UPDATE card_media_assets SET status='deleted', public_url=NULL, updated_at=? WHERE id=? AND owner_user_id=?",
+                (int(time.time()), asset_id, str(owner_user_id)),
+            )
+            self.conn.commit()
+            if isinstance(exc, CardMediaError):
+                raise
+            if isinstance(exc, SpineMediaError):
+                raise CardMediaError(f"spine package invalid: {exc}") from exc
+            raise CardMediaError("asset completion failed") from exc
+        return {"asset": _asset_dict(self._owned_asset(asset_id, owner_user_id, status="ready"))}
+
+    def _delete_storage_asset(self, asset_id: str, object_key: str) -> None:
+        deleter = getattr(self.storage, "delete_asset_artifacts", None)
+        if callable(deleter):
+            deleter(asset_id, object_key)
+        else:
+            self.storage.delete(object_key)
+
+    def _reject_pending_asset(self, row: sqlite3.Row, owner_user_id: str) -> None:
+        asset_id = str(row["id"])
         self.conn.execute(
-            "UPDATE card_media_assets SET object_key=?, public_url=?, mime_type=?, status='ready', updated_at=? WHERE id=? AND owner_user_id=?",
-            (object_key, public_url, "audio/mpeg" if sniffed == "audio/mp3" else sniffed, now, asset_id, str(owner_user_id)),
+            "UPDATE card_media_assets SET status='deleted', public_url=NULL, updated_at=? "
+            "WHERE id=? AND owner_user_id=? AND status='pending'",
+            (int(time.time()), asset_id, str(owner_user_id)),
         )
         self.conn.commit()
-        return {"asset": _asset_dict(self._owned_asset(asset_id, owner_user_id, status="ready"))}
+        try:
+            self._delete_storage_asset(asset_id, str(row["object_key"]))
+        except Exception:
+            return
+        self.conn.execute("DELETE FROM card_media_assets WHERE id=? AND status='deleted'", (asset_id,))
+        self.conn.commit()
 
     def bind_payload(
         self,
@@ -379,6 +500,11 @@ class CardMediaService:
                     bgm = experience.get("bgm") if isinstance(experience.get("bgm"), dict) else {}
                     if bgm.get("default_asset_id") == asset_id:
                         bgm["default_asset_id"] = ""
+                    galgame = experience.get("galgame") if isinstance(experience.get("galgame"), dict) else {}
+                    if galgame.get("default_portrait_id") == asset_id:
+                        galgame["default_portrait_id"] = ""
+                    if galgame.get("default_background_id") == asset_id:
+                        galgame["default_background_id"] = ""
                     experience["ui_rules"] = [rule for rule in experience.get("ui_rules", []) if not (isinstance(rule, dict) and rule.get("action") == "switch_bgm" and rule.get("target_id") == asset_id)]
                     self.conn.execute(
                         "UPDATE local_apps SET extra_settings=? WHERE id=? AND owner_user_id=?",
@@ -439,16 +565,23 @@ class CardMediaService:
             clauses.append(f"id IN ({marks})")
             args.extend(clean_asset_ids)
         safe_limit = max(1, min(2000, int(limit)))
+        version_ref_table = self.conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='content_version_assets'"
+        ).fetchone()
+        retained_clause = (
+            " AND NOT EXISTS (SELECT 1 FROM content_version_assets v WHERE v.asset_id=card_media_assets.id)"
+            if version_ref_table else ""
+        )
         rows = self.conn.execute(
             f"SELECT id,object_key FROM card_media_assets WHERE {' AND '.join(clauses)} "
-            "ORDER BY updated_at,id LIMIT ?",
+            f"{retained_clause} ORDER BY updated_at,id LIMIT ?",
             (*args, safe_limit),
         ).fetchall()
         removed: list[str] = []
         failed: list[str] = []
         for row in rows:
             try:
-                self.storage.delete(row["object_key"])
+                self._delete_storage_asset(str(row["id"]), str(row["object_key"]))
                 removed.append(str(row["id"]))
             except Exception:
                 failed.append(str(row["id"]))
@@ -654,8 +787,8 @@ def _normalize_galgame(value: object, allowed_assets: dict[str, str]) -> dict:
     """校验并归一化 galgame（横板立绘对话）配置。未知字段一律丢弃。"""
     raw = value if isinstance(value, dict) else {}
     default_portrait = _clean_id(raw.get("default_portrait_id"), "asset_id", optional=True)
-    if default_portrait and allowed_assets.get(default_portrait) != "portrait":
-        raise CardMediaError("default portrait is not an owned portrait asset")
+    if default_portrait and allowed_assets.get(default_portrait) not in {"portrait", "spine"}:
+        raise CardMediaError("default portrait is not an owned portrait/spine asset")
     default_background = _clean_id(raw.get("default_background_id"), "asset_id", optional=True)
     if default_background and allowed_assets.get(default_background) != "background":
         raise CardMediaError("default background is not an owned background asset")

@@ -14,12 +14,14 @@ const MIME_BY_EXT = Object.freeze({
   jpeg: 'image/jpeg',
   webp: 'image/webp',
   gif: 'image/gif',
+  zip: 'application/zip',
 });
 
 const KIND_ALIASES = Object.freeze({
   bgm: 'bgm', audio: 'bgm', music: 'bgm', soundtrack: 'bgm', 音乐: 'bgm',
   portrait: 'portrait', character: 'portrait', sprite: 'portrait', standing: 'portrait', 立绘: 'portrait',
   background: 'background', bg: 'background', scene: 'background', backdrop: 'background', 背景: 'background', 场景: 'background',
+  spine: 'spine', skeleton: 'spine', 骨骼: 'spine', 动画立绘: 'spine',
 });
 
 const GENERIC_HINTS = new Set([
@@ -124,7 +126,7 @@ export function buildCardPackMediaUpdate({ importedApp, uploadedAssets, sourceAs
   const preferred = (kind) => uploaded.find((asset) => asset.kind === kind && sourceFor(asset).default)
     || uploaded.find((asset) => asset.kind === kind);
   const defaultBgm = preferred('bgm');
-  const defaultPortrait = preferred('portrait');
+  const defaultPortrait = preferred('portrait') || preferred('spine');
   const defaultBackground = preferred('background');
 
   const experience = clone(importedApp.card_experience && typeof importedApp.card_experience === 'object'
@@ -349,14 +351,15 @@ async function materializeAsset(found, descriptor) {
   const filename = found.path.split('/').pop() || 'asset';
   const mime = mimeFor(filename);
   const kind = descriptor.kind;
-  const limit = kind === 'bgm' ? MAX_BGM_BYTES : MAX_IMAGE_BYTES;
+  const limit = kind === 'bgm' ? MAX_BGM_BYTES : kind === 'spine' ? 60 * 1024 * 1024 : MAX_IMAGE_BYTES;
+  const limitLabel = kind === 'bgm' ? '30MB' : kind === 'spine' ? '60MB' : '20MB';
   const knownSize = entryUncompressedSize(found.entry);
   if (knownSize > limit) {
-    throw new Error(`${filename} 超过${kind === 'bgm' ? '30MB' : '20MB'}单素材限制`);
+    throw new Error(`${filename} 超过${limitLabel}单素材限制`);
   }
   const blob = await found.entry.async('blob');
   if (blob.size <= 0 || blob.size > limit) {
-    throw new Error(`${filename} 是空文件或超过${kind === 'bgm' ? '30MB' : '20MB'}单素材限制`);
+    throw new Error(`${filename} 是空文件或超过${limitLabel}单素材限制`);
   }
   const file = new File([blob], filename, { type: mime });
   return {
@@ -377,6 +380,7 @@ function normalizeKind(value) {
 
 function inferKind(path) {
   const lower = normalizePath(path).toLowerCase();
+  if (/\.spine\.zip$/i.test(lower)) return 'spine';
   const segments = lower.split('/');
   for (const segment of segments) {
     const kind = normalizeKind(segment.replace(/s$/, ''));

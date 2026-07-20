@@ -63,6 +63,16 @@
 
 ## Reusable Pitfalls
 
+- Symptom: 角色编辑后直接覆盖 `local_apps` 再创建版本，双击“发布”可能产生两个版本；发布回调失败时角色投影、赛事或素材引用还可能部分落库。
+  Cause: 草稿消费、版本快照、当前投影、赛事绑定和素材引用没有放在同一个 `BEGIN IMMEDIATE` 事务内，且发布时没有重新读取实体权限与草稿状态。
+  Fix: `publish_character()` 在写事务内重读实体/权限并消费一次性草稿，强制版本名和作者介绍非空；版本、投影、素材引用、社区 flags 与赛事回调全部同事务提交，任一步异常整体 rollback，重复提交返回 409。
+  Verify: 2026-07-20 `output/verify_community_versions_backend.py` 验证回调失败后版本数/投影/flags/赛事均不变，首次发布成功、第二次相同草稿发布为 409，SQLite `quick_check=ok`。
+
+- Symptom: 制卡页允许选择 60 MiB 内的 `.spine.zip`，但较大包线上返回 Nginx `413 Request Entity Too Large`；某些 Windows/Chromium 上的 ZIP 还会在创建上传意图时报 `invalid media type or size`.
+  Cause: 后端原始素材 PUT 路由已放宽到 60 MiB，但部署生成的 Nginx 仍全局限制 32 MiB；浏览器对 ZIP 的 `File.type` 可能是空字符串或 `application/octet-stream`，与服务端接受的 ZIP MIME 不一致。
+  Fix: Nginx 仅对 `/console/api/web/card-assets/<id>/content` 设置 `client_max_body_size 60M`，其余 API 保持 32 MiB；前端对已校验 `.spine.zip` 文件将空/octet-stream MIME 规范为 `application/zip`，服务端仍校验 ZIP 文件头、声明大小和 SHA-256。
+  Verify: 2026-07-20 部署配置生成断言同时命中全局 `32M` 和素材 PUT `60M`；`py_compile`、`node --check`、Spine 20 包服务端自测和 Chromium 稳定性夹具全部通过。
+
 - Symptom: 完整 HTML 开场卡点击“踏上旅程/确认设定”后提示“角色设定已生成，当前环境未提供发送接口”，不会把生成的设定发到聊天。
   Cause: 卡内脚本调用 SillyTavern/Tavo 兼容函数 `window.triggerSlash(message)`，现有安全 iframe bridge 只提供状态、通知和确认接口，没有受限发送桥。
   Fix: sandbox 内 `triggerSlash` 只发送 `xy-tavo-send-message` postMessage；父页仅接受当前 `iframe.tavo-frame` 来源、限制 24000 字符并复用现有 `sendMessage()`，鉴权、扣费、流式和持久化边界不变。

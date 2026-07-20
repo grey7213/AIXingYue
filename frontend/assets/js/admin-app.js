@@ -1,5 +1,5 @@
 // 惑梦（Homer） 管理后台 Alpine.js 应用
-import { api, isLoggedIn, formatDateTime, ApiError } from '/assets/js/api.js?v=20260717-handoff-merge';
+import { api, isLoggedIn, formatDateTime, ApiError } from '/assets/js/api.js?v=20260720-community-versions';
 
 function adminPanel() {
   return {
@@ -18,6 +18,7 @@ function adminPanel() {
       { id: 'logs', label: '请求日志', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>' },
       { id: 'orders', label: '充值订单', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"/></svg>' },
       { id: 'redeem', label: '兑换码', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7h3a2 2 0 012 2v1m-5-3V5a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2h2m8-8L7 15m10 0h2a2 2 0 002-2v-1m-4 3v4a2 2 0 01-2 2H9a2 2 0 01-2-2v-4"/></svg>' },
+      { id: 'contests', label: '赛事', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 4h8v3a4 4 0 01-8 0V4zm0 2H4v1a4 4 0 004 4m8-5h4v1a4 4 0 01-4 4M12 11v5m-4 4h8m-6-4h4"/></svg>' },
       { id: 'site', label: '运营配置', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h10M4 18h7m8-7l-2 2-1-1m3 4l-2 2-1-1"/></svg>' },
       { id: 'llm', label: '模型配置', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>' },
       { id: 'global-presets', label: '全局预设', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h10M18 16l2 2 3-3"/></svg>' },
@@ -616,6 +617,11 @@ function adminPanel() {
     },
     createdRedeemCodes: [],
 
+    contests: [],
+    contestActive: null,
+    contestForm: { title: '', content: '', reward: '', start_at_local: '', end_at_local: '' },
+    contestSaving: false,
+
     siteSettings: null,
     siteForm: null,
 
@@ -835,11 +841,73 @@ function adminPanel() {
       if (id === 'logs' && this.logs.length === 0) await this.loadLogs(1);
       if (id === 'orders' && this.orders.length === 0) await this.loadOrders(1);
       if (id === 'redeem' && this.redeemCodes.length === 0) await this.loadRedeemCodes(1);
+      if (id === 'contests' && this.contests.length === 0) await this.loadContests();
       if (id === 'site' && !this.siteSettings) await this.loadSiteSettings();
       if (id === 'llm' && !this.llmSettings) await this.loadLlmSettings();
       if (id === 'global-presets' && !this.globalPresets) await this.loadGlobalPresets();
       if (id === 'plugins' && this.tavoPlugins.length === 0) await this.loadTavoPlugins();
       if (id === 'apps' && this.apps.length === 0) await this.loadApps(1);
+    },
+
+    contestPhaseLabel(contest) {
+      const phase = contest?.status === 'closed' ? 'closed' : contest?.phase;
+      return { upcoming: '未开始', active: '进行中', ended: '已结束', closed: '已关闭' }[phase] || contest?.status || '未知';
+    },
+
+    contestPhaseClass(contest) {
+      const phase = contest?.status === 'closed' ? 'closed' : contest?.phase;
+      return { active: 'xy-badge-green', upcoming: 'xy-badge-blue', ended: 'xy-badge-gray', closed: 'xy-badge-red' }[phase] || 'xy-badge-gray';
+    },
+
+    async loadContests() {
+      this.loading = true;
+      try {
+        const result = await api.admin.communityContests();
+        const data = result?.data || result || {};
+        this.contests = Array.isArray(data.list) ? data.list : [];
+        this.contestActive = data.active || this.contests.find(item => item.phase === 'active' && item.status === 'active') || null;
+      } catch (error) {
+        this.showToast(error.message || '赛事列表加载失败', 'error');
+      } finally { this.loading = false; }
+    },
+
+    contestTimeMs(value) {
+      const ms = new Date(String(value || '')).getTime();
+      return Number.isFinite(ms) ? ms : 0;
+    },
+
+    async createContest() {
+      if (this.contestSaving) return;
+      const title = String(this.contestForm.title || '').trim();
+      const startAt = this.contestTimeMs(this.contestForm.start_at_local);
+      const endAt = this.contestTimeMs(this.contestForm.end_at_local);
+      if (!title || !startAt || !endAt || endAt <= startAt) {
+        this.showToast('请填写标题，并确保结束时间晚于开始时间', 'error');
+        return;
+      }
+      this.contestSaving = true;
+      try {
+        await api.admin.createCommunityContest({
+          title,
+          content: String(this.contestForm.content || '').trim(),
+          reward: String(this.contestForm.reward || '').trim(),
+          start_at: startAt,
+          end_at: endAt,
+        });
+        this.contestForm = { title: '', content: '', reward: '', start_at_local: '', end_at_local: '' };
+        this.showToast('赛事已发布', 'success');
+        await this.loadContests();
+      } catch (error) { this.showToast(error.message || '赛事发布失败', 'error'); }
+      finally { this.contestSaving = false; }
+    },
+
+    async closeContest(contest) {
+      if (!contest?.id || contest.status === 'closed' || !confirm(`确定关闭赛事“${contest.title || contest.id}”？关闭后将停止报名和投票。`)) return;
+      try {
+        await api.admin.closeCommunityContest(contest.id);
+        this.showToast('赛事已关闭', 'success');
+        await this.loadContests();
+      } catch (error) { this.showToast(error.message || '关闭赛事失败', 'error'); }
     },
 
     stripGlobalPresetPrivate(value) {

@@ -1,4 +1,4 @@
-import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js?v=20260717-handoff-merge';
+import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js?v=20260720-community-versions';
 import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-channels-closed';
 import {
   createSidebarTemplate,
@@ -8,12 +8,12 @@ import {
   normalizeCardExperience,
   normalizeMediaAssets,
   normalizeMediaBindings,
-} from '/app/assets/js/card-experience-schema.mjs?v=20260717-handoff-merge';
+} from '/app/assets/js/card-experience-schema.mjs?v=20260720-community-versions';
 import {
   buildCardPackMediaUpdate,
   isCardPackFilename,
   parseCardPack,
-} from '/app/assets/js/card-pack-import.mjs?v=20260718-card-pack';
+} from '/app/assets/js/card-pack-import.mjs?v=20260720-community-versions';
 
 const emptyCardPromptPreset = () => ({ version: 1, enabled: false, name: '', format: 'sillytavern', source_file: '', prompts: [], prompt_order: [], blocks: [], stats: { entry_count: 0, enabled_count: 0 } });
 
@@ -39,6 +39,12 @@ const emptyForm = () => ({
   tagsText: '',
   llm_model: '',
   is_public: true,
+  is_open_source: false,
+  contest_opt_in: false,
+  applied_preset_id: '',
+  applied_preset_version_id: '',
+  applied_ui_template_ids: [],
+  applied_ui_template_version_ids: [],
   cover_url: '',
   bg_url: '',
   nsfw: false,
@@ -68,9 +74,17 @@ function createPage() {
     modelPresets: [],
     ttsVoices: [],
     defaultModelPresetId: '',
+    favoritePresets: [],
+    favoriteUiTemplates: [],
+    communityFavLoading: false,
     form: emptyForm(),
     editingId: '',  // empty = create, set = edit existing app
-    expand: { persona: false, advanced: false, promptManager: false, greetings: false, worldinfo: false, experience: false, sampling: false, voice: false, share: false },
+    cardVersions: [],
+    cardVersionsLoading: false,
+    publishDialogOpen: false,
+    versionName: '',
+    versionDescription: '',
+    expand: { persona: false, advanced: false, promptManager: false, greetings: false, worldinfo: false, communityFav: false, experience: false, sampling: false, voice: false, share: false, versions: false },
     importing: false,
     pendingCardPackImport: null,
     siteSettings: null,
@@ -97,12 +111,108 @@ function createPage() {
         await this.loadCreatorAccess();
         await this.loadModelPresets();
         await this.loadTtsVoices();
-        if (this.editingId) await this.loadExisting();
+        await this.loadCommunityFavorites();
+        if (this.editingId) {
+          await this.loadExisting();
+          await Promise.all([this.loadCardExtraFlags(), this.loadCardVersions()]);
+        }
       } catch (err) {
         if (err instanceof ApiError && err.code === 401) {
           location.replace('/app/login.html?next=' + encodeURIComponent(location.pathname + location.search));
         }
       }
+    },
+
+    async loadCommunityFavorites() {
+      this.communityFavLoading = true;
+      try {
+        const [presets, templates] = await Promise.all([
+          api.communityWorks({ type: 'preset', scope: 'favorites' }).catch(() => null),
+          api.communityWorks({ type: 'ui_template', scope: 'favorites' }).catch(() => null),
+        ]);
+        this.favoritePresets = presets?.data?.list || [];
+        this.favoriteUiTemplates = templates?.data?.list || [];
+      } finally {
+        this.communityFavLoading = false;
+      }
+    },
+
+    async loadCardExtraFlags() {
+      if (!this.editingId) return;
+      try {
+        const result = await api.cardExtraFlags(this.editingId);
+        const flags = result?.data || {};
+        this.form.is_open_source = flags.is_open_source === true;
+        this.form.contest_opt_in = flags.contest_opt_in === true;
+        this.form.applied_preset_id = String(flags.used_preset_work_id || flags.applied_preset_id || '');
+        this.form.applied_preset_version_id = String(flags.used_preset_version_id || flags.applied_preset_version_id || '');
+        this.form.applied_ui_template_ids = Array.isArray(flags.used_ui_template_work_ids)
+          ? [...flags.used_ui_template_work_ids]
+          : (Array.isArray(flags.applied_ui_template_ids) ? [...flags.applied_ui_template_ids] : []);
+        this.form.applied_ui_template_version_ids = Array.isArray(flags.used_ui_template_version_ids)
+          ? [...flags.used_ui_template_version_ids]
+          : (Array.isArray(flags.applied_ui_template_version_ids) ? [...flags.applied_ui_template_version_ids] : []);
+      } catch { /* 旧卡或接口不可用时保持默认值 */ }
+    },
+
+    async loadCardVersions() {
+      if (!this.editingId) return;
+      this.cardVersionsLoading = true;
+      try {
+        const result = await api.cardVersions(this.editingId);
+        this.cardVersions = result?.data?.list || [];
+      } catch {
+        this.cardVersions = [];
+      } finally {
+        this.cardVersionsLoading = false;
+      }
+    },
+
+    selectAppliedPreset(id) {
+      const value = String(id || '');
+      if (this.form.applied_preset_id === value) {
+        this.form.applied_preset_id = '';
+        this.form.applied_preset_version_id = '';
+        this.showToast('已取消预设引用；此前手工填写的内容不会被改动', 'success');
+        return;
+      }
+      const work = this.favoritePresets.find(item => String(item.id) === value);
+      const versionId = String(work?.current_version_id || work?.version_id || '');
+      if (!versionId) {
+        this.showToast('该预设尚无可锁定版本，请稍后重试', 'error');
+        return;
+      }
+      this.form.applied_preset_id = value;
+      this.form.applied_preset_version_id = versionId;
+      this.showToast('预设已应用并锁定版本；发布后由服务端注入，不会覆盖手工内容', 'success');
+    },
+
+    toggleAppliedUiTemplate(id) {
+      const value = String(id || '');
+      const ids = [...(this.form.applied_ui_template_ids || [])];
+      const versions = [...(this.form.applied_ui_template_version_ids || [])];
+      const index = ids.indexOf(value);
+      if (index >= 0) {
+        ids.splice(index, 1);
+        versions.splice(index, 1);
+        this.showToast('已取消 UI 模板引用；现有手工界面配置保持不变', 'success');
+      } else {
+        const work = this.favoriteUiTemplates.find(item => String(item.id) === value);
+        const versionId = String(work?.current_version_id || work?.version_id || '');
+        if (!versionId) {
+          this.showToast('该 UI 模板尚无可锁定版本，请稍后重试', 'error');
+          return;
+        }
+        ids.push(value);
+        versions.push(versionId);
+        this.showToast('UI 模板已应用并锁定版本；运行时由服务端安全合并', 'success');
+      }
+      this.form.applied_ui_template_ids = ids;
+      this.form.applied_ui_template_version_ids = versions;
+    },
+
+    appliedPresetName() {
+      return this.favoritePresets.find(item => String(item.id) === String(this.form.applied_preset_id))?.name || '';
     },
 
     creatorText(key, fallback = '') {
@@ -339,20 +449,30 @@ function createPage() {
     },
 
     async uploadCardAsset(file, kind) {
-      if (!this.canUseAdvancedCreation()) throw new Error(this.advancedCreationHint());
+      if (!this.canUseAdvancedCreation() && kind !== 'spine') throw new Error(this.advancedCreationHint());
       const rules = {
         bgm: { max: 30 * 1024 * 1024, accept: ['audio/mpeg', 'audio/mp3'] },
         portrait: { max: 20 * 1024 * 1024, accept: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] },
         background: { max: 20 * 1024 * 1024, accept: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] },
+        spine: { max: 60 * 1024 * 1024, accept: ['application/zip', 'application/x-zip-compressed', 'application/octet-stream', ''] },
       };
       const rule = rules[kind];
-      if (!rule || !rule.accept.includes(file.type) || file.size <= 0 || file.size > rule.max) {
+      const validSpineName = kind !== 'spine' || /\.spine\.zip$/i.test(file.name);
+      if (!rule || !validSpineName || !rule.accept.includes(file.type) || file.size <= 0 || file.size > rule.max) {
+        if (kind === 'spine') throw new Error('仅支持 60MB 内、文件名以 .spine.zip 结尾的 Spine 资源包');
         throw new Error(kind === 'bgm' ? '仅支持 30MB 内的 MP3 文件' : '仅支持 20MB 内的 PNG / JPG / WebP / GIF 图片');
       }
+      // Chromium/Windows may expose ZIP files as application/octet-stream or
+      // with an empty File.type.  The package has already been constrained by
+      // its .spine.zip name and is verified again server-side by ZIP magic,
+      // declared size and SHA-256, so use the canonical accepted MIME here.
+      const uploadMime = kind === 'spine' && !['application/zip', 'application/x-zip-compressed'].includes(file.type)
+        ? 'application/zip'
+        : file.type;
       const digest = await sha256File(file);
       const intentResult = await api.createCardAssetUploadIntent({
         app_id: this.editingId || '', draft_id: this.mediaDraftId, kind,
-        filename: file.name, mime_type: file.type, size_bytes: file.size, sha256: digest,
+        filename: file.name, mime_type: uploadMime, size_bytes: file.size, sha256: digest,
       });
       const intent = intentResult?.data || intentResult || {};
       const asset = intent.asset || intent;
@@ -417,6 +537,7 @@ function createPage() {
         this.form.media_assets = this.form.media_assets.filter(asset => asset.id !== assetId);
         for (const entry of this.form.world_info) entry.media_bindings = normalizeMediaBindings(entry.media_bindings).filter(binding => binding.asset_id !== assetId);
         if (this.form.card_experience.bgm.default_asset_id === assetId) this.form.card_experience.bgm.default_asset_id = '';
+        if (this.form.card_experience.galgame.default_portrait_id === assetId) this.form.card_experience.galgame.default_portrait_id = '';
         this.showToast('素材已移除', 'success');
       } catch (err) { this.showToast(err.message || '素材删除失败', 'error'); }
     },
@@ -431,7 +552,7 @@ function createPage() {
     },
 
     galgamePortraitOptions() {
-      return this.assetsByKind('portrait');
+      return [...this.assetsByKind('portrait'), ...this.assetsByKind('spine')];
     },
 
     galgameBackgroundOptions() {
@@ -534,17 +655,26 @@ function createPage() {
         protected_prompt: !!this.form.protected_prompt,
         anonymous: !!this.form.anonymous,
         is_public: !!this.form.is_public,
+        is_open_source: !!this.form.is_open_source,
+        contest_opt_in: !!this.form.contest_opt_in,
+        applied_preset_id: String(this.form.applied_preset_id || ''),
+        applied_preset_version_id: String(this.form.applied_preset_version_id || ''),
+        applied_ui_template_ids: Array.isArray(this.form.applied_ui_template_ids) ? [...this.form.applied_ui_template_ids] : [],
+        applied_ui_template_version_ids: Array.isArray(this.form.applied_ui_template_version_ids) ? [...this.form.applied_ui_template_version_ids] : [],
         status: 'published',
         sampling: { ...this.form.sampling },
       };
       if (!this.canUseAdvancedCreation()) {
-        delete payload.media_assets;
-        delete payload.media_draft_id;
-        delete payload.card_experience;
+        const spineAssets = normalizeMediaAssets(this.form.media_assets).filter(asset => asset.kind === 'spine');
+        if (spineAssets.length) payload.media_assets = spineAssets;
+        else delete payload.media_assets;
+        if (!spineAssets.length) delete payload.media_draft_id;
+        if (!spineAssets.length) delete payload.card_experience;
         delete payload.card_prompt_preset;
-        if (this.form.world_info.some(entry => normalizeMediaBindings(entry?.media_bindings).length > 0)) {
-          delete payload.world_info;
-        }
+        payload.world_info = payload.world_info.map(entry => ({
+          ...entry,
+          media_bindings: normalizeMediaBindings(entry.media_bindings).filter(binding => binding.kind === 'spine'),
+        }));
       }
       return payload;
     },
@@ -705,6 +835,10 @@ function createPage() {
         idFactory: newStableId,
       });
       await api.updateApp(task.app.id, payload);
+      await api.publishCardVersion(task.app.id, {
+        version_name: '资源包导入',
+        version_description: `导入 ${task.pack?.file?.name || '完整角色资源包'} 后的素材与设定版本`,
+      });
       const unmatchedText = report.unmatched.length ? `；${report.unmatched.length} 个素材未匹配世界书，已保留在素材库` : '';
       this.pendingCardPackImport = null;
       this.showToast(`资源包导入完成：${report.asset_count} 个素材、${report.world_binding_count} 个世界书绑定${unmatchedText}`, 'success', 2200);
@@ -793,34 +927,69 @@ function createPage() {
       }
     },
 
-    async submit() {
-      const payload = this.payload();
+    validatePayload(payload) {
       if (!payload.name) {
         this.showToast(this.creatorText('validate_name', '请填写角色名称'), 'error');
-        return;
+        return false;
       }
       if (!payload.summary && !payload.description) {
         this.showToast(this.creatorText('validate_summary', '请填写一句简介或角色设定'), 'error');
+        return false;
+      }
+      return true;
+    },
+
+    async submit() {
+      const payload = this.payload();
+      if (!this.validatePayload(payload)) return;
+      if (this.editingId) {
+        this.publishDialogOpen = true;
+        if (!this.versionName) this.versionName = `v${Math.max(1, this.cardVersions.length + 1)}`;
         return;
       }
       this.loading = true;
       try {
-        let app;
-        if (this.editingId) {
-          const r = await api.updateApp(this.editingId, payload);
-          app = r?.data || r;
-          this.showToast(this.creatorText('saved_success', '角色已保存'), 'success', 1200);
-          setTimeout(() => { location.href = '/app/my-apps.html'; }, 450);
-        } else {
-          const r = await api.createApp(payload);
-          app = r?.data || r;
-          this.showToast(this.creatorText('created_success', '角色已创建'), 'success', 1200);
-          setTimeout(() => {
-            location.href = `/app/chat.html?app_id=${encodeURIComponent(app.id)}`;
-          }, 450);
-        }
+        const r = await api.createApp(payload);
+        const app = r?.data || r;
+        this.showToast(this.creatorText('created_success', '角色已创建'), 'success', 1200);
+        setTimeout(() => {
+          location.href = `/app/chat.html?app_id=${encodeURIComponent(app.id)}`;
+        }, 450);
       } catch (err) {
         this.showToast(err.message || this.creatorText('save_failed', '保存失败'), 'error');
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async publishEditedVersion() {
+      const payload = this.payload();
+      if (!this.validatePayload(payload)) return;
+      const versionName = String(this.versionName || '').trim();
+      const versionDescription = String(this.versionDescription || '').trim();
+      if (!versionName) {
+        this.showToast('请填写新版本名称', 'error');
+        return;
+      }
+      if (!versionDescription) {
+        this.showToast('请填写这个版本的作者介绍或更新说明', 'error');
+        return;
+      }
+      this.loading = true;
+      try {
+        await api.updateApp(this.editingId, payload);
+        await api.publishCardVersion(this.editingId, {
+          version_name: versionName,
+          version_description: versionDescription,
+        });
+        this.publishDialogOpen = false;
+        this.versionName = '';
+        this.versionDescription = '';
+        await this.loadCardVersions();
+        this.showToast('新版本已发布；已有会话仍保持原版本', 'success', 1800);
+        setTimeout(() => { location.href = `/app/character.html?id=${encodeURIComponent(this.editingId)}`; }, 650);
+      } catch (err) {
+        this.showToast(err.message || '版本发布失败，草稿已保留，可重试发布', 'error', 5000);
       } finally {
         this.loading = false;
       }

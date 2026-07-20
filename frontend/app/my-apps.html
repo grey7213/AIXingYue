@@ -7,8 +7,8 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
   <link rel="icon" href="/favicon.ico">
   <script src="/assets/vendor/tailwindcss-browser.js?v=20260713-local"></script>
-  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260717-handoff-merge">
-  <script type="module" src="/app/assets/js/my-apps.js?v=20260717-handoff-merge"></script>
+  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260720-community-versions">
+  <script type="module" src="/app/assets/js/my-apps.js?v=20260720-community-versions"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
@@ -97,6 +97,14 @@
             <div>
               <label class="xy-label" x-text="myText('cover_label', '封面 URL')">封面 URL</label>
               <input class="xy-input" x-model="editing.cover">
+            </div>
+            <div>
+              <label class="xy-label">新版本名称</label>
+              <input class="xy-input" x-model="editing.versionName" maxlength="80" placeholder="例如：v2.0 · 新剧情线">
+            </div>
+            <div>
+              <label class="xy-label">作者介绍 / 更新说明</label>
+              <textarea class="xy-input min-h-[90px]" x-model="editing.versionDescription" maxlength="4000" placeholder="玩家会在版本历史和游玩选择中看到"></textarea>
             </div>
             <div class="flex justify-end gap-3 pt-2">
               <button class="xy-btn xy-btn-ghost" @click="editing = null" x-text="myText('cancel_text', '取消')">取消</button>

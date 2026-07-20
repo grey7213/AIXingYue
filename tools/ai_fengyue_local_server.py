@@ -41,6 +41,29 @@ from card_experience_extension import (
     normalize_card_experience,
     normalize_world_media_bindings,
 )
+from card_version_workshop import (
+    ContentVersionStore,
+    _snapshot_asset_ids,
+    character_snapshot,
+    ensure_card_version_schema,
+    handle_card_version_route,
+    merge_snapshot_over_row,
+    resolve_versioned_app,
+)
+from community_workshop import CommunityStore, ensure_community_schema, handle_community_route
+from card_extra_workshop import (
+    card_extra_payload,
+    ensure_card_extra_schema,
+    handle_card_extra_route,
+    prepare_card_extra,
+    sync_card_extra_flags,
+)
+from chat_mod_workshop import (
+    apply_conversation_mods,
+    apply_locked_community_assets,
+    ensure_chat_mod_schema,
+    handle_chat_mod_route,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -2888,6 +2911,11 @@ class Store:
         self.ensure_local_apps_columns()
         self.ensure_messages_columns()
         self.ensure_conversation_columns()
+        ensure_card_version_schema(self.conn, self.lock)
+        self.ensure_group_member_columns()
+        ensure_community_schema(self.conn, self.lock)
+        ensure_card_extra_schema(self.conn, self.lock)
+        ensure_chat_mod_schema(self.conn, self.lock)
         self.ensure_chat_memory_columns()
         self.ensure_user_model_preset_columns()
         self.ensure_default_user()
@@ -3023,6 +3051,16 @@ class Store:
                 self.conn.execute(
                     "alter table conversations add column global_preset_enabled integer not null default 1"
                 )
+            self.conn.commit()
+
+    def ensure_group_member_columns(self) -> None:
+        with self.lock:
+            columns = {row["name"] for row in self.conn.execute("pragma table_info(group_members)").fetchall()}
+            if "version_id" not in columns:
+                self.conn.execute("alter table group_members add column version_id text")
+            self.conn.execute(
+                "create index if not exists idx_group_members_version on group_members(group_id,app_id,version_id)"
+            )
             self.conn.commit()
 
     def ensure_chat_memory_columns(self) -> None:
@@ -4477,6 +4515,69 @@ class Store:
         self.conn.commit()
         return True
 
+    def resolve_character_version_id(self, app_id: str, requested_version_id: str = "") -> str:
+        row = self.get_local_app(app_id)
+        if not row:
+            raise ValueError("role not found")
+        app = dict(row)
+        versions = ContentVersionStore(self.conn, self.lock)
+        requested = str(requested_version_id or "").strip()
+        if requested:
+            if not versions.get_version(requested, "character", str(app.get("id") or app_id)):
+                raise ValueError("character version is invalid")
+            return requested
+        return versions.ensure_character_baseline(app)
+
+    def versioned_app_for_new_conversation(self, app_id: str, user_id: str, requested_version_id: str = "") -> tuple[dict, str]:
+        row = self.get_local_app(app_id)
+        if not user_can_play_app(row):
+            raise PermissionError("role not found")
+        version_id = self.resolve_character_version_id(app_id, requested_version_id)
+        app = resolve_versioned_app(self.conn, self.lock, row, version_id)
+        if not isinstance(app, dict):
+            raise ValueError("character version is unavailable")
+        apply_locked_community_assets(self.conn, self.lock, app)
+        return app, version_id
+
+    def set_conversation_version(self, conv_id: str, user_id: str, version_id: str) -> dict | None:
+        with self.lock:
+            conversation = self.conn.execute("select * from conversations where id=? and user_id=?", (conv_id, user_id)).fetchone()
+            if not conversation:
+                return None
+            locked = str(conversation["version_id"] or "") if "version_id" in conversation.keys() else ""
+            resolved = self.resolve_character_version_id(str(conversation["app_id"] or ""), version_id)
+            message_count = self.conn.execute("select count(*) from messages where conversation_id=? and user_id=?", (conv_id, user_id)).fetchone()[0]
+            if locked and locked != resolved and int(message_count or 0) > 0:
+                raise ValueError("conversation version is locked")
+            self.conn.execute("update conversations set version_id=? where id=? and user_id=?", (resolved, conv_id, user_id))
+            self.conn.commit()
+            return self.get_conversation(conv_id, user_id)
+
+    def versioned_app_for_conversation(self, app_id: str, conv_id: str, user_id: str) -> dict | None:
+        conversation = self.get_conversation(conv_id, user_id) if conv_id else None
+        if not conversation:
+            return None
+        conversation_app_id = self.resolve_local_app_id(str(conversation.get("app_id") or ""))
+        requested_app_id = self.resolve_local_app_id(app_id)
+        if requested_app_id != conversation_app_id:
+            raise PermissionError("conversation character mismatch")
+        row = self.get_local_app(conversation_app_id)
+        if not row:
+            raise ValueError("conversation character is unavailable")
+        version_id = str(conversation.get("version_id") or "")
+        if not version_id:
+            # Legacy unversioned conversations are only locked lazily while the card is still accessible.
+            if not user_can_play_app(row):
+                raise PermissionError("role not found")
+            version_id = self.resolve_character_version_id(conversation_app_id)
+            self.conn.execute("update conversations set version_id=? where id=? and user_id=?", (version_id, conv_id, user_id))
+            self.conn.commit()
+        app = resolve_versioned_app(self.conn, self.lock, row, version_id)
+        if not isinstance(app, dict):
+            raise ValueError("conversation character version is unavailable")
+        apply_locked_community_assets(self.conn, self.lock, app)
+        return app
+
     def upsert_conversation(self, conv_id: str, user_id: str, app_id: str, *,
                             app_name: str | None = None, app_icon: str | None = None,
                             title: str | None = None) -> sqlite3.Row:
@@ -4484,19 +4585,52 @@ class Store:
             ts = now_ms()
             existing = self.conn.execute("select * from conversations where id=?", (conv_id,)).fetchone()
             if existing:
+                if str(existing["user_id"] or "") != str(user_id):
+                    raise ValueError("conversation not found")
+                existing_app_id = self.resolve_local_app_id(str(existing["app_id"] or ""))
+                if existing_app_id != self.resolve_local_app_id(app_id):
+                    raise PermissionError("conversation character mismatch")
+                version_id = str(existing["version_id"] or "") if "version_id" in existing.keys() else ""
+                if not version_id:
+                    row = self.get_local_app(existing_app_id)
+                    if not user_can_play_app(row):
+                        raise PermissionError("role not found")
+                    version_id = self.resolve_character_version_id(existing_app_id)
                 self.conn.execute(
                     "update conversations set updated_at=?, app_name=coalesce(?, app_name), "
-                    "app_icon=coalesce(?, app_icon), title=coalesce(?, title) where id=?",
-                    (ts, app_name, app_icon, title, conv_id),
+                    "app_icon=coalesce(?, app_icon), title=coalesce(?, title), version_id=? where id=?",
+                    (ts, app_name, app_icon, title, version_id, conv_id),
                 )
             else:
+                _app, version_id = self.versioned_app_for_new_conversation(app_id, user_id)
                 self.conn.execute(
-                    "insert into conversations(id,user_id,app_id,app_name,app_icon,title,created_at,updated_at) "
-                    "values(?,?,?,?,?,?,?,?)",
-                    (conv_id, user_id, app_id, app_name or "", app_icon or "", title or "", ts, ts),
+                    "insert into conversations(id,user_id,app_id,app_name,app_icon,title,version_id,created_at,updated_at) "
+                    "values(?,?,?,?,?,?,?,?,?)",
+                    (conv_id, user_id, app_id, app_name or "", app_icon or "", title or "", version_id, ts, ts),
                 )
             self.conn.commit()
             return self.conn.execute("select * from conversations where id=?", (conv_id,)).fetchone()
+
+    def conversation_runtime_card(self, conv_id: str, user_id: str) -> tuple[dict, dict] | None:
+        conversation = self.get_conversation(conv_id, user_id)
+        if not conversation:
+            return None
+        app = self.versioned_app_for_conversation(str(conversation.get("app_id") or ""), conv_id, user_id)
+        if not app:
+            return None
+        return conversation, app
+
+    def preflight_chat_app(self, app_id: str, user_id: str, conv_id: str = "") -> dict:
+        conversation = self.get_conversation(conv_id, user_id) if conv_id else None
+        if conversation:
+            app = self.versioned_app_for_conversation(app_id, conv_id, user_id)
+            if not app:
+                raise PermissionError("role not found")
+            return app
+        if conv_id and self.conn.execute("select 1 from conversations where id=?", (conv_id,)).fetchone():
+            raise PermissionError("conversation not found")
+        app, _version_id = self.versioned_app_for_new_conversation(app_id, user_id)
+        return app
 
     def get_conversation(self, conv_id: str, user_id: str) -> dict | None:
         with self.lock:
@@ -4828,6 +4962,7 @@ class Store:
                 return False
             self.conn.execute("delete from messages where conversation_id=? and user_id=?", (conv_id, user_id))
             self.conn.execute("delete from conversation_summaries where conversation_id=? and user_id=?", (conv_id, user_id))
+            self.conn.execute("delete from conversation_mods_v2 where conversation_id=? and user_id=?", (conv_id, user_id))
             self.conn.execute("delete from conversations where id=? and user_id=?", (conv_id, user_id))
             self.conn.commit()
             return True
@@ -4860,14 +4995,25 @@ class Store:
             if not row:
                 return None
             source = dict(row)
+            source_app_id = self.resolve_local_app_id(str(source.get("app_id") or ""))
+            source_version_id = str(source.get("version_id") or "")
+            if source_version_id:
+                if not ContentVersionStore(self.conn, self.lock).get_version(source_version_id, "character", source_app_id):
+                    return None
+            else:
+                app_row = self.get_local_app(source_app_id)
+                if not user_can_access_app(app_row, user_id):
+                    return None
+                source_version_id = self.resolve_character_version_id(source_app_id)
+                self.conn.execute("update conversations set version_id=? where id=? and user_id=?", (source_version_id, conv_id, user_id))
             new_id = str(uuid.uuid4())
             ts = now_ms()
             base_title = str(source.get("title") or source.get("app_name") or "对话").strip() or "对话"
             title = (base_title + " 副本")[:80]
             self.conn.execute(
                 """
-                insert into conversations(id,user_id,app_id,app_name,app_icon,title,last_message,galgame_enabled,global_preset_enabled,created_at,updated_at)
-                values(?,?,?,?,?,?,?,?,?,?,?)
+                insert into conversations(id,user_id,app_id,app_name,app_icon,title,last_message,galgame_enabled,global_preset_enabled,version_id,created_at,updated_at)
+                values(?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     new_id,
@@ -4879,6 +5025,7 @@ class Store:
                     source.get("last_message") or "",
                     1 if source.get("galgame_enabled") else 0,
                     1 if source.get("global_preset_enabled", 1) else 0,
+                    source_version_id,
                     ts,
                     ts,
                 ),
@@ -4972,6 +5119,14 @@ class Store:
                     """,
                     (user_id, "conversation", new_id, v.get("name") or "", v.get("value_json") or "null", ts),
                 )
+            mod_rows = self.conn.execute(
+                "select position,work_id,version_id from conversation_mods_v2 where user_id=? and conversation_id=? order by position",
+                (user_id, conv_id),
+            ).fetchall()
+            self.conn.executemany(
+                "insert into conversation_mods_v2(user_id,conversation_id,position,work_id,version_id,updated_at) values(?,?,?,?,?,?)",
+                [(user_id, new_id, int(row["position"]), row["work_id"], row["version_id"], ts) for row in mod_rows],
+            )
             self.conn.commit()
             return self.get_conversation(new_id, user_id)
 
@@ -5333,13 +5488,27 @@ class Store:
     def _group_message_to_dict(self, row) -> dict:
         return dict(row) if row else {}
 
-    def _group_to_dict(self, row) -> dict:
+    def _group_to_dict(self, row, user_id: str = "") -> dict:
         group = dict(row)
         members = self.conn.execute(
             "select * from group_members where group_id=? order by position asc, id asc",
             (group["id"],),
         ).fetchall()
-        group["members"] = [dict(m) for m in members]
+        values = [dict(m) for m in members]
+        locked_any = False
+        for member in values:
+            if str(member.get("version_id") or ""):
+                continue
+            app = self.get_local_app(str(member.get("app_id") or ""))
+            if not user_can_play_app(app):
+                continue
+            version_id = self.resolve_character_version_id(str(member.get("app_id") or ""))
+            self.conn.execute("update group_members set version_id=? where id=?", (version_id, member["id"]))
+            member["version_id"] = version_id
+            locked_any = True
+        if locked_any:
+            self.conn.commit()
+        group["members"] = values
         return group
 
     def create_group_chat(self, user_id: str, name: str, members: list[dict]) -> dict:
@@ -5349,10 +5518,12 @@ class Store:
             app_id = self.resolve_local_app_id(app_id)
             if not app_id:
                 continue
+            app, version_id = self.versioned_app_for_new_conversation(app_id, user_id, str(member.get("version_id") or ""))
             clean_members.append({
                 "app_id": app_id,
-                "app_name": str(member.get("app_name") or "")[:120],
-                "app_icon": str(member.get("app_icon") or "")[:500],
+                "app_name": str(member.get("app_name") or app.get("name") or "")[:120],
+                "app_icon": str(member.get("app_icon") or app.get("cover_url") or "")[:500],
+                "version_id": version_id,
                 "position": idx,
             })
         if len(clean_members) < 2:
@@ -5365,8 +5536,8 @@ class Store:
                 (gid, user_id, (name or "群聊")[:120], "", 0, ts, ts),
             )
             self.conn.executemany(
-                "insert into group_members(group_id,app_id,app_name,app_icon,position) values(?,?,?,?,?)",
-                [(gid, m["app_id"], m["app_name"], m["app_icon"], m["position"]) for m in clean_members],
+                "insert into group_members(group_id,app_id,app_name,app_icon,version_id,position) values(?,?,?,?,?,?)",
+                [(gid, m["app_id"], m["app_name"], m["app_icon"], m["version_id"], m["position"]) for m in clean_members],
             )
             self.conn.commit()
             return self.get_group_chat(gid, user_id) or {}
@@ -5377,7 +5548,7 @@ class Store:
                 "select * from group_chats where user_id=? order by updated_at desc limit ?",
                 (user_id, limit),
             ).fetchall()
-            return [self._group_to_dict(r) for r in rows]
+            return [self._group_to_dict(r, user_id) for r in rows]
 
     def get_group_chat(self, group_id: str, user_id: str) -> dict | None:
         with self.lock:
@@ -5385,7 +5556,7 @@ class Store:
                 "select * from group_chats where id=? and user_id=?",
                 (group_id, user_id),
             ).fetchone()
-            return self._group_to_dict(row) if row else None
+            return self._group_to_dict(row, user_id) if row else None
 
     def list_group_messages(self, group_id: str, user_id: str, limit: int = 300) -> list[dict]:
         with self.lock:
@@ -5474,13 +5645,29 @@ class Store:
 
     def delete_card_asset(self, owner_user_id: str, asset_id: str) -> None:
         with self.lock:
+            retained = self.conn.execute(
+                "select 1 from content_version_assets where asset_id=? limit 1",
+                (str(asset_id or ""),),
+            ).fetchone()
+            if retained:
+                raise CardMediaError("asset is retained by a published version")
+            for draft_row in self.conn.execute(
+                "select snapshot_json from content_drafts where owner_user_id=?",
+                (str(owner_user_id or ""),),
+            ).fetchall():
+                try:
+                    snapshot = json.loads(draft_row["snapshot_json"] or "{}")
+                except (TypeError, ValueError):
+                    snapshot = {}
+                if str(asset_id or "") in _snapshot_asset_ids(snapshot if isinstance(snapshot, dict) else {}):
+                    raise CardMediaError("asset is retained by an unpublished draft")
             self._card_media_service().delete_asset(owner_user_id, asset_id)
 
     def upsert_upstream_app(self, app: dict) -> None:
         """同步脚本调用：写入/更新一个上游角色。app 是已 rebrand 的字段字典。"""
         with self.lock:
             ts = now_ms()
-            existing = self.conn.execute("select id from local_apps where id=?", (app["id"],)).fetchone()
+            existing = self.conn.execute("select * from local_apps where id=?", (app["id"],)).fetchone()
             fields = dict(
                 source="upstream",
                 name=app.get("name"),
@@ -5499,19 +5686,51 @@ class Store:
                 sort_weight=int(app.get("sort_weight") or 0),
                 updated_at=ts,
             )
-            if existing:
-                cols = ", ".join(f"{k}=?" for k in fields)
-                self.conn.execute(f"update local_apps set {cols} where id=?", (*fields.values(), app["id"]))
-            else:
-                fields["id"] = app["id"]
-                fields["display_id"] = self._next_local_app_display_id_locked()
-                fields["created_at"] = ts
-                fields["status"] = "published"
-                fields["is_public"] = 1
-                cols = ", ".join(fields.keys())
-                ph = ", ".join("?" for _ in fields)
-                self.conn.execute(f"insert into local_apps({cols}) values({ph})", tuple(fields.values()))
-            self.conn.commit()
+            self.conn.execute("begin immediate")
+            try:
+                versions = ContentVersionStore(self.conn, self.lock)
+                if existing:
+                    old = dict(existing)
+                    current_id = versions.ensure_character_baseline(old, commit=False)
+                    merged = dict(old)
+                    merged.update(fields)
+                    next_snapshot = character_snapshot(merged)
+                    current_snapshot = versions.snapshot(current_id, "character", str(app["id"])) or {}
+                    next_blob = json.dumps(next_snapshot, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+                    current_blob = json.dumps(current_snapshot, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+                    cols = ", ".join(f"{k}=?" for k in fields)
+                    if next_blob != current_blob:
+                        version = versions.create_version(
+                            "character", str(app["id"]), next_snapshot,
+                            version_name=time.strftime("同步 %Y-%m-%d %H:%M", time.localtime()),
+                            author_description="上游内容同步生成的不可变版本",
+                            created_by="upstream-sync", commit=False,
+                        )
+                        self.conn.execute(
+                            f"update local_apps set {cols},current_version_id=? where id=?",
+                            (*fields.values(), version["id"], app["id"]),
+                        )
+                    else:
+                        self.conn.execute(f"update local_apps set {cols} where id=?", (*fields.values(), app["id"]))
+                else:
+                    fields["id"] = app["id"]
+                    fields["display_id"] = self._next_local_app_display_id_locked()
+                    fields["created_at"] = ts
+                    fields["status"] = "published"
+                    fields["is_public"] = 1
+                    cols = ", ".join(fields.keys())
+                    ph = ", ".join("?" for _ in fields)
+                    self.conn.execute(f"insert into local_apps({cols}) values({ph})", tuple(fields.values()))
+                    created = dict(self.conn.execute("select * from local_apps where id=?", (app["id"],)).fetchone())
+                    version = versions.create_version(
+                        "character", str(app["id"]), character_snapshot(created),
+                        version_name="v1", author_description="初始同步版本", created_by="upstream-sync", commit=False,
+                    )
+                    self.conn.execute("update local_apps set current_version_id=? where id=?", (version["id"], app["id"]))
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
 
     def create_user_app(self, owner_user_id: str, data: dict) -> sqlite3.Row:
         with self.lock:
@@ -5523,6 +5742,8 @@ class Store:
             prepared = dict(data)
             try:
                 self.conn.execute("begin immediate")
+                card_extra = prepare_card_extra(self.conn, self.lock, owner_user_id, data)
+                prepared.update(card_extra)
                 if self.card_media:
                     prepared["_trusted_card_media"] = self.card_media.bind_payload(
                         owner_user_id,
@@ -5547,11 +5768,39 @@ class Store:
                       data.get("language") or "zh-Hans", data.get("status") or "published",
                       1 if data.get("is_public", True) else 0, extra_json, ts, ts),
                 )
+                created = dict(self.conn.execute("select * from local_apps where id=?", (app_id,)).fetchone())
+                version = ContentVersionStore(self.conn, self.lock).create_version(
+                    "character", app_id, character_snapshot(created), version_name="v1",
+                    author_description=str(data.get("version_description") or data.get("summary") or "初始版本"),
+                    created_by=owner_user_id, commit=False,
+                )
+                self.conn.execute("update local_apps set current_version_id=? where id=?", (version["id"], app_id))
+                created["current_version_id"] = version["id"]
+                contest_id = CommunityStore(self.conn, self.lock).register_card(created, version["id"], bool(card_extra.get("contest_opt_in")), commit=False)
+                card_extra["contest_id"] = contest_id
+                sync_card_extra_flags(self.conn, self.lock, app_id, card_extra, contest_id=contest_id, commit=False)
                 self.conn.commit()
                 return self.conn.execute("select * from local_apps where id=?", (app_id,)).fetchone()
             except Exception:
                 self.conn.rollback()
                 raise
+
+    def sync_character_publish_metadata(self, value: dict, version: dict) -> None:
+        app_id = str(value.get("id") or "")
+        try:
+            extras = json.loads(value.get("extra_settings") or "{}") if isinstance(value.get("extra_settings"), str) else dict(value.get("extra_settings") or {})
+        except (TypeError, ValueError):
+            extras = {}
+        extras = extras if isinstance(extras, dict) else {}
+        contest_id = CommunityStore(self.conn, self.lock).register_card(
+            value, version["id"], bool(extras.get("contest_opt_in")), commit=False,
+        )
+        extras["contest_id"] = contest_id
+        self.conn.execute(
+            "update local_apps set extra_settings=? where id=?",
+            (json.dumps(extras, ensure_ascii=False, separators=(",", ":")), app_id),
+        )
+        sync_card_extra_flags(self.conn, self.lock, app_id, extras, contest_id=contest_id, commit=False)
 
     def create_admin_app(self, data: dict) -> sqlite3.Row:
         with self.lock:
@@ -5561,12 +5810,14 @@ class Store:
             rich = normalize_admin_rich_app_payload(data)
             normalized = normalize_admin_app_data({**data, **rich})
             extra_json = json.dumps(normalize_user_app_extras({**data, **rich}), ensure_ascii=False, separators=(",", ":"))
-            self.conn.execute(
-                """insert into local_apps(id,display_id,source,owner_user_id,name,summary,description,cover_url,
+            try:
+                self.conn.execute("begin immediate")
+                self.conn.execute(
+                    """insert into local_apps(id,display_id,source,owner_user_id,name,summary,description,cover_url,
                    tags,opening_statement,suggested_questions,pre_prompt,llm_model,api_base_url,age_rating,gender,
                    language,status,is_public,sort_weight,official_recommended,extra_settings,created_at,updated_at)
                    values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (app_id, display_id, "admin", None, normalized.get("name") or "未命名官方角色",
+                    (app_id, display_id, "admin", None, normalized.get("name") or "未命名官方角色",
                   normalized.get("summary") or "", normalized.get("description") or "",
                   normalized.get("cover_url") or "", json.dumps(normalized.get("tags") or [], ensure_ascii=False),
                   normalized.get("opening_statement") or "", json.dumps(normalized.get("suggested_questions") or [], ensure_ascii=False),
@@ -5576,20 +5827,29 @@ class Store:
                   normalized.get("language") or "zh-Hans", normalized.get("status") or "published",
                   1 if normalized.get("is_public", True) else 0, int(normalized.get("sort_weight") or 100),
                   1 if normalized.get("official_recommended", False) else 0,
-                  extra_json if extra_json != "{}" else None, ts, ts),
-            )
-            self.conn.commit()
-            return self.conn.execute("select * from local_apps where id=?", (app_id,)).fetchone()
+                      extra_json if extra_json != "{}" else None, ts, ts),
+                )
+                created = dict(self.conn.execute("select * from local_apps where id=?", (app_id,)).fetchone())
+                version = ContentVersionStore(self.conn, self.lock).create_version(
+                    "character", app_id, character_snapshot(created), version_name="v1",
+                    author_description=str(data.get("version_description") or data.get("summary") or "初始版本"),
+                    created_by="admin", commit=False,
+                )
+                self.conn.execute("update local_apps set current_version_id=? where id=?", (version["id"], app_id))
+                self.conn.commit()
+                return self.conn.execute("select * from local_apps where id=?", (app_id,)).fetchone()
+            except Exception:
+                self.conn.rollback()
+                raise
 
     def update_admin_app(self, app_id: str, data: dict) -> sqlite3.Row | None:
         with self.lock:
             app_id = self.resolve_local_app_id(app_id)
-            row = self.conn.execute(
-                "select * from local_apps where id=?",
-                (app_id,),
-            ).fetchone()
+            row = self.conn.execute("select * from local_apps where id=?", (app_id,)).fetchone()
             if not row:
                 return None
+            version_name = str(data.get("version_name") or "后台更新")
+            version_description = str(data.get("version_description") or data.get("note") or "管理员发布的新版本")
             rich = normalize_admin_rich_app_payload(data)
             data = normalize_admin_app_data({**data, **rich}, partial=True)
             allowed = ("name", "summary", "description", "cover_url", "opening_statement",
@@ -5626,15 +5886,43 @@ class Store:
                 updates["extra_settings"] = json.dumps(existing, ensure_ascii=False, separators=(",", ":")) if existing else None
             if not updates:
                 return row
-            updates["updated_at"] = now_ms()
-            cols = ", ".join(f"{k}=?" for k in updates)
-            self.conn.execute(f"update local_apps set {cols} where id=?", (*updates.values(), app_id))
-            self.conn.commit()
-            return self.conn.execute("select * from local_apps where id=?", (app_id,)).fetchone()
+            try:
+                self.conn.execute("begin immediate")
+                locked_row = self.conn.execute("select * from local_apps where id=?", (app_id,)).fetchone()
+                if not locked_row:
+                    self.conn.rollback()
+                    return None
+                locked = dict(locked_row)
+                version_store = ContentVersionStore(self.conn, self.lock)
+                version_store.ensure_character_baseline(locked, commit=False)
+                merged_row = dict(locked)
+                merged_row.update(updates)
+                version = version_store.create_version(
+                    "character", app_id, character_snapshot(merged_row),
+                    version_name=version_name,
+                    author_description=version_description,
+                    created_by="admin", commit=False,
+                )
+                updates["current_version_id"] = version["id"]
+                updates["updated_at"] = now_ms()
+                cols = ", ".join(f"{k}=?" for k in updates)
+                self.conn.execute(f"update local_apps set {cols} where id=?", (*updates.values(), app_id))
+                self.conn.commit()
+                return self.conn.execute("select * from local_apps where id=?", (app_id,)).fetchone()
+            except Exception:
+                self.conn.rollback()
+                raise
 
     def delete_admin_app(self, app_id: str) -> bool:
         with self.lock:
             app_id = self.resolve_local_app_id(app_id)
+            if self.conn.execute("select 1 from content_versions where entity_type='character' and entity_id=? limit 1", (app_id,)).fetchone():
+                cur = self.conn.execute(
+                    "update local_apps set status='deleted',is_public=0,official_recommended=0,updated_at=? where id=?",
+                    (now_ms(), app_id),
+                )
+                self.conn.commit()
+                return cur.rowcount > 0
             asset_ids: list[str] = []
             try:
                 self.conn.execute("begin immediate")
@@ -5709,9 +5997,9 @@ class Store:
         updated_ids: list[str] = []
         not_found: list[str] = []
         errors: list[dict] = []
-        ts = now_ms()
         with self.lock:
             for raw_app_id in ids:
+                app_id = str(raw_app_id or "")
                 try:
                     app_id = self.resolve_local_app_id(raw_app_id)
                     row = self.conn.execute("select * from local_apps where id=?", (app_id,)).fetchone()
@@ -5751,14 +6039,20 @@ class Store:
 
                     if not updates:
                         continue
-                    updates["updated_at"] = ts
-                    cols = ", ".join(f"{k}=?" for k in updates)
-                    self.conn.execute(f"update local_apps set {cols} where id=?", (*updates.values(), app_id))
+                    merged = dict(row_d)
+                    merged.update(updates)
+                    ContentVersionStore(self.conn, self.lock).publish_character(
+                        row_d,
+                        "admin",
+                        version_name=str(data.get("version_name") or "后台批量更新")[:80],
+                        author_description=str(data.get("version_description") or data.get("note") or "管理员批量发布的新版本")[:4000],
+                        snapshot=character_snapshot(merged),
+                        asset_owner_user_id=str(row_d.get("owner_user_id") or "admin"),
+                        after_projection=self.sync_character_publish_metadata,
+                    )
                     updated_ids.append(app_id)
                 except Exception as exc:
                     errors.append({"id": app_id, "message": str(exc)})
-            self.conn.commit()
-
         return {
             "requested": len(ids),
             "updated": len(updated_ids),
@@ -5788,6 +6082,8 @@ class Store:
             try:
                 self.conn.execute("begin immediate")
                 prepared = dict(data)
+                card_extra = prepare_card_extra(self.conn, self.lock, owner_user_id, data, existing_extra)
+                prepared.update(card_extra)
                 media_explicit = any(key in data for key in ("media_assets", "media_draft_id", "card_experience")) or any(
                     isinstance(entry, dict) and bool(entry.get("media_bindings"))
                     for entry in (data.get("world_info") if isinstance(data.get("world_info"), list) else [])
@@ -5831,11 +6127,13 @@ class Store:
                 if not updates:
                     self.conn.commit()
                     return row
-                updates["updated_at"] = now_ms()
-                cols = ", ".join(f"{key}=?" for key in updates)
-                self.conn.execute(f"update local_apps set {cols} where id=?", (*updates.values(), app_id))
+                draft_row = dict(row)
+                draft_row.update(updates)
+                ContentVersionStore(self.conn, self.lock).save_draft(
+                    draft_row, owner_user_id, character_snapshot(draft_row), commit=False,
+                )
                 self.conn.commit()
-                return self.conn.execute("select * from local_apps where id=?", (app_id,)).fetchone()
+                return draft_row
             except Exception:
                 self.conn.rollback()
                 raise
@@ -5843,6 +6141,16 @@ class Store:
     def delete_user_app(self, app_id: str, owner_user_id: str) -> bool:
         with self.lock:
             app_id = self.resolve_local_app_id(app_id)
+            if self.conn.execute(
+                "select 1 from content_versions where entity_type='character' and entity_id=? limit 1",
+                (app_id,),
+            ).fetchone():
+                cur = self.conn.execute(
+                    "update local_apps set status='deleted',is_public=0,updated_at=? where id=? and owner_user_id=? and source='user'",
+                    (now_ms(), app_id, owner_user_id),
+                )
+                self.conn.commit()
+                return cur.rowcount > 0
             asset_ids: list[str] = []
             try:
                 self.conn.execute("begin immediate")
@@ -5914,7 +6222,7 @@ class Store:
             where.append("source=?")
             params.append(source)
         if owner_user_id:
-            where = ["owner_user_id=?"]  # 我的角色：不限 public/status
+            where = ["owner_user_id=?", "status<>'deleted'"]  # 我的角色：不限 public/status，但隐藏软删除版本根
             params = [owner_user_id]
         if official_recommended is not None:
             where.append("official_recommended=?")
@@ -8635,6 +8943,15 @@ def template_context_with_world(template_context: dict | None, entry: dict) -> d
     return ctx
 
 
+def world_runtime_order_key(entry: dict) -> tuple:
+    group = str(entry.get("_homer_world_group") or "")
+    if group == "mod":
+        return (0, int(entry.get("_homer_world_group_index") or 0), int(entry.get("_homer_world_sequence") or 0))
+    if group == "character":
+        return (1, int(entry.get("_homer_world_group_index") or 1_000_000), int(entry.get("_homer_world_sequence") or 0))
+    return (2, -int(entry.get("priority") or 0), int(entry.get("order") or 0))
+
+
 def collect_tavern_prompt_injections(entries: list, chat_messages: list[dict], recent_text: str, *, char_name: str = "", user_name: str = "", template_context: dict | None = None, max_chars: int = 12000) -> list[dict]:
     if not isinstance(entries, list) or not entries:
         return []
@@ -8782,7 +9099,7 @@ def collect_tavern_render_injections(entries: list, reply: str, recent_text: str
         if not tavern_world_condition_passes(entry, char_name=char_name, user_name=user_name, template_context=template_context):
             continue
         picked.append(entry)
-    picked.sort(key=lambda e: (-int(e.get("priority") or 0), int(e.get("order") or 0)))
+    picked.sort(key=world_runtime_order_key)
     injections: list[dict] = []
     total = 0
     haystack = f"{recent_text or ''}\n{reply or ''}"
@@ -9059,8 +9376,11 @@ def local_app_to_card(row: dict) -> dict:
     def _json(v, default):
         if not v:
             return default
+        if isinstance(v, type(default)):
+            return v
         try:
-            return json.loads(v)
+            parsed = json.loads(v)
+            return parsed if isinstance(parsed, type(default)) else default
         except Exception:
             return default
     extra = _json(row.get("extra_settings"), {}) or {}
@@ -9111,6 +9431,7 @@ def local_app_to_card(row: dict) -> dict:
         "is_public": bool(row.get("is_public", 1)),
         "sort_weight": row.get("sort_weight") or 0,
         "official_recommended": bool(row.get("official_recommended", 0)),
+        "current_version_id": str(row.get("current_version_id") or ""),
         "is_original": (row.get("source") in ("user", "admin")),
         "account_name": "原创作者" if row.get("source") == "user" else "惑梦（Homer）",
         "api_base_url": row.get("api_base_url") or "",
@@ -9119,6 +9440,13 @@ def local_app_to_card(row: dict) -> dict:
         "nsfw": bool(extra.get("nsfw")),
         "protected_prompt": bool(extra.get("protected_prompt") or extra.get("protected")),
         "anonymous": bool(extra.get("anonymous")),
+        "is_open_source": bool(extra.get("is_open_source")),
+        "contest_opt_in": bool(extra.get("contest_opt_in")),
+        "contest_id": str(extra.get("contest_id") or ""),
+        "applied_preset_id": str(extra.get("applied_preset_id") or ""),
+        "applied_preset_version_id": str(extra.get("applied_preset_version_id") or ""),
+        "applied_ui_template_ids": extra.get("applied_ui_template_ids") if isinstance(extra.get("applied_ui_template_ids"), list) else [],
+        "applied_ui_template_version_ids": extra.get("applied_ui_template_version_ids") if isinstance(extra.get("applied_ui_template_version_ids"), list) else [],
         "personality": str(extra.get("personality") or ""),
         "scenario": str(extra.get("scenario") or ""),
         "mes_example": str(extra.get("mes_example") or ""),
@@ -9162,6 +9490,19 @@ def local_app_to_card(row: dict) -> dict:
             "history_length": int(sampling.get("history_length")) if str(sampling.get("history_length") or "").strip().isdigit() else None,
         },
     }
+
+
+def conversation_runtime_card_payload(app: dict, conversation: dict) -> dict:
+    """Return only browser runtime fields from an owner-validated locked snapshot."""
+    card = local_app_to_card(app)
+    for protected_key in (
+        "pre_prompt", "world_info", "prompt_blocks", "card_prompt_preset",
+        "regex_scripts", "extensions", "mes_example", "post_history_instructions",
+    ):
+        card.pop(protected_key, None)
+    card["version_id"] = str(conversation.get("version_id") or "")
+    card["conversation_id"] = str(conversation.get("id") or "")
+    return card
 
 
 def local_app_to_list_card(row: dict) -> dict:
@@ -9445,7 +9786,7 @@ def app_to_silly_card(card: dict) -> dict:
     return {"spec": "chara_card_v2", "spec_version": "2.0", "data": data}
 
 
-def normalize_world_info(value: object) -> list:
+def normalize_world_info(value: object, limit: int = 200) -> list:
     """规整世界书条目列表，兼容基础条目和 SillyTavern Character Book 常用字段。"""
     if not isinstance(value, list):
         return []
@@ -9477,7 +9818,11 @@ def normalize_world_info(value: object) -> list:
         return max(lo, min(hi, n))
 
     out = []
-    for idx, raw in enumerate(value[:200]):
+    requested_limit = int(limit or 200)
+    if requested_limit == 200 and any(isinstance(item, dict) and item.get("_homer_world_group") for item in value):
+        requested_limit = 12000
+    safe_limit = max(1, min(requested_limit, 12000))
+    for idx, raw in enumerate(value[:safe_limit]):
         if not isinstance(raw, dict):
             continue
         keys_in = raw.get("keys", raw.get("key"))
@@ -9492,7 +9837,7 @@ def normalize_world_info(value: object) -> list:
         if not content and not media_bindings:
             continue
         priority_value = raw.get("priority", raw.get("insertion_order", raw.get("order", 100)))
-        out.append({
+        item = {
             "id": str(raw.get("id") or f"world-{idx + 1}")[:80],
             "name": str(raw.get("name") or raw.get("title") or raw.get("comment") or f"世界书条目 {idx + 1}")[:80],
             "keys": _keys(keys_in),
@@ -9516,7 +9861,12 @@ def normalize_world_info(value: object) -> list:
             "cooldown": _int(raw.get("cooldown"), 0, 0, 9999),
             "delay": _int(raw.get("delay"), 0, 0, 9999),
             "media_bindings": [dict(item) for item in media_bindings[:30] if isinstance(item, dict)],
-        })
+        }
+        if raw.get("_homer_world_group") in {"mod", "character"}:
+            item["_homer_world_group"] = str(raw.get("_homer_world_group"))
+            item["_homer_world_group_index"] = _int(raw.get("_homer_world_group_index"), 0, 0, 1_000_000)
+            item["_homer_world_sequence"] = _int(raw.get("_homer_world_sequence"), idx, 0, 1_000_000)
+        out.append(item)
     return out
 
 
@@ -9565,7 +9915,9 @@ def _world_content_signature(value: object) -> str:
 
 
 def ensure_required_world_info(entries: object) -> list:
-    normalized = normalize_world_info(entries if isinstance(entries, list) else [])
+    runtime_ordered = bool(isinstance(entries, list) and any(isinstance(item, dict) and item.get("_homer_world_group") for item in entries))
+    limit = 12000 if runtime_ordered else 200
+    normalized = normalize_world_info(entries if isinstance(entries, list) else [], limit=limit)
     required = required_world_info_entry()
     if not required:
         return normalized
@@ -9575,7 +9927,7 @@ def ensure_required_world_info(entries: object) -> list:
         if str(entry.get("id") or "") != REQUIRED_WORLD_BOOK_ID
         and not (content_signature and _world_content_signature(entry.get("content")) == content_signature)
     ]
-    return [required, *remaining[:199]]
+    return [required, *remaining[: limit - 1]]
 
 
 def strip_required_world_info(entries: object) -> list:
@@ -10280,9 +10632,16 @@ def normalize_user_app_extras(data: dict) -> dict:
         voice_id = str(data.get("tts_voice_id") or "").strip()
         allowed_voices = {str(item.get("id") or "") for item in TTS_VOICES}
         extras["tts_voice_id"] = voice_id if voice_id in allowed_voices else TTS_VOICES[0]["id"]
-    for key in ("nsfw", "anonymous"):
+    for key in ("nsfw", "anonymous", "is_open_source", "contest_opt_in"):
         if key in data:
             extras[key] = bool(data.get(key))
+    for key in ("contest_id", "applied_preset_id", "applied_preset_version_id"):
+        if key in data:
+            extras[key] = str(data.get(key) or "").strip()[:160]
+    for key in ("applied_ui_template_ids", "applied_ui_template_version_ids"):
+        if key in data:
+            raw_items = data.get(key) if isinstance(data.get(key), list) else []
+            extras[key] = list(dict.fromkeys(str(item or "").strip() for item in raw_items if str(item or "").strip()))[:20]
     if "protected" in data or "protected_prompt" in data:
         extras["protected_prompt"] = bool(data.get("protected_prompt") or data.get("protected"))
     # SillyTavern-style rich character fields (free text, length-clamped)
@@ -10821,7 +11180,7 @@ def select_world_info(entries: list, recent_text: str, *, char_name: str = "", u
         candidates.append(entry)
     if not candidates:
         return [] if return_entries else ""
-    candidates.sort(key=lambda e: (-int(e.get("priority") or 0), int(e.get("order") or 0)))
+    candidates.sort(key=world_runtime_order_key)
 
     def _has_any(keys: list, text: str, case_sensitive: bool, whole_words: bool = False) -> bool:
         if not keys:
@@ -12220,9 +12579,11 @@ def app_requires_site_runtime(app: dict) -> bool:
 
 
 def chat_reply_for_app(store: "Store", user_id: str, app_id: str, content: str, *, app_name: str = "", conversation_id: str = "", response_mode: str = "", model_override: str = "") -> tuple[dict, str]:
-    app_row = store.get_local_app(app_id)
+    app_row = store.versioned_app_for_conversation(app_id, conversation_id, user_id) if conversation_id else store.versioned_app_for_new_conversation(app_id, user_id)[0]
     if app_row:
         app = dict(app_row)
+        if conversation_id:
+            apply_conversation_mods(store.conn, store.lock, app, user_id, conversation_id, REQUIRED_WORLD_BOOK_ID)
         selected_model = store.public_model_selection(model_override)
         if selected_model:
             app["llm_model"] = selected_model
@@ -12241,8 +12602,7 @@ def chat_reply_for_app(store: "Store", user_id: str, app_id: str, content: str, 
         else:
             answer = proxy_upstream_chat(store, app_id, content, app_name=app_name or str(app.get("name") or ""), conversation_id=conversation_id, response_mode=response_mode)
         return app, answer
-    answer = build_chat_reply(content, app_name or app_name_from_cache(store, app_id))
-    return {}, answer
+    raise PermissionError("role not found")
 
 
 def user_can_access_app(row: sqlite3.Row | dict | None, user_id: str | None) -> bool:
@@ -12251,9 +12611,19 @@ def user_can_access_app(row: sqlite3.Row | dict | None, user_id: str | None) -> 
     data = dict(row)
     source = data.get("source") or "upstream"
     owner_user_id = str(data.get("owner_user_id") or "")
+    if (data.get("status") or "published") == "deleted":
+        return False
     if source == "user" and user_id and owner_user_id == user_id:
         return True
     return bool(data.get("is_public", 1)) and (data.get("status") or "published") == "published"
+
+
+def user_can_play_app(row: sqlite3.Row | dict | None) -> bool:
+    """New ordinary/group conversations may only start from public published cards."""
+    if not row:
+        return False
+    data = dict(row)
+    return bool(data.get("is_public")) and str(data.get("status") or "published") == "published"
 
 
 def group_history_for_llm(messages: list[dict]) -> list[dict]:
@@ -12287,10 +12657,15 @@ def generate_group_reply(store: "Store", user_id: str, group: dict, *, app_id: s
     member, idx = pick_group_member(group, app_id)
     if not member:
         raise ValueError("群聊没有可用角色")
-    app_row = store.get_local_app(str(member.get("app_id") or ""))
-    if not user_can_access_app(app_row, user_id):
-        raise ValueError("角色不可用")
-    app = dict(app_row)
+    member_app_id = store.resolve_local_app_id(str(member.get("app_id") or ""))
+    version_id = str(member.get("version_id") or "")
+    if not version_id or not ContentVersionStore(store.conn, store.lock).get_version(version_id, "character", member_app_id):
+        raise ValueError("群聊角色版本不可用")
+    app_row = store.get_local_app(member_app_id)
+    app = resolve_versioned_app(store.conn, store.lock, app_row, version_id) if app_row else None
+    if not isinstance(app, dict):
+        raise ValueError("群聊角色版本不可用")
+    apply_locked_community_assets(store.conn, store.lock, app)
     messages = store.list_group_messages(group["id"], user_id, limit=120)
     group_names = "、".join(str(m.get("app_name") or "") for m in group.get("members", []) if m.get("app_name"))
     last_user = prompt.strip()
@@ -12324,9 +12699,11 @@ def generate_group_reply(store: "Store", user_id: str, group: dict, *, app_id: s
 
 def regenerate_reply_for_app(store: "Store", user_id: str, app_id: str, *, history: list, last_user_content: str, app_name: str = "", conversation_id: str = "", model_override: str = "") -> tuple[dict, str]:
     """基于给定历史（不含待重生成的那条 assistant 消息）重新生成回复。"""
-    app_row = store.get_local_app(app_id)
+    app_row = store.versioned_app_for_conversation(app_id, conversation_id, user_id) if conversation_id else store.versioned_app_for_new_conversation(app_id, user_id)[0]
     if app_row:
         app = dict(app_row)
+        if conversation_id:
+            apply_conversation_mods(store.conn, store.lock, app, user_id, conversation_id, REQUIRED_WORLD_BOOK_ID)
         selected_model = store.public_model_selection(model_override)
         if selected_model:
             app["llm_model"] = selected_model
@@ -12339,7 +12716,7 @@ def regenerate_reply_for_app(store: "Store", user_id: str, app_id: str, *, histo
             return app, answer
         answer = proxy_upstream_chat(store, app_id, last_user_content, app_name=app_name or str(app.get("name") or ""))
         return app, answer
-    return {}, build_chat_reply(last_user_content, app_name or app_name_from_cache(store, app_id))
+    raise PermissionError("role not found")
 
 
 
@@ -13369,6 +13746,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         app_id = self.store.resolve_local_app_id(app_id)
         try:
+            self.store.preflight_chat_app(app_id, user["id"], conv_id)
+        except (ValueError, PermissionError):
+            self.send_json(404, error_response("role not found", 404))
+            return
+        try:
             self.store.require_credit_points(user["id"], CHAT_MESSAGE_COST)
         except ValueError as exc:
             self.send_json(402, error_response(str(exc), 402))
@@ -13403,8 +13785,10 @@ class Handler(BaseHTTPRequestHandler):
             user_row = self.store.append_message(conv_id, user["id"], "user", content)
             user_message_id = str(user_row["id"])
             self.store.log_event(user["id"], "chat", f"与 {app_name or app_id} 对话", {"app_id": app_id, "conversation_id": conv_id})
-            app_row = self.store.get_local_app(app_id)
+            app_row = self.store.versioned_app_for_conversation(app_id, conv_id, user["id"])
             app = dict(app_row) if app_row else {}
+            if app:
+                apply_conversation_mods(self.store.conn, self.store.lock, app, user["id"], conv_id, REQUIRED_WORLD_BOOK_ID)
             reply_parts: list[str] = []
             persona = self.store.get_persona(user["id"]) if app else {}
             context = {}
@@ -13580,8 +13964,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(409, error_response("最后一条消息不是角色回复，无法续写", 409))
             return
         app_id = self.store.resolve_local_app_id(str(conversation.get("app_id") or ""))
-        app_row = self.store.get_local_app(app_id)
-        if not app_row or not user_can_access_app(app_row, user["id"]):
+        try:
+            app_row = self.store.versioned_app_for_conversation(app_id, conv_id, user["id"])
+        except (ValueError, PermissionError):
+            app_row = None
+        if not app_row:
             self.send_json(404, error_response("role not found", 404))
             return
         try:
@@ -13602,6 +13989,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_sse_headers(200)
             self.write_sse_event("start", {"conversation_id": conv_id, "app_id": app_id, "mode": "continue"})
             app = dict(app_row)
+            apply_conversation_mods(self.store.conn, self.store.lock, app, user["id"], conv_id, REQUIRED_WORLD_BOOK_ID)
             model_override = self.store.public_model_selection(body.get("model_id") or body.get("llm_model"))
             if model_override:
                 app["llm_model"] = model_override
@@ -13857,7 +14245,9 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0") or "0")
         except (TypeError, ValueError):
             length = 0
-        if length <= 0 or length > 30 * 1024 * 1024:
+        # 具体类型/声明大小仍由 upload intent 与 CardMediaService 二次校验；
+        # 这里的传输层上限需覆盖合法的 Spine 资源包（当前规则最多 60 MiB）。
+        if length <= 0 or length > 60 * 1024 * 1024:
             self.send_json(413, error_response("invalid upload size", 413))
             return
         asset_id = unquote(path.split("/")[-2])
@@ -13887,6 +14277,56 @@ class Handler(BaseHTTPRequestHandler):
 
         if not user and not anonymous_route_allowed(normalized, self.command):
             return error_response("unauthorized", 401)
+
+        def extension_response(result: object):
+            if isinstance(result, dict):
+                if result.get("__http__"):
+                    return error_response(str(result.get("message") or "request failed"), int(result.get("__http__") or 400))
+                if "data" in result:
+                    return ok_response(result.get("data"))
+            return result
+
+        def community_app_meta(app_id: str) -> dict | None:
+            row = self.store.get_local_app(app_id)
+            if not row:
+                return None
+            value = dict(row)
+            return {"name": value.get("name") or "", "cover_url": value.get("cover_url") or "",
+                    "owner_name": "惑梦创作者", "owner_user_id": value.get("owner_user_id") or ""}
+
+        if normalized.startswith("console/api/web/community/"):
+            return extension_response(handle_community_route(
+                self.command, normalized, parse_qs(query or ""), body,
+                {"conn": self.store.conn, "lock": self.store.lock, "user": dict(user) if user else None,
+                 "is_admin": bool(user and user["is_admin"]), "app_meta": community_app_meta},
+            ))
+
+        if normalized.startswith("console/api/web/chat-mods/"):
+            return extension_response(handle_chat_mod_route(
+                self.command, normalized, parse_qs(query or ""), body,
+                {"conn": self.store.conn, "lock": self.store.lock, "user": dict(user) if user else None,
+                 "is_admin": bool(user and user["is_admin"])},
+            ))
+
+        if normalized.startswith("console/api/web/card-extra/"):
+            return extension_response(handle_card_extra_route(
+                self.command, normalized, parse_qs(query or ""), body,
+                {"conn": self.store.conn, "lock": self.store.lock, "user": dict(user) if user else None,
+                 "is_admin": bool(user and user["is_admin"]),
+                 "get_app": lambda app_id: (dict(row) if (row := self.store.get_local_app(app_id)) else None)},
+            ))
+
+        if normalized.startswith("console/api/web/card-versions/"):
+            def after_character_publish(value: dict, version: dict) -> None:
+                self.store.sync_character_publish_metadata(value, version)
+
+            return extension_response(handle_card_version_route(
+                self.command, normalized, parse_qs(query or ""), body,
+                {"conn": self.store.conn, "lock": self.store.lock, "user": dict(user) if user else None,
+                 "is_admin": bool(user and user["is_admin"]),
+                 "get_app": lambda app_id: (dict(row) if (row := self.store.get_local_app(app_id)) else None),
+                 "card_payload": local_app_to_card, "after_publish_in_transaction": after_character_publish},
+            ))
 
         if normalized == "console/api/web/creator-access":
             if self.command.upper() != "GET":
@@ -14700,21 +15140,29 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(body, dict):
                 return error_response("invalid body")
             raw_ids = body.get("app_ids") or body.get("members") or []
-            app_ids = []
+            member_requests = []
+            seen_app_ids = set()
             if isinstance(raw_ids, str):
                 raw_ids = re.split(r"[，,\n]", raw_ids)
             if isinstance(raw_ids, list):
                 for item in raw_ids[:12]:
                     app_id = str(item.get("app_id") if isinstance(item, dict) else item or "").strip()
-                    if app_id and app_id not in app_ids:
-                        app_ids.append(app_id)
+                    if app_id and app_id not in seen_app_ids:
+                        seen_app_ids.add(app_id)
+                        member_requests.append({
+                            "app_id": app_id,
+                            "version_id": str(item.get("version_id") or "") if isinstance(item, dict) else "",
+                        })
             members = []
-            for app_id in app_ids:
-                row = self.store.get_local_app(app_id)
-                if not user_can_access_app(row, token_user["id"]):
-                    return error_response(f"角色不可用：{app_id}", 400)
-                card = local_app_to_card(dict(row))
-                members.append({"app_id": app_id, "app_name": card.get("name") or "", "app_icon": card.get("cover_url") or card.get("cover") or ""})
+            for request in member_requests:
+                try:
+                    runtime_app, version_id = self.store.versioned_app_for_new_conversation(
+                        request["app_id"], token_user["id"], request.get("version_id") or "",
+                    )
+                except (ValueError, PermissionError):
+                    return error_response(f"角色不可用：{request['app_id']}", 400)
+                card = local_app_to_card(runtime_app)
+                members.append({"app_id": request["app_id"], "version_id": version_id, "app_name": card.get("name") or "", "app_icon": card.get("cover_url") or card.get("cover") or ""})
             try:
                 group = self.store.create_group_chat(
                     token_user["id"],
@@ -14723,7 +15171,7 @@ class Handler(BaseHTTPRequestHandler):
                 )
             except ValueError as exc:
                 return error_response(str(exc), 400)
-            self.store.log_event(token_user["id"], "group_chat", f"创建群聊：{group.get('name')}", {"group_id": group.get("id"), "members": app_ids})
+            self.store.log_event(token_user["id"], "group_chat", f"创建群聊：{group.get('name')}", {"group_id": group.get("id"), "members": [item["app_id"] for item in member_requests]})
             return ok_response({"group": group, "messages": []})
 
         if normalized.startswith("console/api/web/group-chats/"):
@@ -14864,11 +15312,15 @@ class Handler(BaseHTTPRequestHandler):
             if not content:
                 return error_response("query is required")
             app_id = self.store.resolve_local_app_id(app_id)
+            conv_id = str(body.get("conversation_id") or "").strip() or str(uuid.uuid4())
+            try:
+                self.store.preflight_chat_app(app_id, user["id"], conv_id)
+            except (ValueError, PermissionError):
+                return error_response("role not found", 404)
             try:
                 self.store.require_credit_points(user["id"], CHAT_MESSAGE_COST)
             except ValueError as exc:
                 return error_response(str(exc), 402)
-            conv_id = str(body.get("conversation_id") or "").strip() or str(uuid.uuid4())
             app_name = str(body.get("app_name") or "").strip() or app_name_from_cache(self.store, app_id)
             try:
                 with GENERATION_LIMITER.acquire(user["id"], self.client_ip(), "legacy_chat"):
@@ -14915,7 +15367,13 @@ class Handler(BaseHTTPRequestHandler):
                 if local:
                     if not user_can_access_app(local, user["id"] if user else None):
                         return error_response("角色不存在或已下架", 404)
-                    card = local_app_to_card(dict(local))
+                    local_data = dict(local)
+                    if user and local_data.get("source") == "user" and str(local_data.get("owner_user_id") or "") == str(user["id"]):
+                        draft = ContentVersionStore(self.store.conn, self.store.lock).draft_snapshot(local_data["id"], str(user["id"]))
+                        if draft:
+                            local_data = merge_snapshot_over_row(local_data, draft)
+                            local_data["has_unpublished_draft"] = True
+                    card = local_app_to_card(local_data)
                     card["favorited"] = self.store.is_favorite(user["id"] if user else None, card["id"])
                     card["liked"] = self.store.is_liked(user["id"] if user else None, card["id"])
                     card["user_tags"] = self.store.list_user_app_tags(user["id"] if user else None, card["id"])
@@ -14997,11 +15455,15 @@ class Handler(BaseHTTPRequestHandler):
             if not content:
                 return error_response("query is required")
             app_id = self.store.resolve_local_app_id(app_id)
+            conv_id = str(body.get("conversation_id") or "").strip() or str(uuid.uuid4())
+            try:
+                self.store.preflight_chat_app(app_id, user["id"], conv_id)
+            except (ValueError, PermissionError):
+                return error_response("role not found", 404)
             try:
                 self.store.require_credit_points(user["id"], CHAT_MESSAGE_COST)
             except ValueError as exc:
                 return error_response(str(exc), 402)
-            conv_id = str(body.get("conversation_id") or "").strip() or str(uuid.uuid4())
             app_name = str(body.get("app_name") or "").strip() or app_name_from_cache(self.store, app_id)
             self.store.upsert_conversation(conv_id, user["id"], app_id, app_name=app_name, title=str(body.get("conversation_name") or content[:30]))
             self.store.append_message(conv_id, user["id"], "user", content)
@@ -15134,6 +15596,22 @@ class Handler(BaseHTTPRequestHandler):
         if normalized == "console/api/web/conversations":
             convs = self.store.list_conversations(user["id"])
             return ok_response({"list": convs, "total": len(convs)})
+
+        if normalized.startswith("console/api/web/conversations/") and normalized.endswith("/runtime-card"):
+            parts = normalized.split("/")
+            conv_id = parts[4] if len(parts) >= 6 else ""
+            try:
+                runtime = self.store.conversation_runtime_card(conv_id, user["id"])
+            except (ValueError, PermissionError):
+                runtime = None
+            if not runtime:
+                return error_response("conversation not found", 404)
+            conversation, app = runtime
+            return ok_response({
+                "conversation_id": conv_id,
+                "version_id": str(conversation.get("version_id") or ""),
+                "card": conversation_runtime_card_payload(app, conversation),
+            })
 
         if normalized.startswith("console/api/web/conversations/") and normalized.endswith("/messages"):
             parts = normalized.split("/")
@@ -15271,8 +15749,15 @@ class Handler(BaseHTTPRequestHandler):
             if not app_id:
                 return error_response("app_id is required")
             app_id = self.store.resolve_local_app_id(app_id)
-            app_row = self.store.get_local_app(app_id)
-            card = local_app_to_card(dict(app_row)) if app_row else {}
+            try:
+                versioned_row, requested_version_id = self.store.versioned_app_for_new_conversation(
+                    app_id, user["id"], str(body.get("version_id") or ""),
+                )
+            except PermissionError:
+                return error_response("role not found", 404)
+            except ValueError as exc:
+                return error_response(str(exc), 400)
+            card = local_app_to_card(versioned_row) if versioned_row else {}
             app_name = str(body.get("app_name") or card.get("name") or "").strip()
             app_icon = str(body.get("app_icon") or card.get("icon") or "")
             persona = self.store.get_persona(user["id"])
@@ -15281,6 +15766,7 @@ class Handler(BaseHTTPRequestHandler):
             conv_id = str(uuid.uuid4())
             self.store.upsert_conversation(conv_id, user["id"], app_id,
                                            app_name=app_name, app_icon=app_icon, title=(app_name or "新对话")[:30])
+            self.store.set_conversation_version(conv_id, user["id"], requested_version_id)
             messages = []
             template_context = self.store.chat_context(user["id"], app_id, conv_id, "", [])
             if isinstance(template_context, dict):
@@ -15299,6 +15785,8 @@ class Handler(BaseHTTPRequestHandler):
                 "app_icon": app_icon,
                 "galgame_enabled": False,
                 "global_preset_enabled": True,
+                "version_id": requested_version_id,
+                "runtime_card": conversation_runtime_card_payload(versioned_row, {"id": conv_id, "version_id": requested_version_id}) if versioned_row else {},
                 "messages": messages,
             })
 
@@ -15313,6 +15801,10 @@ class Handler(BaseHTTPRequestHandler):
             conv = next((c for c in self.store.list_conversations(user["id"], 200) if c.get("id") == conv_id), None)
             if not conv:
                 return error_response("conversation not found", 404)
+            try:
+                self.store.versioned_app_for_conversation(str(conv.get("app_id") or ""), conv_id, user["id"])
+            except (ValueError, PermissionError):
+                return error_response("role not found", 404)
             all_msgs = self.store.list_messages(conv_id, user["id"])
             target = None
             for m in reversed(all_msgs):
@@ -15362,6 +15854,14 @@ class Handler(BaseHTTPRequestHandler):
             msg = self.store.get_message(message_id, user["id"])
             if not msg:
                 return error_response("message not found", 404)
+            conv_id = str(msg.get("conversation_id") or "")
+            conv = self.store.get_conversation(conv_id, user["id"])
+            if not conv:
+                return error_response("conversation not found", 404)
+            try:
+                self.store.versioned_app_for_conversation(str(conv.get("app_id") or ""), conv_id, user["id"])
+            except (ValueError, PermissionError):
+                return error_response("role not found", 404)
             model_override = self.store.public_model_selection(body.get("model_id") or body.get("llm_model"))
             swipes = msg.get("swipes") or []
             idx = msg.get("swipe_index") or 0
@@ -15382,8 +15882,6 @@ class Handler(BaseHTTPRequestHandler):
                 self.store.require_credit_points(user["id"], CHAT_MESSAGE_COST)
             except ValueError as exc:
                 return error_response(str(exc), 402)
-            conv_id = msg.get("conversation_id") or ""
-            conv = next((c for c in self.store.list_conversations(user["id"], 200) if c.get("id") == conv_id), None)
             all_msgs = self.store.list_messages(conv_id, user["id"])
             target_idx = next((i for i, m in enumerate(all_msgs) if m.get("id") == message_id), len(all_msgs) - 1)
             history = all_msgs[:target_idx]
@@ -15476,6 +15974,10 @@ class Handler(BaseHTTPRequestHandler):
             if not app_id or not content:
                 return error_response("app_id and content are required")
             app_id = self.store.resolve_local_app_id(app_id)
+            try:
+                self.store.preflight_chat_app(app_id, user["id"], conv_id)
+            except (ValueError, PermissionError):
+                return error_response("role not found", 404)
             try:
                 self.store.require_credit_points(user["id"], CHAT_MESSAGE_COST)
             except ValueError as exc:
