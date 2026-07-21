@@ -667,3 +667,8 @@
   Cause: 调用方仍按旧草案传 `commit=False`，独立媒体模块的最终清理函数已自行提交且不接受该参数。
   Fix: `Store.configure_card_media()` 按最终签名调用 `cleanup_stale_assets(max_age_seconds=...)`，不再额外传事务参数。
   Verify: 2026-07-16 本地集成测试成功初始化临时 Store/媒体目录；线上服务重启 active，内外 `/health` OK。
+
+- Symptom: 创作工坊“＋新建”弹窗跑到页面顶部，弹窗内容只在顶栏附近显示或垂直位置异常。
+  Cause: `.ws-create-mask` 嵌套在带 `backdrop-filter` 的 `.app-topbar` 内；该属性为 `position: fixed` 后代建立了顶栏包含块，fixed 定位不再相对浏览器视口。
+  Fix: 用 Alpine 原生 `<template x-teleport="body">` 将弹窗挂到 `body`，保留原有 `x-data` 状态和关闭事件，不改业务样式。
+  Verify: 2026-07-21 Playwright 桌面 1920×1080 遮罩为完整视口、弹窗中心误差 0；390×844 单列无横向溢出且上下不越界；关闭按钮、遮罩、Escape 均通过，page error=0；线上 `workshop.html` SHA-256 与本地一致。

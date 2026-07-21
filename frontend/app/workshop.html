@@ -38,20 +38,22 @@
         <h1 x-text="appNavText('workshop', '创作工坊')">创作工坊</h1>
         <div class="grow"></div>
         <button type="button" class="xy-btn xy-btn-primary text-sm" @click="createMenuOpen = true">＋ 新建</button>
-        <div class="ws-create-mask" x-show="createMenuOpen" x-transition.opacity @click.self="createMenuOpen = false" role="presentation">
-          <section class="ws-create-dialog" role="dialog" aria-modal="true" aria-labelledby="ws-create-title">
-            <div class="ws-create-head">
-              <div><h2 id="ws-create-title">新建作品</h2><p>选择你要发布到惑梦的内容类型。</p></div>
-              <button type="button" class="ws-create-close" @click="createMenuOpen = false" aria-label="关闭">×</button>
-            </div>
-            <div class="ws-create-grid">
-              <a class="ws-create-option" href="/app/create.html"><span class="ws-create-option__icon">◉</span><span><strong>新建角色</strong><small>创建完整角色卡，可选择报名当前赛事。</small></span></a>
-              <a class="ws-create-option" href="/app/community.html?tab=mod&amp;new=1"><span class="ws-create-option__icon">◇</span><span><strong>新建 Mod</strong><small>以世界书条目组成可收藏的扩展。</small></span></a>
-              <a class="ws-create-option" href="/app/community.html?tab=ui_template&amp;new=1"><span class="ws-create-option__icon">▣</span><span><strong>新建 UI 模板</strong><small>发布界面模板并提供隔离的静态演示。</small></span></a>
-              <a class="ws-create-option" href="/app/community.html?tab=preset&amp;new=1"><span class="ws-create-option__icon">✦</span><span><strong>新建预设</strong><small>发布提示词预设，公开页仅展示条目名。</small></span></a>
-            </div>
-          </section>
-        </div>
+        <template x-teleport="body">
+          <div class="ws-create-mask" x-show="createMenuOpen" x-transition.opacity @click.self="createMenuOpen = false" role="presentation">
+            <section class="ws-create-dialog" role="dialog" aria-modal="true" aria-labelledby="ws-create-title">
+              <div class="ws-create-head">
+                <div><h2 id="ws-create-title">新建作品</h2><p>选择你要发布到惑梦的内容类型。</p></div>
+                <button type="button" class="ws-create-close" @click="createMenuOpen = false" aria-label="关闭">×</button>
+              </div>
+              <div class="ws-create-grid">
+                <a class="ws-create-option" href="/app/create.html"><span class="ws-create-option__icon">◉</span><span><strong>新建角色</strong><small>创建完整角色卡，可选择报名当前赛事。</small></span></a>
+                <a class="ws-create-option" href="/app/community.html?tab=mod&amp;new=1"><span class="ws-create-option__icon">◇</span><span><strong>新建 Mod</strong><small>以世界书条目组成可收藏的扩展。</small></span></a>
+                <a class="ws-create-option" href="/app/community.html?tab=ui_template&amp;new=1"><span class="ws-create-option__icon">▣</span><span><strong>新建 UI 模板</strong><small>发布界面模板并提供隔离的静态演示。</small></span></a>
+                <a class="ws-create-option" href="/app/community.html?tab=preset&amp;new=1"><span class="ws-create-option__icon">✦</span><span><strong>新建预设</strong><small>发布提示词预设，公开页仅展示条目名。</small></span></a>
+              </div>
+            </section>
+          </div>
+        </template>
       </header>
 
       <div class="hub-loading-skeleton app-page-pad max-w-6xl mx-auto" x-show="!ready" aria-label="正在加载创作工坊">
