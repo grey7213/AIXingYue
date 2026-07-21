@@ -63,6 +63,11 @@
 
 ## Reusable Pitfalls
 
+- Symptom: 想直接安装 JS-Slash-Runner 或把 Tavo 沙箱拆成同源脚本来获得“绘梦式”整页聊天 UI，但扩展无法启动，或角色卡脚本可以接触父 DOM、登录会话和业务 API。
+  Cause: JS-Slash-Runner 4.8.19 深度依赖 SillyTavern 内部 ESM、DOM、状态和服务端接口；其 iframe 没有 sandbox，同源父页面访问是高权限副作用，不是稳定整页 Shell 协议。
+  Fix: 使用 `card_experience.chat_shell` / `.tpg contributes.chatShells` 的 clean-room Open Chat Runtime；卡片在仅 `allow-scripts` 的 opaque-origin iframe 内接管整个 UI，通过 `HomerChat/TavernHelper` capability bridge 调用父页现有业务控制器，父页保留固定退出入口和异常回退。
+  Verify: 2026-07-21 Chromium 在 1440×960 与 390×844 验证发送、续写、重生成、Swipe、编辑、删除、回溯、旧消息、TTS、Slash 均通过；父 DOM/localStorage 不可读，伪造 channel 无效，崩溃后原生 UI 恢复，横向溢出为 0。生产域名内存卡复验 console/page error=0，模块 MIME 正确，线上源码 SHA 与本地一致。
+
 - Symptom: 创作工坊社区的 Mod、UI 模板、预设、当前赛事页在浅灰背景上只剩淡白文字，未选标签、范围筛选、作品卡和空状态几乎不可见。
   Cause: 社区页内 `.cm-*` 样式仍使用旧深色原型的白字、透明白边框和透明白面板，而共享 App Shell 已切换为浅色主题。
   Fix: 页面主体的分类、筛选、卡片、空状态、赛事和排行统一使用 `--fy-*` 浅色主题变量及深灰文字；选中状态使用深玫红文字配浅粉背景。深色详情/创建弹窗保持独立配色。

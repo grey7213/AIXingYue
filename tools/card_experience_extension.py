@@ -34,6 +34,32 @@ MEDIA_RULES = {
     "spine": {"mimes": set(SPINE_MIMES), "max_size": SPINE_MAX_UPLOAD_BYTES},
 }
 UI_ACTIONS = {"open_popup", "show_floating", "switch_bgm", "open_sidebar", "set_scene"}
+CHAT_SHELL_PERMISSIONS = (
+    "read_state",
+    "send",
+    "continue",
+    "regenerate",
+    "swipe",
+    "edit",
+    "delete",
+    "rollback",
+    "load_older",
+    "tts",
+    "open_settings",
+    "exit",
+    "slash",
+    "set_draft",
+    "stop_generation",
+)
+CHAT_SHELL_PERMISSION_SET = frozenset(CHAT_SHELL_PERMISSIONS)
+CHAT_SHELL_LIMITS = {
+    "name": 120,
+    "version": 40,
+    "html": 240000,
+    "css": 160000,
+    "javascript": 240000,
+    "permissions": len(CHAT_SHELL_PERMISSIONS),
+}
 BAD_REGEX = re.compile(r"\((?:[^()]|\\.)*[+*](?:[^()]|\\.)*\)[+*{]")
 AMBIGUOUS_REGEX = re.compile(r"\((?:[^()]|\\.)*\|(?:[^()]|\\.)*\)\s*(?:[+*]|\{\d*,?\d*\})")
 BAD_HTML = re.compile(r"<(?:script|style|iframe|object|embed|base|form|meta|link)\b|\bon\w+\s*=|\bsrcdoc\s*=", re.I)
@@ -672,6 +698,37 @@ def _safe_markup(value: object, maximum: int, kind: str) -> str:
     return text
 
 
+def _chat_shell_source(value: object, maximum: int) -> str:
+    """Keep authored shell source intact while bounding storage/runtime cost."""
+    if not isinstance(value, str):
+        return ""
+    return value.replace("\x00", "")[:maximum]
+
+
+def _normalize_chat_shell(value: object) -> dict:
+    """Normalize the isolated full-chat UI manifest; unknown fields are dropped."""
+    raw = value if isinstance(value, dict) else {}
+    permissions: list[str] = []
+    candidates = raw.get("permissions") if isinstance(raw.get("permissions"), list) else []
+    for candidate in candidates:
+        permission = str(candidate or "").strip()
+        if permission not in CHAT_SHELL_PERMISSION_SET or permission in permissions:
+            continue
+        permissions.append(permission)
+        if len(permissions) >= CHAT_SHELL_LIMITS["permissions"]:
+            break
+    return {
+        "enabled": bool(raw.get("enabled")),
+        "name": str(raw.get("name") or "").strip()[:CHAT_SHELL_LIMITS["name"]],
+        "version": str(raw.get("version") or "1").strip()[:CHAT_SHELL_LIMITS["version"]] or "1",
+        "html": _chat_shell_source(raw.get("html"), CHAT_SHELL_LIMITS["html"]),
+        "css": _chat_shell_source(raw.get("css"), CHAT_SHELL_LIMITS["css"]),
+        "javascript": _chat_shell_source(raw.get("javascript"), CHAT_SHELL_LIMITS["javascript"]),
+        "permissions": permissions,
+        "fallback": "default",
+    }
+
+
 def normalize_world_media_bindings(value: object, allowed_assets: dict[str, str]) -> list[dict]:
     entries = value if isinstance(value, list) else []
     output: list[dict] = []
@@ -776,6 +833,7 @@ def normalize_card_experience(value: object, allowed_assets: dict[str, str], wor
         "ui_rules": sorted(rules, key=lambda item: (item["order"], item["name"])),
         "sidebars": sorted(sidebars, key=lambda item: (item["order"], item["name"])),
         "galgame": galgame,
+        "chat_shell": _normalize_chat_shell(raw.get("chat_shell")),
     }
 
 

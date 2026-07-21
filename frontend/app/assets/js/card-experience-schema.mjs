@@ -2,6 +2,31 @@ export const CARD_EXPERIENCE_VERSION = 1;
 
 export const MEDIA_KINDS = Object.freeze(['bgm', 'portrait', 'background', 'spine']);
 export const UI_ACTIONS = Object.freeze(['open_popup', 'show_floating', 'switch_bgm', 'open_sidebar', 'set_scene']);
+export const CHAT_SHELL_PERMISSIONS = Object.freeze([
+  'read_state',
+  'send',
+  'continue',
+  'regenerate',
+  'swipe',
+  'edit',
+  'delete',
+  'rollback',
+  'load_older',
+  'tts',
+  'open_settings',
+  'exit',
+  'slash',
+  'set_draft',
+  'stop_generation',
+]);
+export const CHAT_SHELL_LIMITS = Object.freeze({
+  name: 120,
+  version: 40,
+  html: 240000,
+  css: 160000,
+  javascript: 240000,
+  permissions: CHAT_SHELL_PERMISSIONS.length,
+});
 
 const clamp = (value, min, max, fallback) => {
   const number = Number(value);
@@ -10,6 +35,7 @@ const clamp = (value, min, max, fallback) => {
 
 const text = (value, max = 200) => String(value == null ? '' : value).trim().slice(0, max);
 const idText = (value, fallback = '') => text(value, 96).replace(/[^\w:.-]/g, '-') || fallback;
+const sourceText = (value, max) => (typeof value === 'string' ? value.replace(/\0/g, '').slice(0, max) : '');
 
 export function newStableId(prefix = 'item') {
   if (globalThis.crypto?.randomUUID) return `${prefix}-${globalThis.crypto.randomUUID()}`;
@@ -30,6 +56,43 @@ export function defaultCardExperience() {
     ui_rules: [],
     sidebars: [],
     galgame: defaultGalgame(),
+    chat_shell: defaultChatShell(),
+  };
+}
+
+export function defaultChatShell() {
+  return {
+    enabled: false,
+    name: '',
+    version: '1',
+    html: '',
+    css: '',
+    javascript: '',
+    permissions: [],
+    fallback: 'default',
+  };
+}
+
+export function normalizeChatShell(raw) {
+  const fallback = defaultChatShell();
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return fallback;
+  const allowed = new Set(CHAT_SHELL_PERMISSIONS);
+  const permissions = [];
+  for (const permission of Array.isArray(raw.permissions) ? raw.permissions : []) {
+    const value = String(permission == null ? '' : permission).trim();
+    if (!allowed.has(value) || permissions.includes(value)) continue;
+    permissions.push(value);
+    if (permissions.length >= CHAT_SHELL_LIMITS.permissions) break;
+  }
+  return {
+    enabled: !!raw.enabled,
+    name: text(raw.name, CHAT_SHELL_LIMITS.name),
+    version: text(raw.version || fallback.version, CHAT_SHELL_LIMITS.version),
+    html: sourceText(raw.html, CHAT_SHELL_LIMITS.html),
+    css: sourceText(raw.css, CHAT_SHELL_LIMITS.css),
+    javascript: sourceText(raw.javascript, CHAT_SHELL_LIMITS.javascript),
+    permissions,
+    fallback: 'default',
   };
 }
 
@@ -183,6 +246,7 @@ export function normalizeCardExperience(raw) {
     ui_rules: (Array.isArray(raw.ui_rules) ? raw.ui_rules : []).slice(0, 40).map(normalizeUiRule).filter(Boolean).sort((a, b) => a.order - b.order),
     sidebars: (Array.isArray(raw.sidebars) ? raw.sidebars : []).slice(0, 20).map(normalizeSidebar).filter(Boolean).sort((a, b) => a.order - b.order),
     galgame: normalizeGalgame(raw.galgame),
+    chat_shell: normalizeChatShell(raw.chat_shell),
   };
 }
 

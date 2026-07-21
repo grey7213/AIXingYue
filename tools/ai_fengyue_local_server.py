@@ -34,6 +34,7 @@ from urllib.error import HTTPError
 from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 from card_experience_extension import (
+    CHAT_SHELL_PERMISSION_SET,
     CardMediaError,
     CardMediaService,
     LocalObjectStorage,
@@ -6907,8 +6908,44 @@ class Store:
                     "html": content,
                     "enabled": bool(content),
                 })
+            chat_shells = []
+            for number, shell in enumerate(contributes.get("chatShells") or []):
+                if not isinstance(shell, dict) or len(chat_shells) >= 5:
+                    continue
+                html_src = str(shell.get("html") or shell.get("src") or "").strip()
+                css_src = str(shell.get("css") or "").strip()
+                javascript_src = str(shell.get("javascript") or shell.get("js") or "").strip()
+                html_text = self._tavo_plugin_fragment_text(row, html_src) if html_src else ""
+                css_text = self._tavo_plugin_fragment_text(row, css_src) if css_src else ""
+                javascript_text = self._tavo_plugin_fragment_text(row, javascript_src) if javascript_src else ""
+                permissions = []
+                for permission in shell.get("permissions") if isinstance(shell.get("permissions"), list) else []:
+                    value = str(permission or "").strip()
+                    if value in CHAT_SHELL_PERMISSION_SET and value not in permissions:
+                        permissions.append(value)
+                try:
+                    shell_priority = int(shell.get("priority") or 0)
+                except (TypeError, ValueError):
+                    shell_priority = 0
+                chat_shells.append({
+                    "id": clean_tpg_plugin_id(shell.get("id"), f"chat-shell-{number + 1}"),
+                    "label": str(shell.get("label") or shell.get("name") or item.get("name") or "Chat Shell").strip()[:120],
+                    "priority": max(-10000, min(10000, shell_priority)),
+                    "enabled": shell.get("enabled") is not False and bool(html_text or javascript_text),
+                    "chat_shell": {
+                        "enabled": shell.get("enabled") is not False and bool(html_text or javascript_text),
+                        "name": str(shell.get("label") or shell.get("name") or item.get("name") or "Chat Shell").strip()[:120],
+                        "version": str(shell.get("version") or item.get("version") or "1").strip()[:40] or "1",
+                        "html": html_text,
+                        "css": css_text,
+                        "javascript": javascript_text,
+                        "permissions": permissions,
+                        "fallback": "default",
+                    },
+                })
             item["runtime"] = {
                 "htmlFragments": fragments,
+                "chatShells": sorted(chat_shells, key=lambda entry: (-entry["priority"], entry["label"])),
                 "inputActions": contributes.get("inputActions") if isinstance(contributes.get("inputActions"), list) else [],
                 "sidebar": contributes.get("sidebar") if isinstance(contributes.get("sidebar"), list) else [],
                 "messageActions": contributes.get("messageActions") if isinstance(contributes.get("messageActions"), list) else [],
@@ -10923,7 +10960,7 @@ def clean_tpg_plugin_id(value: object, fallback: str) -> str:
 def tpg_feature_summary(contributes: object) -> dict:
     data = contributes if isinstance(contributes, dict) else {}
     out: dict[str, int] = {}
-    for key in ("inputActions", "sidebar", "messageActions", "htmlFragments", "settings"):
+    for key in ("inputActions", "sidebar", "messageActions", "htmlFragments", "chatShells", "settings"):
         value = data.get(key)
         if isinstance(value, list):
             out[key] = len(value)
@@ -10977,6 +11014,31 @@ def validate_tpg_manifest(manifest: object, package_paths: set[str]) -> dict:
         fragment_path = safe_tpg_path(src)
         if fragment_path not in package_paths:
             raise ValueError(f"htmlFragments src 指向的文件不存在：{fragment_path}")
+    chat_shells = contributes.get("chatShells") or []
+    if chat_shells and not isinstance(chat_shells, list):
+        raise ValueError("contributes.chatShells 必须是数组")
+    if len(chat_shells) > 5:
+        raise ValueError("contributes.chatShells 最多 5 项")
+    for item in chat_shells:
+        if not isinstance(item, dict):
+            raise ValueError("contributes.chatShells 项必须是对象")
+        html_src = item.get("html") or item.get("src")
+        javascript_src = item.get("javascript") or item.get("js")
+        if not html_src and not javascript_src:
+            raise ValueError("chatShells 项至少需要 html/src 或 javascript/js")
+        for field in ("html", "src", "css", "javascript", "js"):
+            candidate = item.get(field)
+            if not candidate:
+                continue
+            shell_path = safe_tpg_path(candidate)
+            if shell_path not in package_paths:
+                raise ValueError(f"chatShells {field} 指向的文件不存在：{shell_path}")
+        permissions = item.get("permissions") or []
+        if permissions and not isinstance(permissions, list):
+            raise ValueError("chatShells permissions 必须是数组")
+        unknown_permissions = [str(value) for value in permissions if str(value) not in CHAT_SHELL_PERMISSION_SET]
+        if unknown_permissions:
+            raise ValueError(f"chatShells 包含未知权限：{unknown_permissions[0]}")
     declared_files = manifest.get("files") or []
     if declared_files and not isinstance(declared_files, list):
         raise ValueError('manifest "files" 必须是数组')

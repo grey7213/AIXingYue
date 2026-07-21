@@ -1,6 +1,7 @@
 import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js?v=20260720-community-versions';
 import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-channels-closed';
 import { cleanCardExperienceText, consumeCardExperienceText, mountCardExperience } from '/app/assets/js/card-experience-runtime.mjs?v=20260720-community-versions';
+import { destroyOpenChatRuntime, mountOpenChatRuntime } from '/app/assets/js/open-chat-runtime.mjs?v=20260721-open-chat-runtime';
 
 const STATUS_LABELS = {
   name: '姓名',
@@ -1213,6 +1214,8 @@ function chatPage() {
     generationMode: '',
     generationPhase: '',
     tavoPluginFragments: [],
+    tavoPluginChatShells: [],
+    runtimeCard: null,
     _typeTimer: null,
     _generationTimer: null,
     _scrollSaveTimer: null,
@@ -1498,8 +1501,15 @@ function chatPage() {
             ? plugin.runtime.htmlFragments.map(fragment => ({ ...fragment, plugin_id: plugin.id, plugin_name: plugin.name }))
             : [])
           .filter(fragment => fragment.enabled && fragment.html);
+        this.tavoPluginChatShells = list
+          .flatMap(plugin => Array.isArray(plugin?.runtime?.chatShells)
+            ? plugin.runtime.chatShells.map(shell => ({ ...shell, plugin_id: plugin.id, plugin_name: plugin.name }))
+            : [])
+          .filter(shell => shell.enabled && shell.chat_shell?.enabled)
+          .sort((a, b) => Number(b.priority || 0) - Number(a.priority || 0));
       } catch {
         this.tavoPluginFragments = [];
+        this.tavoPluginChatShells = [];
       }
     },
 
@@ -1865,9 +1875,26 @@ function chatPage() {
       if (!Number.isNaN(next)) this.points = next;
     },
 
+    effectiveRuntimeCard(card = {}) {
+      if (!card || typeof card !== 'object') return {};
+      const experience = card.card_experience && typeof card.card_experience === 'object' ? card.card_experience : {};
+      if (experience.chat_shell?.enabled) return card;
+      const pluginShell = this.tavoPluginChatShells.find(item => item?.chat_shell?.enabled)?.chat_shell;
+      if (!pluginShell) return card;
+      return {
+        ...card,
+        card_experience: {
+          ...experience,
+          chat_shell: { ...pluginShell },
+        },
+      };
+    },
+
     applyRuntimeCard(payload = {}) {
-      const data = payload?.card || payload?.runtime_card || payload?.snapshot || payload;
-      if (!data || typeof data !== 'object' || !Object.keys(data).length) return false;
+      const rawData = payload?.card || payload?.runtime_card || payload?.snapshot || payload;
+      if (!rawData || typeof rawData !== 'object' || !Object.keys(rawData).length) return false;
+      const data = this.effectiveRuntimeCard(rawData);
+      this.runtimeCard = data;
       if (data.id || data.app_id) this.appId = String(data.id || data.app_id);
       this.appName = data.name || data.app_name || this.appName;
       this.appDesc = data.description || data.summary || this.appDesc || '';
@@ -1878,6 +1905,7 @@ function chatPage() {
         ? data.quick_replies.filter(item => item?.enabled !== false && item?.message)
         : [];
       mountCardExperience(data);
+      mountOpenChatRuntime(data, this);
       if (data.tts_voice_id && this.ttsVoices.some(voice => voice.id === data.tts_voice_id)) {
         this.currentTtsVoice = data.tts_voice_id;
       }
@@ -1998,6 +2026,7 @@ function chatPage() {
 
     async newChat(versionId = '') {
       if (!this.appId) return;
+      destroyOpenChatRuntime('new-conversation');
       this.busy = true;
       this.galgameEnabled = false;
       this.globalPresetEnabled = true;
@@ -2057,6 +2086,7 @@ function chatPage() {
     async selectConversation(c, { forceBottom = false } = {}) {
       this.persistMessageScroll();
       this.cancelActiveGeneration();
+      destroyOpenChatRuntime('conversation-switch');
       const loadSeq = ++this._conversationLoadSeq;
       this.conversation = c;
       this.galgameEnabled = !!c?.galgame_enabled;
@@ -2077,10 +2107,12 @@ function chatPage() {
       const runtimeLoaded = await this.loadConversationRuntimeCard(c.id, c.app_id);
       if (loadSeq !== this._conversationLoadSeq || this.conversation?.id !== c.id) return;
       if (!runtimeLoaded) {
+        this.runtimeCard = null;
         this.appHero = '';
         this.quickReplies = [];
         this.appFavorited = false;
         mountCardExperience({});
+        destroyOpenChatRuntime('runtime-card-missing');
       }
       try {
         const r = await api.messages(c.id, { limit: this.messageLimit });
@@ -2213,6 +2245,8 @@ function chatPage() {
       try {
         await api.deleteConversation(c.id);
         if (this.conversation?.id === c.id) {
+          destroyOpenChatRuntime('conversation-deleted');
+          this.runtimeCard = null;
           this.conversation = null;
           this.messages = [];
           this.messageTotal = 0;
