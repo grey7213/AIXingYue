@@ -473,6 +473,11 @@
   Fix: `tools\ai_fengyue_local_server.py` 给上游 OpenAI/Anthropic-compatible LLM 请求补充浏览器式 `User-Agent`、`Origin`、`Referer` 请求头；不要把模型 API Key 写入本地文档或日志。
   Verify: 2026-06-29 直连 `gemini-2.5-pro-cli` 成功；线上 `/console/api/web/chat/stream` 对 `Blacksouls` 返回 9 个 delta、`message_end=true`，积分 `5000 -> 4950`，公开 `/console/api/web/model-presets` 不包含 API Key。
 
+- Symptom: CelestiAI 主节点缺少密钥或上游全部失败时，用户输入 `?` 却收到“托着腮”等伪造角色回复；公开列表虽然显示完整模型，但共享模型也可能无法自动切到备用节点。
+  Cause: 已配置模型失败后仍调用 `build_chat_reply()` 生成本地兜底文案；故障切换按各预设的原始模型池匹配，公开列表去重不能代替备用节点声明共享模型。CelestiAI 密钥还具有节点绑定特性，节点独占模型用另一密钥调用会返回 503。
+  Fix: 主/备节点使用独立的服务端密钥和真实可用模型池；4 个共享模型同时保留在两节点原始列表，公开 API 再按完整模型名去重；缺失密钥只跳过当前节点，阻塞和流式请求继续尝试同一模型的备用节点。全部失败时返回真实模型服务错误，禁止生成角色兜底回复，并清理本轮消息且不扣费。
+  Verify: 2026-07-21 两节点直探测分别为 48/10 个模型、并集 54、重叠 4，独占模型跨节点调用返回 503；生产公开模型 `total/unique_ids/unique_models=54/54/54`、minimal 为默认且无密钥字段。强制主节点 401、模拟主节点密钥缺失均成功切换备用；全节点失败返回 502 且无伪回复/扣费。Playwright 显示 54 个唯一模型及主/备分组，真实对话成功且 console error=0；临时用户/会话清理为 `0/0`，backend/Nginx active，内外 `/health` OK，`CONTENT_MODE=local_only`，live/backup SQLite `quick_check=ok`。
+
 - Symptom: SillyTavern 角色卡导入后，卡片自带的正则渲染/替换没有在聊天中生效。
   Cause: 部分卡把正则放在 `extensions.regex_scripts` 或 `TavernHelper_scripts`，而 AI星月聊天执行链路读取的是顶层 `extra_settings.regex_scripts`，且字段需要规范为 `find/replace/flags/enabled`。
   Fix: 导入时保留原始 `extensions`，同时把 `findRegex/replaceString/scriptName/disabled` 转换并提升到顶层 `regex_scripts`；不要把只有脚本/工作流但没有角色设定、开场、世界书或问候语的文件当作角色卡导入。

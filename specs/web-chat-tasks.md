@@ -4,6 +4,7 @@
 - 2026-07-12 QQ 验证码与空角色修复：邮件改为惑梦品牌发件名及 HTML/纯文本双格式；线上 2778582531@qq.com 的 5 次邮件经 Resend 均为 delivered，后续仍需补 DMARC 以改善 QQ 入箱分类。`local_only` 标签零结果不再回退旧探索缓存，标签改为 JSON 精确匹配，已删除角色详情返回 404 而不是“本地角色”占位卡。
 - 2026-07-13 正式开放注册与鉴权加固：`BETA_MAX_REGISTERED_USERS=0`、新用户 `500` 惑梦币（约 10 次回复）；token 升级为 30 天 HMAC 签名格式，旧 token 失效并由前端清理后引导重新登录；匿名私有接口返回真实 HTTP 401，私有/草稿角色匿名返回 404；注册、聊天和支付回归通过。
 - 2026-07-15 对话模型目录与延迟优化：CelestiAI 模型补齐为普通/假流式/流式抗截断三组共 48 个，中文前缀选择 ID 唯一；默认从 max 改为实测更快的 minimal。后端记录首 delta/上游/后处理耗时，需要全文 Regex 时约 2 秒即可显示“模型已响应，正在整理角色回复”，安全场景支持真流式。
+- 2026-07-21 CelestiAI 主备节点改造：两套服务端密钥按节点独立保存，公开模型按名称去重为 54 个且不返回密钥；4 个共享模型支持主节点失败后自动切换备用节点，模型调用失败不再生成伪造角色回复，真实 API 与浏览器对话均通过。
 - 2026-07-15 单会话全局预设开关：对话设置新增“关闭全局预设”，仅当前普通会话同时停用后台全局 Prompt 与全局 Regex；角色提示词、世界书、角色 Regex、长期记忆和群聊不受影响。刷新/切换/复制保持，发送/续写/重生成/new swipe 共用设置。
 
 | ID | 任务 | 状态 | 验证 |
@@ -56,6 +57,7 @@
 | WC46 | 单会话关闭全局预设 | Done | 2026-07-15 线上 Prompt `28 -> 0`、全局 Regex disabled、A/B 会话隔离和 Galgame 恢复通过；390px 设置区 3×2 无溢出、console error=0，临时数据清零 |
 | WC47 | 完整 HTML 开场可视化裁切修复 | Done | 2026-07-15 完整 HTML 文档直接挂载到 sandbox body，仅片段保留 `.mes_text` 兼容壳；剥离 Regex 套在完整文档外的单层格式包装，document iframe 高度上限放宽至 1200。目标卡 `蛊真人v2.0` 桌面/390px 线上实测 iframe/body/app 均为 680px，黑块消失；Tavo 高级渲染、sandbox/CSP 回归通过，临时用户/会话清零 |
 | WC48 | 独立 Card Experience Runtime 与旧沙箱并存 | Done | 2026-07-18 Shadow DOM 运行时支持 Galgame、多曲 BGM/音量、声明式弹窗/侧栏、live 字段、搜索筛选和 insert-text；Tavo/完整 HTML 继续使用无 same-origin iframe+CSP。RP Hub 样本、数据合并页、桌面/390px 页面和旧沙箱回归均通过。 |
+| WC49 | CelestiAI 主备模型节点与真实失败处理 | Done | 2026-07-21 主节点 48、备用节点 10、重叠 4，公开模型按名称合并去重为 54 个且不返回敏感字段；共享模型在主节点 401 或主节点密钥缺失时均会继续切换备用节点并取得真实回复。全部节点失败时返回真实错误，不再生成本地伪回复；阻塞/流式兼容路径会清理本轮消息且不扣费，regenerate/new swipe 返回稳定 502。线上真实主、备用模型对话均成功，backend/Nginx active，内外 `/health` OK，`CONTENT_MODE=local_only`，live/backup SQLite `quick_check=ok`。 |
 
 ## 本轮完成记录
 

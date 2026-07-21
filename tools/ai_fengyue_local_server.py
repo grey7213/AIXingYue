@@ -7191,17 +7191,42 @@ class Store:
             selected = candidates[0]
         if not selected:
             selected = self._legacy_llm_preset(include_secrets=True)
+        resolved_model = str(selected_model or selected.get("model") or USER_LLM_MODEL or "gpt-4o-mini").strip()
+        fallback_settings: list[dict] = []
+        for candidate in candidates:
+            if candidate is selected or not candidate.get("enabled"):
+                continue
+            candidate_models = split_model_names(candidate.get("models") or candidate.get("model"))
+            if resolved_model not in candidate_models:
+                continue
+            candidate_key = str(candidate.get("api_key") or "").strip()
+            candidate_base = str(candidate.get("base_url") or "").strip()
+            if not candidate_key or not candidate_base:
+                continue
+            fallback_settings.append({
+                "enabled": True,
+                "protocol": normalize_llm_protocol(candidate.get("protocol"), provider=candidate.get("provider"), base_url=candidate_base),
+                "base_url": candidate_base,
+                "api_key": candidate_key,
+                "model": resolved_model,
+                "temperature": float(candidate.get("temperature", USER_LLM_TEMPERATURE)),
+                "preset_id": candidate.get("id") or "",
+                "preset_name": candidate.get("name") or candidate.get("model") or "",
+                "global_prompt_preset": global_prompt,
+                "global_regex_preset": global_regex,
+            })
         return {
             "enabled": bool(selected.get("enabled", True)),
             "protocol": normalize_llm_protocol(selected.get("protocol"), provider=selected.get("provider"), base_url=selected.get("base_url")),
             "base_url": str(selected.get("base_url") or USER_LLM_BASE_URL or "").strip(),
             "api_key": str(selected.get("api_key") or USER_LLM_API_KEY or "").strip(),
-            "model": str(selected_model or selected.get("model") or USER_LLM_MODEL or "gpt-4o-mini").strip(),
+            "model": resolved_model,
             "temperature": float(selected.get("temperature", USER_LLM_TEMPERATURE)),
             "preset_id": selected.get("id") or default_id,
             "preset_name": selected.get("name") or selected.get("model") or "",
             "global_prompt_preset": global_prompt,
             "global_regex_preset": global_regex,
+            "fallbacks": fallback_settings,
         }
 
     def public_llm_settings(self) -> dict:
@@ -7230,12 +7255,18 @@ class Store:
 
     def public_model_presets(self) -> dict:
         presets, default_id = self.llm_presets(include_secrets=False)
-        visible = [
-            item
-            for p in presets
-            if p.get("enabled")
-            for item in [
-                {
+        visible: list[dict] = []
+        seen_models: set[str] = set()
+        for p in presets:
+            if not p.get("enabled"):
+                continue
+            models = split_model_names(p.get("models") or p.get("model")) or [p.get("model") or ""]
+            default_model = str(p.get("model") or "") if str(p.get("model") or "") in models else models[0]
+            for model in models:
+                if not model or model in seen_models:
+                    continue
+                seen_models.add(model)
+                visible.append({
                     "id": model_selection_id(p["id"], model) if len(split_model_names(p.get("models") or p.get("model"))) > 1 else p["id"],
                     "preset_id": p["id"],
                     "name": p.get("name") or p.get("model") or p["id"],
@@ -7245,12 +7276,7 @@ class Store:
                     "is_default": p["id"] == default_id and model == default_model,
                     "points_cost": CHAT_MESSAGE_COST,
                     "price_label": f"{CHAT_MESSAGE_COST} 惑梦币/次",
-                }
-                for models in [split_model_names(p.get("models") or p.get("model")) or [p.get("model") or ""]]
-                for default_model in [str(p.get("model") or "") if str(p.get("model") or "") in models else models[0]]
-                for model in models
-            ]
-        ]
+                })
         if not visible and presets:
             p = presets[0]
             visible = [{"id": p["id"], "preset_id": p["id"], "name": p.get("name") or p.get("model") or p["id"], "protocol": p.get("protocol") or "openai", "model": p.get("model") or "", "enabled": True, "is_default": True, "points_cost": CHAT_MESSAGE_COST, "price_label": f"{CHAT_MESSAGE_COST} 惑梦币/次"}]
@@ -10715,23 +10741,6 @@ def normalize_user_app_extras(data: dict) -> dict:
     return extras
 
 
-_CHAT_REPLY_PHRASES = [
-    "{role}轻声回应：「{q}」我也在想这个呢…",
-    "{role}笑了笑：「{q}」其实我一直想告诉你——",
-    "{role}抬眼看你：你说「{q}」的时候，我有点想抱抱你。",
-    "「{q}」？{role}托着腮，眼神里有点星光。",
-    "{role}沉默了几秒，然后说：「{q}」嗯，我懂你。",
-]
-
-
-def build_chat_reply(content: str, app_name: str) -> str:
-    role = (app_name or "Ta").strip() or "Ta"
-    lines = str(content or "").strip().splitlines()
-    q = (lines[0] if lines else "继续").strip()[:60] or "继续"
-    template = _CHAT_REPLY_PHRASES[abs(hash(content)) % len(_CHAT_REPLY_PHRASES)]
-    return template.format(role=role, q=q)
-
-
 def safe_filename(name: str, default: str = "cover.png") -> str:
     base = (name or "").strip().replace("\\", "/").rsplit("/", 1)[-1]
     base = re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("._")
@@ -12039,9 +12048,8 @@ def build_user_llm_request(app: dict, content: str, messages: list[dict] | None 
     except Exception: history_length = 12
     if history_length <= 0: history_length = 12
     history_length = max(1, min(history_length, 80))
-    fallback = build_chat_reply(content, str(app.get("name") or "Ta"))
     if not enabled or not base_url or not api_key:
-        return {"enabled": False, "fallback": fallback, "model": model}
+        return {"enabled": False, "model": model}
     char_name = str(app.get("name") or "Ta").strip() or "Ta"
     user_name = str((persona or {}).get("name") or "").strip() or "你"
     template_context = dict(context) if isinstance(context, dict) else {}
@@ -12279,44 +12287,59 @@ def build_user_llm_request(app: dict, content: str, messages: list[dict] | None 
         "endpoint": endpoint,
         "headers": headers,
         "payload": payload,
-        "fallback": fallback,
         "model": model,
     }
 
 
 def call_user_llm(app: dict, content: str, messages: list[dict] | None = None, settings: dict | None = None, persona: dict | None = None, context: dict | None = None) -> str:
     runtime_settings = apply_conversation_global_preset_override(settings or {}, context)
-    request_info = build_user_llm_request(app, content, messages, runtime_settings, persona, context)
     char_name = str(app.get("name") or "Ta").strip() or "Ta"
     user_name = str((persona or {}).get("name") or "").strip() or "你"
     template_context = dict(context) if isinstance(context, dict) else {}
     template_context.setdefault("app", app)
     template_context.setdefault("app_id", str(app.get("id") or ""))
     global_regex_preset = runtime_settings.get("global_regex_preset")
-    if not request_info.get("enabled"):
-        fallback = str(request_info.get("fallback") or build_chat_reply(content, char_name))
-        return process_model_reply(app, fallback, char_name=char_name, user_name=user_name, template_context=template_context, global_regex_preset=global_regex_preset)
-    endpoint = str(request_info.get("endpoint") or "")
-    headers = request_info.get("headers") if isinstance(request_info.get("headers"), dict) else {}
-    payload = request_info.get("payload") if isinstance(request_info.get("payload"), dict) else {}
-    fallback = str(request_info.get("fallback") or build_chat_reply(content, str(app.get("name") or "Ta")))
-    req = Request(endpoint, data=json_bytes(payload), method="POST", headers=headers)
-    try:
-        with urlopen(req, timeout=60) as resp:
-            raw = resp.read()
-        text = raw.decode("utf-8", errors="replace").strip()
-        if not text:
-            return process_model_reply(app, fallback, char_name=char_name, user_name=user_name, template_context=template_context, global_regex_preset=global_regex_preset)
+    attempts = llm_settings_attempts(runtime_settings)
+    last_error: Exception | None = None
+    usable_attempts = 0
+    for attempt_index, attempt_settings in enumerate(attempts):
+        request_info = build_user_llm_request(app, content, messages, attempt_settings, persona, context)
+        if not request_info.get("enabled"):
+            last_error = RuntimeError("模型节点配置不完整")
+            log(
+                f"user llm attempt skipped for {app.get('id')}: "
+                f"model={attempt_settings.get('model') or ''} attempt={attempt_index + 1}/{len(attempts)}"
+            )
+            continue
+        usable_attempts += 1
+        endpoint = str(request_info.get("endpoint") or "")
+        headers = request_info.get("headers") if isinstance(request_info.get("headers"), dict) else {}
+        payload = request_info.get("payload") if isinstance(request_info.get("payload"), dict) else {}
+        req = Request(endpoint, data=json_bytes(payload), method="POST", headers=headers)
         try:
-            data = json.loads(text)
-        except Exception:
-            answer = extract_sse_answer(text)
-            return process_model_reply(app, answer or fallback, char_name=char_name, user_name=user_name, template_context=template_context, global_regex_preset=global_regex_preset)
-        answer = extract_upstream_chat_answer(data)
-        return process_model_reply(app, answer or fallback, char_name=char_name, user_name=user_name, template_context=template_context, global_regex_preset=global_regex_preset)
-    except Exception as exc:
-        log(f"user llm failed for {app.get('id')}: {exc}")
-        return process_model_reply(app, fallback, char_name=char_name, user_name=user_name, template_context=template_context, global_regex_preset=global_regex_preset)
+            with urlopen(req, timeout=60) as resp:
+                raw = resp.read()
+            text = raw.decode("utf-8", errors="replace").strip()
+            if not text:
+                raise RuntimeError("模型没有返回有效内容")
+            try:
+                data = json.loads(text)
+            except Exception:
+                answer = extract_sse_answer(text)
+            else:
+                answer = extract_upstream_chat_answer(data)
+            if not str(answer or "").strip():
+                raise RuntimeError("模型没有返回有效内容")
+            return process_model_reply(app, str(answer), char_name=char_name, user_name=user_name, template_context=template_context, global_regex_preset=global_regex_preset)
+        except Exception as exc:
+            last_error = exc
+            log(
+                f"user llm attempt failed for {app.get('id')}: "
+                f"model={attempt_settings.get('model') or ''} attempt={attempt_index + 1}/{len(attempts)} error={exc}"
+            )
+    if not usable_attempts:
+        raise RuntimeError("模型服务配置不可用，请联系管理员") from last_error
+    raise RuntimeError("模型服务暂时不可用，请稍后重试") from last_error
 
 
 def _image_ext_for_mime(mime: str) -> str:
@@ -12516,56 +12539,85 @@ def _stream_event_is_terminal(event: object) -> bool:
     return False
 
 
+def llm_settings_attempts(settings: dict | None) -> list[dict]:
+    base = dict(settings or {})
+    raw_fallbacks = base.pop("fallbacks", [])
+    attempts = [base]
+    if isinstance(raw_fallbacks, list):
+        for raw in raw_fallbacks:
+            if not isinstance(raw, dict):
+                continue
+            candidate = dict(raw)
+            candidate["global_prompt_preset"] = base.get("global_prompt_preset")
+            candidate["global_regex_preset"] = base.get("global_regex_preset")
+            attempts.append(candidate)
+    return attempts
+
+
 def stream_user_llm_chunks(app: dict, content: str, messages: list[dict] | None = None, settings: dict | None = None, persona: dict | None = None, context: dict | None = None, *, strict: bool = False):
-    request_info = build_user_llm_request(app, content, messages, settings, persona, context)
-    fallback = str(request_info.get("fallback") or build_chat_reply(content, str(app.get("name") or "Ta")))
-    if not request_info.get("enabled"):
-        yield from chunk_text(fallback)
-        return
-    endpoint = str(request_info.get("endpoint") or "")
-    headers = request_info.get("headers") if isinstance(request_info.get("headers"), dict) else {}
-    payload = dict(request_info.get("payload") if isinstance(request_info.get("payload"), dict) else {})
-    payload["stream"] = True
-    stream_headers = dict(headers)
-    stream_headers["Accept"] = "text/event-stream"
-    emitted = False
-    completed = False
-    try:
-        req = Request(endpoint, data=json_bytes(payload), method="POST", headers=stream_headers)
-        with urlopen(req, timeout=60) as resp:
-            for raw_line in resp:
-                line = raw_line.decode("utf-8", errors="replace").strip()
-                if not line or line.startswith(":"):
-                    continue
-                if line.startswith("data:"):
-                    line = line[5:].strip()
-                if not line:
-                    continue
-                if line == "[DONE]":
-                    completed = True
-                    break
-                try:
-                    event = json.loads(line)
-                except Exception:
-                    continue
-                delta = extract_stream_delta(event)
-                if delta:
-                    emitted = True
-                    yield delta
-                if _stream_event_is_terminal(event):
-                    completed = True
-    except Exception as exc:
-        log(f"user llm stream failed for {app.get('id')}: {exc}")
-        if strict:
-            raise RuntimeError("模型流式响应失败，请重试") from exc
-        if emitted:
-            return
-    if strict and emitted and not completed:
-        raise RuntimeError("模型流式响应提前结束，请重试")
-    if strict and not emitted:
-        raise RuntimeError("模型没有返回有效内容，请重试")
-    if not emitted:
-        yield from chunk_text(fallback)
+    attempts = llm_settings_attempts(settings)
+    last_error: Exception | None = None
+    usable_attempts = 0
+    for attempt_index, attempt_settings in enumerate(attempts):
+        request_info = build_user_llm_request(app, content, messages, attempt_settings, persona, context)
+        if not request_info.get("enabled"):
+            last_error = RuntimeError("模型节点配置不完整")
+            log(
+                f"user llm stream attempt skipped for {app.get('id')}: "
+                f"model={attempt_settings.get('model') or ''} attempt={attempt_index + 1}/{len(attempts)}"
+            )
+            continue
+        usable_attempts += 1
+        endpoint = str(request_info.get("endpoint") or "")
+        headers = request_info.get("headers") if isinstance(request_info.get("headers"), dict) else {}
+        payload = dict(request_info.get("payload") if isinstance(request_info.get("payload"), dict) else {})
+        payload["stream"] = True
+        stream_headers = dict(headers)
+        stream_headers["Accept"] = "text/event-stream"
+        emitted = False
+        completed = False
+        try:
+            req = Request(endpoint, data=json_bytes(payload), method="POST", headers=stream_headers)
+            with urlopen(req, timeout=60) as resp:
+                for raw_line in resp:
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                    if not line or line.startswith(":"):
+                        continue
+                    if line.startswith("data:"):
+                        line = line[5:].strip()
+                    if not line:
+                        continue
+                    if line == "[DONE]":
+                        completed = True
+                        break
+                    try:
+                        event = json.loads(line)
+                    except Exception:
+                        continue
+                    delta = extract_stream_delta(event)
+                    if delta:
+                        emitted = True
+                        yield delta
+                    if _stream_event_is_terminal(event):
+                        completed = True
+            if emitted and completed:
+                return
+            if emitted:
+                raise RuntimeError("模型流式响应提前结束")
+            raise RuntimeError("模型没有返回有效内容")
+        except Exception as exc:
+            last_error = exc
+            log(
+                f"user llm stream attempt failed for {app.get('id')}: "
+                f"model={attempt_settings.get('model') or ''} attempt={attempt_index + 1}/{len(attempts)} error={exc}"
+            )
+            if emitted:
+                if strict:
+                    raise RuntimeError("模型流式响应提前结束，请重试") from exc
+                return
+    if not usable_attempts:
+        raise RuntimeError("模型服务配置不可用，请联系管理员") from last_error
+    raise RuntimeError("模型服务暂时不可用，请稍后重试") from last_error
 
 
 def app_requires_site_runtime(app: dict) -> bool:
@@ -12747,7 +12799,7 @@ def proxy_upstream_chat(store: "Store", app_id: str, content: str, *, app_name: 
         log(f"upstream chat empty answer for {app_id}: status={status}")
     except Exception as exc:
         log(f"upstream chat failed for {app_id}: {exc}")
-    return build_chat_reply(content, app_name or app_name_from_cache(store, app_id))
+    raise RuntimeError("模型服务暂时不可用，请稍后重试")
 
 
 def extract_app_payload(payload: object) -> dict | None:
@@ -15322,10 +15374,13 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as exc:
                 return error_response(str(exc), 402)
             app_name = str(body.get("app_name") or "").strip() or app_name_from_cache(self.store, app_id)
+            conversation_existed = bool(self.store.get_conversation(conv_id, user["id"]))
+            user_message_id = ""
             try:
                 with GENERATION_LIMITER.acquire(user["id"], self.client_ip(), "legacy_chat"):
                     self.store.upsert_conversation(conv_id, user["id"], app_id, app_name=app_name, title=str(body.get("conversation_name") or content[:30]))
-                    self.store.append_message(conv_id, user["id"], "user", content)
+                    user_row = self.store.append_message(conv_id, user["id"], "user", content)
+                    user_message_id = str(user_row["id"])
                     app_row, answer = chat_reply_for_app(
                         self.store,
                         user["id"],
@@ -15343,6 +15398,13 @@ class Handler(BaseHTTPRequestHandler):
                     )
             except GenerationLimitError as exc:
                 return error_response(str(exc), 429)
+            except Exception as exc:
+                if user_message_id:
+                    self.store.delete_message(user_message_id, user["id"])
+                if not conversation_existed:
+                    self.store.delete_empty_conversation(conv_id, user["id"])
+                log(f"legacy chat failed for {conv_id}: {exc}")
+                return error_response(str(exc)[:180] or "模型服务暂时不可用", 502)
             message = chat_message_payload(reply, conv_id, app_id, content, answer)
             message.update(charge)
             if str(body.get("response_mode") or "").lower() == "streaming":
@@ -15437,54 +15499,6 @@ class Handler(BaseHTTPRequestHandler):
                 conv_id = convs[0]["id"] if convs else ""
             msgs = self.store.list_messages(conv_id, user["id"]) if conv_id else []
             return ok_response({"list": msgs, "total": len(msgs), "has_more": False})
-
-        if (
-            normalized == "go/api/apps/chat-messages"
-            or (normalized.startswith("go/api/apps/") and normalized.endswith("/chat-messages"))
-            or (normalized.startswith("console/api/installed-apps/") and normalized.endswith("/chat-messages"))
-        ):
-            if not isinstance(body, dict):
-                return error_response("invalid body")
-            parts = normalized.split("/")
-            app_id = str(body.get("app_id") or "").strip()
-            if not app_id and len(parts) >= 4 and parts[0] == "go":
-                app_id = parts[3]
-            if not app_id and len(parts) >= 4 and parts[0] == "console":
-                app_id = parts[3]
-            content = str(body.get("query") or body.get("content") or body.get("message") or "").strip()
-            if not content:
-                return error_response("query is required")
-            app_id = self.store.resolve_local_app_id(app_id)
-            conv_id = str(body.get("conversation_id") or "").strip() or str(uuid.uuid4())
-            try:
-                self.store.preflight_chat_app(app_id, user["id"], conv_id)
-            except (ValueError, PermissionError):
-                return error_response("role not found", 404)
-            try:
-                self.store.require_credit_points(user["id"], CHAT_MESSAGE_COST)
-            except ValueError as exc:
-                return error_response(str(exc), 402)
-            app_name = str(body.get("app_name") or "").strip() or app_name_from_cache(self.store, app_id)
-            self.store.upsert_conversation(conv_id, user["id"], app_id, app_name=app_name, title=str(body.get("conversation_name") or content[:30]))
-            self.store.append_message(conv_id, user["id"], "user", content)
-            answer = build_chat_reply(content, app_name)
-            reply = self.store.append_message(conv_id, user["id"], "assistant", answer)
-            charge = self.store.spend_credit_points(
-                user["id"],
-                CHAT_MESSAGE_COST,
-                payload={"app_id": app_id, "conversation_id": conv_id, "message_id": reply["id"]},
-            )
-            message = chat_message_payload(reply, conv_id, app_id, content, answer)
-            message.update(charge)
-            if str(body.get("response_mode") or "").lower() == "streaming":
-                return {
-                    "__raw_sse__": True,
-                    "events": [
-                        {"event": "message", "data": message},
-                        {"event": "message_end", "data": message},
-                    ],
-                }
-            return {"result": "success", "data": message, "message": message, "error": None}
 
         if normalized == "go/api/posts/recommended":
             fallback = go_response({"posts": [], "total": 0})
@@ -15841,6 +15855,9 @@ class Handler(BaseHTTPRequestHandler):
                     )
             except GenerationLimitError as exc:
                 return error_response(str(exc), 429)
+            except Exception as exc:
+                log(f"regenerate failed for {conv_id}: {exc}")
+                return error_response(str(exc)[:180] or "模型服务暂时不可用", 502)
             payload = {"message": updated, "conversation_id": conv_id}
             payload.update(charge)
             return ok_response(payload)
@@ -15906,6 +15923,9 @@ class Handler(BaseHTTPRequestHandler):
                     )
             except GenerationLimitError as exc:
                 return error_response(str(exc), 429)
+            except Exception as exc:
+                log(f"new swipe failed for {conv_id}: {exc}")
+                return error_response(str(exc)[:180] or "模型服务暂时不可用", 502)
             payload = {"message": updated}
             payload.update(charge)
             return ok_response(payload)
@@ -15987,11 +16007,14 @@ class Handler(BaseHTTPRequestHandler):
             if not conv_id:
                 conv_id = str(uuid.uuid4())
             title = content[:30] if not body.get("conversation_id") else None
+            conversation_existed = bool(self.store.get_conversation(conv_id, user["id"]))
+            user_message_id = ""
             try:
                 with GENERATION_LIMITER.acquire(user["id"], self.client_ip(), "web_chat"):
                     self.store.upsert_conversation(conv_id, user["id"], app_id,
                                                    app_name=app_name, app_icon=app_icon, title=title)
-                    self.store.append_message(conv_id, user["id"], "user", content)
+                    user_row = self.store.append_message(conv_id, user["id"], "user", content)
+                    user_message_id = str(user_row["id"])
                     self.store.log_event(user["id"], "chat", f"与 {app_name or app_id} 对话", {"app_id": app_id, "conversation_id": conv_id})
                     app_row, reply = chat_reply_for_app(
                         self.store,
@@ -16011,6 +16034,13 @@ class Handler(BaseHTTPRequestHandler):
                     )
             except GenerationLimitError as exc:
                 return error_response(str(exc), 429)
+            except Exception as exc:
+                if user_message_id:
+                    self.store.delete_message(user_message_id, user["id"])
+                if not conversation_existed:
+                    self.store.delete_empty_conversation(conv_id, user["id"])
+                log(f"blocking web chat failed for {conv_id}: {exc}")
+                return error_response(str(exc)[:180] or "模型服务暂时不可用", 502)
             try:
                 self.store.maybe_refresh_summary(user["id"], conv_id)
             except Exception as exc:
