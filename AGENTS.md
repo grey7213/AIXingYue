@@ -63,6 +63,16 @@
 
 ## Reusable Pitfalls
 
+- Symptom: 农场收获提示成功，但页面顶部或其他账号页面仍显示旧惑梦币；今日首收状态也可能不立即变化，用户因而认为农场天数/奖励没有同步。
+  Cause: 每日奖励账本和 `users` 余额已在同一事务更新，但 `/farm/state` 没有返回账号余额及当日领取状态；前端收获后又以不等待、失败静默的旁路请求刷新 credits，旧缓存可能继续显示。
+  Fix: 农场状态返回权威 `account_balance`、`daily_reward.claimed`，收获响应返回顶层 `points_added/account_balance`；前端收获后等待 credits、rewards、profile 刷新并更新缓存。连续活跃天数继续由服务端按北京时间自然日更新，不在客户端自增。
+  Verify: 2026-07-22 `python -m py_compile`、`node --check frontend/app/assets/js/farm.js` 和 `output/farm-backend-verify.py` 全部通过，覆盖首次收获积分、同日唯一奖励、跨日 streak、幂等和并发。
+
+- Symptom: 私有角色作者能打开“选择游玩版本”弹窗并看到历史版本，但点击“确认并开始”返回 `role not found`，无法创建会话。
+  Cause: 角色详情和版本列表允许作者访问自己的私有卡，新会话权限却只接受 `is_public=1 && status=published`，没有把作者本人纳入可游玩范围。
+  Fix: `user_can_play_app(row,user_id)` 允许作者游玩自己非 `deleted` 的用户卡；新会话、旧会话补锁和群聊统一传入用户 ID，非作者仍只可游玩公开已发布卡。
+  Verify: 2026-07-22 本地 Store/HTTP 回归均为 owner 200、outsider 404；线上《道渊》目标版本从 404 恢复为 200，创建会话后已清理，服务/Nginx active、内外 `/health` OK、`CONTENT_MODE=local_only`、SQLite `quick_check=ok`。
+
 - Symptom: 想直接安装 JS-Slash-Runner 或把 Tavo 沙箱拆成同源脚本来获得“绘梦式”整页聊天 UI，但扩展无法启动，或角色卡脚本可以接触父 DOM、登录会话和业务 API。
   Cause: JS-Slash-Runner 4.8.19 深度依赖 SillyTavern 内部 ESM、DOM、状态和服务端接口；其 iframe 没有 sandbox，同源父页面访问是高权限副作用，不是稳定整页 Shell 协议。
   Fix: 使用 `card_experience.chat_shell` / `.tpg contributes.chatShells` 的 clean-room Open Chat Runtime；卡片在仅 `allow-scripts` 的 opaque-origin iframe 内接管整个 UI，通过 `HomerChat/TavernHelper` capability bridge 调用父页现有业务控制器，父页保留固定退出入口和异常回退。

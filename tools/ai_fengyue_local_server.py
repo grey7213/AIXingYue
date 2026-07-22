@@ -3753,6 +3753,12 @@ class Store:
 
     def _farm_state_locked(self, user_id: str, ts: int, day: str) -> dict:
         profile = self._ensure_farm_profile_locked(user_id, ts, day)
+        user = self.get_user_by_id(user_id) or self.current_user()
+        balance = self.credit_balance(user)
+        daily_claimed = bool(self.conn.execute(
+            "select 1 from daily_reward_claims where user_id=? and claim_date=?",
+            (user_id, day),
+        ).fetchone())
         streak = int(profile["streak_days"])
         plots = []
         for row in self.conn.execute("select * from farm_plots where user_id=? order by plot_no", (user_id,)).fetchall():
@@ -3780,6 +3786,10 @@ class Store:
         return {
             "server_time": ts,
             "date": day,
+            "account_balance": balance,
+            "daily_reward": {
+                "claimed": daily_claimed,
+            },
             "profile": {
                 "coins": int(profile["coins"]),
                 "xp": int(profile["xp"]),
@@ -3890,7 +3900,16 @@ class Store:
             self.conn.execute("update farm_plots set crop_kind=null,planted_at=null,ready_at=null,watered_at=null where user_id=? and plot_no=?", (user_id, plot_no))
             daily = self._claim_daily_reward_locked(user_id, daily_points, day, ts)
             self.conn.execute("insert into user_events(user_id,event_type,summary,payload_json,created_at) values(?,?,?,?,?)", (user_id, "farm_harvest", "农场收获", json.dumps({"plot_no": plot_no, "crop_kind": crop_kind, "coins": crop["coins"], "xp": crop["xp"], "points_added": daily["points_added"]}, ensure_ascii=False), ts))
-            return {"action": "harvest", "plot_no": plot_no, "crop_kind": crop_kind, "coins_added": crop["coins"], "xp_added": crop["xp"], "daily_reward": daily}
+            return {
+                "action": "harvest",
+                "plot_no": plot_no,
+                "crop_kind": crop_kind,
+                "coins_added": crop["coins"],
+                "xp_added": crop["xp"],
+                "points_added": int(daily["points_added"]),
+                "account_balance": daily["balance"],
+                "daily_reward": daily,
+            }
         return self._farm_action(user_id, idempotency_key, "harvest", f"plot:{plot_no}", {}, apply)
 
     def farm_friends(self, user_id: str) -> dict:
@@ -4531,7 +4550,7 @@ class Store:
 
     def versioned_app_for_new_conversation(self, app_id: str, user_id: str, requested_version_id: str = "") -> tuple[dict, str]:
         row = self.get_local_app(app_id)
-        if not user_can_play_app(row):
+        if not user_can_play_app(row, user_id):
             raise PermissionError("role not found")
         version_id = self.resolve_character_version_id(app_id, requested_version_id)
         app = resolve_versioned_app(self.conn, self.lock, row, version_id)
@@ -4568,7 +4587,7 @@ class Store:
         version_id = str(conversation.get("version_id") or "")
         if not version_id:
             # Legacy unversioned conversations are only locked lazily while the card is still accessible.
-            if not user_can_play_app(row):
+            if not user_can_play_app(row, user_id):
                 raise PermissionError("role not found")
             version_id = self.resolve_character_version_id(conversation_app_id)
             self.conn.execute("update conversations set version_id=? where id=? and user_id=?", (version_id, conv_id, user_id))
@@ -4594,7 +4613,7 @@ class Store:
                 version_id = str(existing["version_id"] or "") if "version_id" in existing.keys() else ""
                 if not version_id:
                     row = self.get_local_app(existing_app_id)
-                    if not user_can_play_app(row):
+                    if not user_can_play_app(row, user_id):
                         raise PermissionError("role not found")
                     version_id = self.resolve_character_version_id(existing_app_id)
                 self.conn.execute(
@@ -5501,7 +5520,7 @@ class Store:
             if str(member.get("version_id") or ""):
                 continue
             app = self.get_local_app(str(member.get("app_id") or ""))
-            if not user_can_play_app(app):
+            if not user_can_play_app(app, user_id):
                 continue
             version_id = self.resolve_character_version_id(str(member.get("app_id") or ""))
             self.conn.execute("update group_members set version_id=? where id=?", (version_id, member["id"]))
@@ -12732,11 +12751,18 @@ def user_can_access_app(row: sqlite3.Row | dict | None, user_id: str | None) -> 
     return bool(data.get("is_public", 1)) and (data.get("status") or "published") == "published"
 
 
-def user_can_play_app(row: sqlite3.Row | dict | None) -> bool:
-    """New ordinary/group conversations may only start from public published cards."""
+def user_can_play_app(row: sqlite3.Row | dict | None, user_id: str | None = None) -> bool:
+    """Allow an owner to play their own card; other users need public+published."""
     if not row:
         return False
     data = dict(row)
+    if (
+        str(data.get("source") or "") == "user"
+        and user_id
+        and str(data.get("owner_user_id") or "") == str(user_id)
+        and str(data.get("status") or "published") != "deleted"
+    ):
+        return True
     return bool(data.get("is_public")) and str(data.get("status") or "published") == "published"
 
 

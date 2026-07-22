@@ -218,6 +218,7 @@ function farmPage() {
       this.energyUpdatedAt = parseTime(profile.energy_updated_at || profile.energyUpdatedAt);
       this.nextEnergyAt = parseTime(profile.next_energy_at || profile.nextEnergyAt);
       this.streakDays = intValue(profile.streak_days ?? profile.streakDays, this.streakDays || 1);
+      if (raw.account_balance) this.applyCredits(raw.account_balance);
       this.stealsLeft = intValue(raw.steals_remaining ?? raw.steals_left ?? raw.stealsLeft ?? profile.steals_remaining ?? profile.steals_left, this.stealsLeft);
       this.dailyRewardPoints = intValue(raw.daily_reward_points ?? raw.daily_points ?? raw.daily_reward?.points, this.dailyRewardPoints);
       if (raw.daily_reward && ('claimed' in raw.daily_reward || 'is_claimed' in raw.daily_reward)) this.dailyClaimed = boolValue(raw.daily_reward.claimed ?? raw.daily_reward.is_claimed);
@@ -437,7 +438,15 @@ function farmPage() {
         } else {
           this.showToast(data.message || fallbackMessage, 'success');
         }
-        if (action === 'harvest') api.credits().then(value => this.applyCredits(value)).catch(() => {});
+        if (action === 'harvest') {
+          const refreshed = await Promise.allSettled([api.credits(), api.rewards(), api.profile()]);
+          if (refreshed[0].status === 'fulfilled') this.applyCredits(refreshed[0].value);
+          if (refreshed[1].status === 'fulfilled') this.applyDailyMeta(refreshed[1].value);
+          if (refreshed[2].status === 'fulfilled') {
+            this.user = unwrap(refreshed[2].value);
+            if (this.user?.id) setCachedUser(this.user);
+          }
+        }
       } catch (error) {
         const message = error instanceof ApiError ? error.message : (error?.message || '操作失败，请稍后重试');
         this.showToast(message, 'error', 4000);
