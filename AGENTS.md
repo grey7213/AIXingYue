@@ -63,6 +63,11 @@
 
 ## Reusable Pitfalls
 
+- Symptom: 角色详情页的“历史版本”在浅色主题下出现白色/淡白色文字，版本说明、时间和版本弹窗几乎不可读；输入框聚焦或 ID 标签也可能残留深色原型皮肤。
+  Cause: `frontend/app/character.html` 内联样式沿用了旧深色原型（`#fff`、淡紫透明字、透明白面板），覆盖了共享 App Shell 的 `--fy-*` 主题变量；`.xy-input:focus` 和 `.detail-id-row code` 还有旧的硬编码白底/深色面板。
+  Fix: 删除角色页内联重复皮肤，将历史版本、开源条目、版本选择弹窗和错误提示统一绑定 `--fy-text/--fy-text-soft/--fy-panel/--fy-border/--fy-accent*`，为 light/dark 分别提供语义色；聚焦输入和 ID 标签也使用主题变量，并给角色页 CSS 加 cache-buster。
+  Verify: 2026-07-22 本地前端代理真实 Chromium 在 light/dark × 1440/390px 四组通过；历史区最低对比度 `5.26:1`（light）/`6.65:1`（dark），弹窗最低 `5.16:1`/`6.29:1`，控件均达标，无横向溢出，console/page error 为 0。回归夹具：`output/verify_character_versions_theme_browser.py`。
+
 - Symptom: 农场收获提示成功，但页面顶部或其他账号页面仍显示旧惑梦币；今日首收状态也可能不立即变化，用户因而认为农场天数/奖励没有同步。
   Cause: 每日奖励账本和 `users` 余额已在同一事务更新，但 `/farm/state` 没有返回账号余额及当日领取状态；前端收获后又以不等待、失败静默的旁路请求刷新 credits，旧缓存可能继续显示。
   Fix: 农场状态返回权威 `account_balance`、`daily_reward.claimed`，收获响应返回顶层 `points_added/account_balance`；前端收获后等待 credits、rewards、profile 刷新并更新缓存。连续活跃天数继续由服务端按北京时间自然日更新，不在客户端自增。
