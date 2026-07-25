@@ -503,6 +503,11 @@
   Fix: 主/备节点使用独立的服务端密钥和真实可用模型池；4 个共享模型同时保留在两节点原始列表，公开 API 再按完整模型名去重；缺失密钥只跳过当前节点，阻塞和流式请求继续尝试同一模型的备用节点。全部失败时返回真实模型服务错误，禁止生成角色兜底回复，并清理本轮消息且不扣费。
   Verify: 2026-07-21 两节点直探测分别为 48/10 个模型、并集 54、重叠 4，独占模型跨节点调用返回 503；生产公开模型 `total/unique_ids/unique_models=54/54/54`、minimal 为默认且无密钥字段。强制主节点 401、模拟主节点密钥缺失均成功切换备用；全节点失败返回 502 且无伪回复/扣费。Playwright 显示 54 个唯一模型及主/备分组，真实对话成功且 console error=0；临时用户/会话清理为 `0/0`，backend/Nginx active，内外 `/health` OK，`CONTENT_MODE=local_only`，live/backup SQLite `quick_check=ok`。
 
+- Symptom: 新增 OpenAI-compatible 上游的 `/models` 能访问，但用户选择模型后生成失败，容易被误判为后端路由错误。
+  Cause: 上游按模型预扣费/Token 池校验；目录接口可用不代表账户额度足够，常见响应为 403 `预扣费额度失败` 或 500 `没有可用token`。
+  Fix: 先用浏览器式请求头探测 `/models` 和一个低成本模型，再把真实目录写入独立站点预设；保留原站点默认模型。后端沿用真实错误路径，失败时不保存 user/assistant 消息、不扣积分，也不生成本地伪回复；密钥只写线上 SQLite，公开模型接口不返回密钥。
+  Verify: 2026-07-26 `qinyan-gemini` 接入 `https://love.qinyan.icu/v1`，目录 17 个模型、公开总数 43 且 ID/模型唯一；`官逆次gemini-3.5-flash` 直连曾返回 200，额度耗尽后的线上失败回归确认 SSE error、无 `message_end`、消息/会话/积分均不变。配置前后备份及 live DB `quick_check=ok`，backend/Nginx active，内外 `/health` OK，`CONTENT_MODE=local_only`。
+
 - Symptom: SillyTavern 角色卡导入后，卡片自带的正则渲染/替换没有在聊天中生效。
   Cause: 部分卡把正则放在 `extensions.regex_scripts` 或 `TavernHelper_scripts`，而 AI星月聊天执行链路读取的是顶层 `extra_settings.regex_scripts`，且字段需要规范为 `find/replace/flags/enabled`。
   Fix: 导入时保留原始 `extensions`，同时把 `findRegex/replaceString/scriptName/disabled` 转换并提升到顶层 `regex_scripts`；不要把只有脚本/工作流但没有角色设定、开场、世界书或问候语的文件当作角色卡导入。
