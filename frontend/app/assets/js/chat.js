@@ -488,22 +488,25 @@ function rewriteTavernHelperScript(source) {
     // HTML entities keep the rendered attribute intact while making the
     // isolated inline script parseable again.
     .replace(/(<[a-z][^<>]*\sstyle=)"([^"]*)"/gi, '$1&quot;$2&quot;')
-    .replace(/\bwindow\.parent\.document\b/g, 'window.__xySTTop.document')
-    .replace(/\bwindow\.parent\.localStorage\b/g, 'window.__xySTTop.localStorage')
-    .replace(/\bwindow\.parent\.sessionStorage\b/g, 'window.__xySTTop.sessionStorage')
-    .replace(/\bwindow\.parent\.getChatMessages\b/g, 'window.__xySTTop.getChatMessages')
-    .replace(/(^|[^\w$.])parent\.getChatMessages\b/g, '$1window.__xySTTop.getChatMessages')
-    .replace(/\bwindow\.parent\.getChatMessage\b/g, 'window.__xySTTop.getChatMessage')
-    .replace(/(^|[^\w$.])parent\.getChatMessage\b/g, '$1window.__xySTTop.getChatMessage')
-    .replace(/\bwindow\.parent\.SillyTavern\b/g, 'window.__xySTTop.SillyTavern')
-    .replace(/\bparent\.SillyTavern\b/g, 'window.__xySTTop.SillyTavern')
-    .replace(/\bwindow\.parent\b/g, 'window.__xySTTop')
-    .replace(/(^|[^\w$.])parent\b/g, '$1window.__xySTTop')
-    .replace(/\bwindow\.top\b/g, 'window.__xySTTop')
-    .replace(/\bwindow\.localStorage\b/g, 'window.__xyLocalStorage')
-    .replace(/(^|[^\w$.])localStorage\b/g, '$1window.__xyLocalStorage')
-    .replace(/\bwindow\.sessionStorage\b/g, 'window.__xySessionStorage')
-    .replace(/(^|[^\w$.])sessionStorage\b/g, '$1window.__xySessionStorage');
+    // Require a JavaScript-expression boundary before globals. In particular,
+    // do not rewrite CSS/class tokens such as `.rp-window.parent-float` or
+    // `.rp-parent-float` that happen to live inside an inline script string.
+    .replace(/(^|[^\w$.-])window\.parent\.document\b/g, '$1window.__xySTTop.document')
+    .replace(/(^|[^\w$.-])window\.parent\.localStorage\b/g, '$1window.__xySTTop.localStorage')
+    .replace(/(^|[^\w$.-])window\.parent\.sessionStorage\b/g, '$1window.__xySTTop.sessionStorage')
+    .replace(/(^|[^\w$.-])window\.parent\.getChatMessages\b/g, '$1window.__xySTTop.getChatMessages')
+    .replace(/(^|[^\w$.-])parent\.getChatMessages\b/g, '$1window.__xySTTop.getChatMessages')
+    .replace(/(^|[^\w$.-])window\.parent\.getChatMessage\b/g, '$1window.__xySTTop.getChatMessage')
+    .replace(/(^|[^\w$.-])parent\.getChatMessage\b/g, '$1window.__xySTTop.getChatMessage')
+    .replace(/(^|[^\w$.-])window\.parent\.SillyTavern\b/g, '$1window.__xySTTop.SillyTavern')
+    .replace(/(^|[^\w$.-])parent\.SillyTavern\b/g, '$1window.__xySTTop.SillyTavern')
+    .replace(/(^|[^\w$.-])window\.parent\b/g, '$1window.__xySTTop')
+    .replace(/(^|[^\w$.-])parent\b/g, '$1window.__xySTTop')
+    .replace(/(^|[^\w$.-])window\.top\b/g, '$1window.__xySTTop')
+    .replace(/(^|[^\w$.-])window\.localStorage\b/g, '$1window.__xyLocalStorage')
+    .replace(/(^|[^\w$.-])localStorage\b/g, '$1window.__xyLocalStorage')
+    .replace(/(^|[^\w$.-])window\.sessionStorage\b/g, '$1window.__xySessionStorage')
+    .replace(/(^|[^\w$.-])sessionStorage\b/g, '$1window.__xySessionStorage');
 }
 
 function serializeSafeAttrs(el, allowed = ['class', 'style', 'dir']) {
@@ -516,16 +519,31 @@ function serializeSafeAttrs(el, allowed = ['class', 'style', 'dir']) {
   return parts.length ? ' ' + parts.join(' ') : '';
 }
 
+function documentPrefixIsWrapperOnly(prefix) {
+  let value = String(prefix || '')
+    .replace(/^\uFEFF/, '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .trim();
+  if (!value) return true;
+  while (value) {
+    const match = value.match(/^<(?:div|section|article|main)\b[^>]*>\s*/i);
+    if (!match) return false;
+    value = value.slice(match[0].length).trim();
+  }
+  return true;
+}
+
 function sanitizeAdvancedHtml(raw, options = {}) {
   const source = String(raw || '').trim();
   const allowScripts = options.allowScripts !== false;
   const hasExplicitHead = /<head\b/i.test(source);
-  const isFullDocument = /<!doctype\s+html\b|<html\b|<head\b|<body\b/i.test(source);
   const documentStart = source.search(/<!doctype\s+html\b|<html\b|<head\b|<body\b/i);
-  const hasOuterDocumentWrapper = documentStart > 0
-    && /^<(?:div|section|article|main)\b/i.test(source.slice(0, documentStart).trim());
+  const documentPrefix = documentStart > 0 ? source.slice(0, documentStart) : '';
+  const hasOuterDocumentWrapper = documentStart > 0 && documentPrefixIsWrapperOnly(documentPrefix);
+  const isMixedDocument = documentStart > 0 && !hasOuterDocumentWrapper;
+  const isFullDocument = documentStart >= 0 && !isMixedDocument;
   if (typeof DOMParser === 'undefined') {
-    return { head: '', body: source, bodyAttrs: '', isFullDocument };
+    return { head: '', body: source, bodyAttrs: '', isFullDocument, isMixedDocument };
   }
   const doc = new DOMParser().parseFromString(source, 'text/html');
   doc.querySelectorAll('base, iframe, object, embed, script[data-src]').forEach(el => el.remove());
@@ -571,6 +589,7 @@ function sanitizeAdvancedHtml(raw, options = {}) {
     body: hasExplicitHead ? parsedBody : `${parsedHead}${parsedBody}`,
     bodyAttrs: serializeSafeAttrs(doc.body),
     isFullDocument,
+    isMixedDocument,
   };
 }
 
@@ -820,9 +839,12 @@ function buildSandboxSrcdoc(raw, options = {}) {
     ? ''
     : `<textarea id="raw-data-store" hidden aria-hidden="true">${escapeHtml(sanitized.body)}</textarea>`;
   const pluginBody = pluginHtml ? `<div class="tavo-plugin-fragments" data-plugin-fragments="true">${pluginHtml}</div>` : '';
+  const mixedDocumentGuard = sanitized.isMixedDocument
+    ? '<style id="xy-mixed-document-guard">html,body{width:100%!important;height:auto!important;min-height:100%!important;overflow-x:hidden!important;overflow-y:auto!important;background:var(--SmartThemeChatTintColor,#222222)!important;}</style>'
+    : '';
   const compatBody = sanitized.isFullDocument
     ? `${pluginBody}${sanitized.body}`
-    : `<div id="chat" class="chat chat-messages"><div class="mes message assistant" data-role="assistant"><div id="message-content" class="mes_text mes-text message-content markdown-body tavo-content">${pluginBody}${sanitized.body}</div></div></div>`;
+    : `<div id="chat" class="chat chat-messages"><div class="mes message assistant" data-role="assistant"><div id="message-content" class="mes_text mes-text message-content markdown-body tavo-content">${pluginBody}${sanitized.body}${mixedDocumentGuard}</div></div></div>`;
   const layoutMode = sanitized.isFullDocument ? 'document' : 'fragment';
   return `<!doctype html><html style="${escapeAttr(tavoThemeVars)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta http-equiv="Content-Security-Policy" content="${escapeAttr(csp)}"><style>${baseStyle}</style>${bridge}${sanitized.head}</head><body${sanitized.bodyAttrs} data-xy-layout="${layoutMode}">${rawStore}${compatBody}${resize}</body></html>`;
 }

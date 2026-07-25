@@ -1,5 +1,6 @@
 # AI星月 Web 角色聊天任务
 
+- 2026-07-26 混合文档回复渲染修复：目标卡《黎明之契2.71》的生成回复由普通叙事正文和尾部完整 HTML 音乐播放器组成。渲染器现将其识别为 mixed document，避免播放器的 `html/body=1px` 压扁正文；TavernHelper 脚本重写新增表达式边界，避免误改 `.rp-parent-float` 等 CSS 类名；生产 Nginx CSP 与 iframe 的三项固定 RP Hub 资源白名单对齐。生产 Chromium 桌面/390px 均显示正文，播放器恢复 fixed 悬浮球，菜单可展开，沙箱仍无 same-origin，console/page error 为 0。
 - 2026-07-22 角色详情主题可读性修复：删除 `character.html` 旧深色内联皮肤，历史版本、开源条目、版本选择弹窗和开局错误提示统一使用 `--fy-*` light/dark 主题变量；同步修复角色页 ID 标签与输入框聚焦时的硬编码背景，并更新 CSS cache-buster。生产旧版本基线浅色历史区最低仅 `1.045:1`；部署后真实 Chromium 在 light/dark × 桌面/390px 四组全部通过，历史区最低 `5.26:1/6.65:1`、弹窗最低 `5.16:1/6.29:1`，无横向溢出、无 console/page error。远端备份：`/opt/ai-fengyue-backend/backups/character-theme-20260722-211221`。
 - 2026-07-22 私有角色版本开局修复：角色作者可查看自己私有卡的版本时，也允许按所选不可变版本创建新会话；其他账号仍只能游玩公开且已发布角色。线上目标卡《道渊》复测由 404 `role not found` 恢复为 200，非作者保持 404，会话已清理。
 - 2026-07-12 历史对话刷新定位：通过历史对话链接或默认最近会话进入聊天页时，首次加载强制滚动到最新消息；普通会话切换仍保留原滚动位置，向上加载旧消息不受影响。
@@ -60,6 +61,7 @@
 | WC47 | 完整 HTML 开场可视化裁切修复 | Done | 2026-07-15 完整 HTML 文档直接挂载到 sandbox body，仅片段保留 `.mes_text` 兼容壳；剥离 Regex 套在完整文档外的单层格式包装，document iframe 高度上限放宽至 1200。目标卡 `蛊真人v2.0` 桌面/390px 线上实测 iframe/body/app 均为 680px，黑块消失；Tavo 高级渲染、sandbox/CSP 回归通过，临时用户/会话清零 |
 | WC48 | 独立 Card Experience Runtime 与旧沙箱并存 | Done | 2026-07-18 Shadow DOM 运行时支持 Galgame、多曲 BGM/音量、声明式弹窗/侧栏、live 字段、搜索筛选和 insert-text；Tavo/完整 HTML 继续使用无 same-origin iframe+CSP。RP Hub 样本、数据合并页、桌面/390px 页面和旧沙箱回归均通过。 |
 | WC49 | CelestiAI 主备模型节点与真实失败处理 | Done | 2026-07-21 主节点 48、备用节点 10、重叠 4，公开模型按名称合并去重为 54 个且不返回敏感字段；共享模型在主节点 401 或主节点密钥缺失时均会继续切换备用节点并取得真实回复。全部节点失败时返回真实错误，不再生成本地伪回复；阻塞/流式兼容路径会清理本轮消息且不扣费，regenerate/new swipe 返回稳定 502。线上真实主、备用模型对话均成功，backend/Nginx active，内外 `/health` OK，`CONTENT_MODE=local_only`，live/backup SQLite `quick_check=ok`。 |
+| WC50 | 混合文档生成回复与播放器悬浮渲染修复 | Done | 2026-07-26 对“正文 + 尾部完整 HTML 注入器”使用 fragment 兼容壳并恢复 iframe 根布局；脚本代理重写排除 CSS 类名边界；生产响应 CSP 仅补齐经过审核的 Vue、Font Awesome 和 GitHub 音频固定来源。目标回复生产桌面/390px 正文可见，播放器 fixed 54/50px、菜单初始隐藏且可展开，sandbox 仍仅 `allow-scripts`，console/page error 为 0；Tavo advanced/sandbox/opening/Slash/resize 和 Open Chat Runtime 回归通过。 |
 
 ## 本轮完成记录
 

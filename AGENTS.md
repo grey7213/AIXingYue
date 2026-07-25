@@ -63,6 +63,11 @@
 
 ## Reusable Pitfalls
 
+- Symptom: 角色卡开场后生成的 assistant 内容明明已保存，但“普通叙事正文 + 尾部完整 HTML 音乐播放器”会整块黑屏/压扁；初步恢复正文后，播放器又可能变成占满消息区的内联面板，或生产环境 BGM 被 CSP 拦截并产生 console error。
+  Cause: 高级渲染器只要在消息任意位置发现 `<html>/<body>` 就把整条回复当完整文档，而尾部播放器自身设置 `html,body{width:1px;height:1px;overflow:hidden}`，从而压扁前面的正文；随后 `rewriteTavernHelperScript()` 又对整个内联脚本文本做无边界替换，把 CSS 字符串里的 `.rp-parent-float` 等类名误改成含 `window.__xySTTop` 的选择器，导致 `position:fixed` 规则失效。生产 Nginx 响应 CSP 还可能比 iframe 内的固定资源白名单更窄，两层策略取交集后继续拦截已审核的 RP Hub 资源。
+  Fix: 将“正文前缀 + 尾部文档”识别为 mixed document，继续使用 fragment 兼容壳并在末尾恢复 iframe 根宽高/滚动；TavernHelper 全局访问重写要求 JavaScript 表达式前置边界，并排除单词、`$`、`.`、`-`，保留 CSS 类名。Nginx CSP 与 iframe 白名单对齐，仅增加固定的 `unpkg.com` Vue、`cdnjs.cloudflare.com` Font Awesome 和 `raw.githubusercontent.com` 音频来源；`connect-src`、`sandbox=allow-scripts` 和无 `allow-same-origin` 边界不变。
+  Verify: 2026-07-26 目标存档 `f2aa511f-fa76-40ba-ae2d-d3d14051f544` 的真实回复在生产 Chromium 1440/390px 均显示正文；播放器为 fixed 悬浮球（约 54/50px），菜单默认隐藏且点击展开，页面/iframe 无横向溢出，console/page error 为 0。`verify_target_mixed_document_browser.py`、Tavo advanced/sandbox/opening/Slash/resize 与 Open Chat Runtime 回归全部通过。
+
 - Symptom: 角色详情页的“历史版本”在浅色主题下出现白色/淡白色文字，版本说明、时间和版本弹窗几乎不可读；输入框聚焦或 ID 标签也可能残留深色原型皮肤。
   Cause: `frontend/app/character.html` 内联样式沿用了旧深色原型（`#fff`、淡紫透明字、透明白面板），覆盖了共享 App Shell 的 `--fy-*` 主题变量；`.xy-input:focus` 和 `.detail-id-row code` 还有旧的硬编码白底/深色面板。
   Fix: 删除角色页内联重复皮肤，将历史版本、开源条目、版本选择弹窗和错误提示统一绑定 `--fy-text/--fy-text-soft/--fy-panel/--fy-border/--fy-accent*`，为 light/dark 分别提供语义色；聚焦输入和 ID 标签也使用主题变量，并给角色页 CSS 加 cache-buster。
