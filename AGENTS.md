@@ -508,6 +508,11 @@
   Fix: 先用浏览器式请求头探测 `/models` 和一个低成本模型，再把真实目录写入独立站点预设；保留原站点默认模型。后端沿用真实错误路径，失败时不保存 user/assistant 消息、不扣积分，也不生成本地伪回复；密钥只写线上 SQLite，公开模型接口不返回密钥。
   Verify: 2026-07-26 `qinyan-gemini` 接入 `https://love.qinyan.icu/v1`，目录 17 个模型、公开总数 43 且 ID/模型唯一；`官逆次gemini-3.5-flash` 直连曾返回 200，额度耗尽后的线上失败回归确认 SSE error、无 `message_end`、消息/会话/积分均不变。配置前后备份及 live DB `quick_check=ok`，backend/Nginx active，内外 `/health` OK，`CONTENT_MODE=local_only`。
 
+- Symptom: 把主/备用模型 Base URL 换到新网关后，`/models` 对两套密钥都返回完整目录，但站点默认模型仍报 500、超时或生成空正文，URL 看似替换成功却无法正常默认对话。
+  Cause: `/models` 成功只证明目录鉴权；`假流式/`、`流式抗截断/`、`[次]` 等特殊模型路由在不同网关和 `stream` 模式下可能有独立行为。独立上游密钥也不能因为新网关可用就一并迁移，例如 Qinyan 密钥在该网关返回 401。
+  Fix: 切换前逐个密钥校验 `/models` 与现有目录差集，再用站点真实 `stream:true` 请求测试每个节点默认模型；只迁移目录和密钥都匹配的预设，独立 Qinyan/图片模型保持原地址。若旧默认不可用，保留完整模型目录但将默认改为已实测有正文的模型；SQLite 先在线备份，再原子更新 `model_presets` 和兼容旧字段。
+  Verify: 2026-07-27 主节点 17 个、备用节点 9 个模型完整切换到 `http://154.12.55.233:3000/v1`，密钥指纹不变；默认改为 `gemini-2.5-flash-cli` / `[次]gemini-3.5-flash`。公开模型 `43/43/43` 唯一且无敏感字段，主/备用站内 SSE 均有 `message_end`，积分各扣 50，测试用户/角色/会话清零；备份/live `quick_check=ok`，服务/Nginx active，内外 `/health` OK。
+
 - Symptom: SillyTavern 角色卡导入后，卡片自带的正则渲染/替换没有在聊天中生效。
   Cause: 部分卡把正则放在 `extensions.regex_scripts` 或 `TavernHelper_scripts`，而 AI星月聊天执行链路读取的是顶层 `extra_settings.regex_scripts`，且字段需要规范为 `find/replace/flags/enabled`。
   Fix: 导入时保留原始 `extensions`，同时把 `findRegex/replaceString/scriptName/disabled` 转换并提升到顶层 `regex_scripts`；不要把只有脚本/工作流但没有角色设定、开场、世界书或问候语的文件当作角色卡导入。

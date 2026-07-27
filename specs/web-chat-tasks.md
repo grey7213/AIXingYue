@@ -10,6 +10,7 @@
 - 2026-07-21 CelestiAI 主备节点改造：两套服务端密钥按节点独立保存，公开模型按名称去重为 54 个且不返回密钥；4 个共享模型支持主节点失败后自动切换备用节点，模型调用失败不再生成伪造角色回复，真实 API 与浏览器对话均通过。
 - 2026-07-15 单会话全局预设开关：对话设置新增“关闭全局预设”，仅当前普通会话同时停用后台全局 Prompt 与全局 Regex；角色提示词、世界书、角色 Regex、长期记忆和群聊不受影响。刷新/切换/复制保持，发送/续写/重生成/new swipe 共用设置。
 - 2026-07-26 新增 Qinyan OpenAI-compatible 上游：`https://love.qinyan.icu/v1` 作为独立站点预设 `qinyan-gemini` 接入，实时 `/models` 目录写入 17 个模型，公开模型总数为 43、选择 ID/模型名均唯一且不返回 API Key；默认仍保持 CelestiAI 主节点。直连探测中 `官逆次gemini-3.5-flash` 返回成功；随后上游额度不足导致其他调用返回真实 403/500，后端失败路径返回 SSE error、清理本轮消息且不扣费。配置前已备份 SQLite，备份与 live DB `quick_check=ok`。
+- 2026-07-27 主/备用模型 Base URL 切换：CelestiAI 主节点 17 个模型和备用节点 9 个模型改用 `http://154.12.55.233:3000/v1`，现有两套服务端密钥与完整目录保持不变；Qinyan 独立节点和图片模型继续使用各自原地址。旧主默认“假流式”模型在新旧地址均不能稳定生成、旧备用默认在新地址返回空正文，因此默认分别调整为实测成功的 `gemini-2.5-flash-cli` 与 `[次]gemini-3.5-flash`。公开模型仍为 `43/43/43` 唯一且无敏感字段；站内主/备用 SSE 对话均得到 `message_end`、各扣 50 惑梦币，测试用户/角色/会话清零，live/backup SQLite `quick_check=ok`。
 
 | ID | 任务 | 状态 | 验证 |
 |----|------|------|------|
@@ -64,6 +65,7 @@
 | WC49 | CelestiAI 主备模型节点与真实失败处理 | Done | 2026-07-21 主节点 48、备用节点 10、重叠 4，公开模型按名称合并去重为 54 个且不返回敏感字段；共享模型在主节点 401 或主节点密钥缺失时均会继续切换备用节点并取得真实回复。全部节点失败时返回真实错误，不再生成本地伪回复；阻塞/流式兼容路径会清理本轮消息且不扣费，regenerate/new swipe 返回稳定 502。线上真实主、备用模型对话均成功，backend/Nginx active，内外 `/health` OK，`CONTENT_MODE=local_only`，live/backup SQLite `quick_check=ok`。 |
 | WC50 | 混合文档生成回复与播放器悬浮渲染修复 | Done | 2026-07-26 对“正文 + 尾部完整 HTML 注入器”使用 fragment 兼容壳并恢复 iframe 根布局；脚本代理重写排除 CSS 类名边界；生产响应 CSP 仅补齐经过审核的 Vue、Font Awesome 和 GitHub 音频固定来源。目标回复生产桌面/390px 正文可见，播放器 fixed 54/50px、菜单初始隐藏且可展开，sandbox 仍仅 `allow-scripts`，console/page error 为 0；Tavo advanced/sandbox/opening/Slash/resize 和 Open Chat Runtime 回归通过。 |
 | WC51 | Qinyan OpenAI-compatible 上游接入 | Done | 2026-07-26 线上新增 `qinyan-gemini` 预设，`/models` 实测 17 个模型；公开 API `total=43`、ID/模型均唯一且无敏感字段；选中模型可解析到 `love.qinyan.icu`。额度不足时真实失败回归：SSE 有 error、无 `message_end`、消息/会话不落库、积分不变；服务/Nginx active、内外 `/health=OK`、`CONTENT_MODE=local_only`、live/backup SQLite `quick_check=ok`。|
+| WC52 | 主/备用模型 API Base URL 切换 | Done | 2026-07-27 主节点 17 个和备用节点 9 个模型切换到 `http://154.12.55.233:3000/v1`，两套密钥指纹及模型目录不变；Qinyan/图片模型未误改。主默认改为 `gemini-2.5-flash-cli`，备用默认改为 `[次]gemini-3.5-flash`。线上公开模型 `43/43/43` 唯一、无敏感字段；主/备用站内流式对话均成功、积分 `10000→9950→9900`，测试数据清零；备份 `/opt/ai-fengyue-backend/data/backups/ai_fengyue-before-model-url-20260727-155629.sqlite3` 与 live DB `quick_check=ok`，backend/Nginx active，内外 `/health=OK`，`CONTENT_MODE=local_only`。 |
 
 ## 本轮完成记录
 
