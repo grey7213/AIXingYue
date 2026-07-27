@@ -257,6 +257,15 @@ export const api = {
     method: 'POST',
     body: { enabled: !!enabled },
   }),
+  conversationRuntimeConfig: (convId) => rawRequest(`/console/api/web/conversations/${encodeURIComponent(convId)}/runtime-config`),
+  saveConversationPresetOverrides: (convId, payload = {}) => rawRequest(`/console/api/web/conversations/${encodeURIComponent(convId)}/preset-overrides`, {
+    method: 'POST',
+    body: payload,
+  }),
+  saveConversationWorldbookOverrides: (convId, payload = {}) => rawRequest(`/console/api/web/conversations/${encodeURIComponent(convId)}/worldbook-overrides`, {
+    method: 'POST',
+    body: payload,
+  }),
   sendChat: (payload) => rawRequest('/console/api/web/chat', { method: 'POST', body: payload }),
   sendChatStream: (payload, handlers, options) => sseRequest('/console/api/web/chat/stream', payload, handlers, options),
   continueChatStream: (payload, handlers, options) => sseRequest('/console/api/web/chat/continue/stream', payload, handlers, options),

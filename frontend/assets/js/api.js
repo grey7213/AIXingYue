@@ -195,6 +195,10 @@ export const api = {
     llmSettings: () => request('/admin/api/llm-settings'),
     saveLlmSettings: (payload) =>
       request('/admin/api/llm-settings', { method: 'POST', body: payload }),
+    discoverLlmModels: (payload) =>
+      request('/admin/api/llm-settings/discover-models', { method: 'POST', body: payload }),
+    probeLlmModels: (payload) =>
+      request('/admin/api/llm-settings/probe-models', { method: 'POST', body: payload }),
     globalPresets: () => request('/admin/api/global-presets'),
     importGlobalPromptPreset: (payload) =>
       request('/admin/api/global-presets/import-prompt', { method: 'POST', body: payload }),

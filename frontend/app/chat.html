@@ -1623,6 +1623,147 @@
     .version-option small { display: block; }
     .version-option small { margin-top: 4px; color: #806757; font-size: 12px; line-height: 1.5; white-space: pre-wrap; }
 
+    .runtime-config-teleport { display: contents; }
+    .runtime-config-dialog { width: min(960px, calc(100vw - 32px)); max-height: min(86vh, 780px); }
+    .runtime-config-tabs {
+      display: flex;
+      gap: 7px;
+      padding: 12px 18px 0;
+    }
+    .runtime-config-tabs button,
+    .runtime-config-subtabs button,
+    .runtime-config-filter button,
+    .runtime-config-toolbar button {
+      min-height: 34px;
+      padding: 7px 12px;
+      border: 1px solid rgba(123, 79, 44, .16);
+      border-radius: 9px;
+      background: rgba(255, 255, 255, .72);
+      color: #6a4f3e;
+      font-size: 12px;
+      font-weight: 750;
+      cursor: pointer;
+    }
+    .runtime-config-tabs button.is-active,
+    .runtime-config-subtabs button.is-active,
+    .runtime-config-filter button.is-active {
+      border-color: rgba(255, 46, 99, .42);
+      color: #d32250;
+      background: #fff0f4;
+    }
+    .runtime-config-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 18px;
+      border-bottom: 1px solid rgba(123, 79, 44, .12);
+    }
+    .runtime-config-toolbar input {
+      flex: 1 1 240px;
+      min-width: 0;
+      height: 38px;
+      padding: 0 12px;
+      border: 1px solid rgba(123, 79, 44, .17);
+      border-radius: 10px;
+      background: #fff;
+      color: inherit;
+      font-size: 13px;
+    }
+    .runtime-config-toolbar button.is-danger { color: #a63c31; background: #fff6f4; }
+    .runtime-config-subtabs,
+    .runtime-config-filter { display: flex; flex-wrap: wrap; gap: 6px; }
+    .runtime-config-body { min-height: 220px; overflow-y: auto; padding: 0 18px 18px; }
+    .runtime-config-summary {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 11px 0;
+      color: #876b59;
+      font-size: 12px;
+    }
+    .runtime-config-summary span {
+      padding: 5px 8px;
+      border-radius: 999px;
+      background: rgba(122, 82, 54, .07);
+    }
+    .runtime-config-empty { padding: 42px 12px; text-align: center; color: #9b8170; font-size: 13px; }
+    .runtime-config-list { display: grid; gap: 8px; }
+    .runtime-config-item {
+      border: 1px solid rgba(123, 79, 44, .14);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, .84);
+      overflow: hidden;
+    }
+    .runtime-config-item.is-disabled { opacity: .66; }
+    .runtime-config-item.is-locked { border-style: dashed; background: rgba(244, 235, 223, .68); }
+    .runtime-config-item__main {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 54px;
+      padding: 10px 12px;
+    }
+    .runtime-config-item__meta { flex: 1; min-width: 0; }
+    .runtime-config-item__meta strong,
+    .runtime-config-item__meta small { display: block; }
+    .runtime-config-item__meta strong { overflow: hidden; color: #3f2d23; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+    .runtime-config-item__meta small { margin-top: 3px; color: #8b7160; font-size: 11px; line-height: 1.4; }
+    .runtime-config-badge {
+      flex: 0 0 auto;
+      padding: 3px 7px;
+      border-radius: 999px;
+      color: #866852;
+      background: rgba(122, 82, 54, .08);
+      font-size: 10px;
+      font-weight: 800;
+    }
+    .runtime-config-badge.is-overridden { color: #c61f4c; background: #fff0f4; }
+    .runtime-config-toggle {
+      width: 46px;
+      height: 26px;
+      padding: 3px;
+      border: 0;
+      border-radius: 999px;
+      background: #d8d2ce;
+      cursor: pointer;
+      transition: background .16s;
+    }
+    .runtime-config-toggle::after {
+      content: '';
+      display: block;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, .18);
+      transition: transform .16s;
+    }
+    .runtime-config-toggle.is-on { background: #ff2e63; }
+    .runtime-config-toggle.is-on::after { transform: translateX(20px); }
+    .runtime-config-toggle:disabled { cursor: not-allowed; opacity: .52; }
+    .runtime-config-editor { padding: 0 12px 12px; border-top: 1px solid rgba(123, 79, 44, .1); }
+    .runtime-config-editor summary { padding: 10px 0; color: #b75f35; font-size: 12px; font-weight: 800; cursor: pointer; }
+    .runtime-config-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .runtime-config-fields label { display: grid; gap: 5px; color: #806757; font-size: 11px; font-weight: 750; }
+    .runtime-config-fields label.is-wide { grid-column: 1 / -1; }
+    .runtime-config-fields input,
+    .runtime-config-fields select,
+    .runtime-config-fields textarea {
+      width: 100%;
+      min-width: 0;
+      padding: 9px 10px;
+      border: 1px solid rgba(123, 79, 44, .17);
+      border-radius: 9px;
+      background: #fffdf9;
+      color: #3f2d23;
+      font-size: 12px;
+    }
+    .runtime-config-fields textarea { min-height: 132px; resize: vertical; line-height: 1.55; }
+    .runtime-config-checks { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 10px 16px; }
+    .runtime-config-checks label { display: flex; align-items: center; gap: 6px; }
+    .runtime-config-editor__foot { display: flex; justify-content: flex-end; padding-top: 10px; }
+
     [data-theme="dark"] .chat-dialog {
       border-color: rgba(255, 215, 173, .15);
       background: rgba(35, 24, 20, .98);
@@ -1634,12 +1775,28 @@
     [data-theme="dark"] .chat-dialog__button { background: rgba(255, 255, 255, .05); color: #fff1df; }
     [data-theme="dark"] .mod-search { background: rgba(0, 0, 0, .2); color: #fff1df; }
     [data-theme="dark"] .mod-order-lock { background: rgba(255, 255, 255, .035); }
+    [data-theme="dark"] .runtime-config-item,
+    [data-theme="dark"] .runtime-config-toolbar input,
+    [data-theme="dark"] .runtime-config-fields input,
+    [data-theme="dark"] .runtime-config-fields select,
+    [data-theme="dark"] .runtime-config-fields textarea,
+    [data-theme="dark"] .runtime-config-tabs button,
+    [data-theme="dark"] .runtime-config-subtabs button,
+    [data-theme="dark"] .runtime-config-filter button,
+    [data-theme="dark"] .runtime-config-toolbar button { background: rgba(255, 255, 255, .05); color: #fff1df; }
+    [data-theme="dark"] .runtime-config-item__meta strong { color: #fff1df; }
 
     @media (max-width: 720px) {
       .chat-dialog { width: calc(100vw - 20px); max-height: calc(var(--xy-visual-height, 100vh) - 24px); }
       .mod-columns { grid-template-columns: 1fr; overflow-y: auto; }
       .mod-column { min-height: 245px; }
       .chat-dialog__foot { align-items: flex-start; }
+      .runtime-config-dialog { width: calc(100vw - 20px); }
+      .runtime-config-fields { grid-template-columns: 1fr; }
+      .runtime-config-fields label.is-wide,
+      .runtime-config-checks { grid-column: auto; }
+      .runtime-config-toolbar { align-items: stretch; }
+      .runtime-config-toolbar input { flex-basis: 100%; }
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -1648,13 +1805,13 @@
       .generation-status__dot { animation: none !important; transition: none !important; }
     }
   </style>
-  <script type="module" src="/app/assets/js/chat.js?v=20260723-mixed-document-player"></script>
+  <script type="module" src="/app/assets/js/chat.js?v=20260728-runtime-config-stable"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen">
   <div class="xy-stars-bg"></div>
 
-  <div class="app-shell chat-shell" x-data="chatPage()" x-cloak @keydown.escape.window="listOpen=false; rightMenuOpen=false; memoryOpen=false; advancedRenderOpen=false; modPanelOpen=false">
+  <div class="app-shell chat-shell" x-data="chatPage()" x-cloak @keydown.escape.window="listOpen=false; rightMenuOpen=false; memoryOpen=false; advancedRenderOpen=false; modPanelOpen=false; runtimeConfigOpen=false">
 
     <div class="chat-menu-backdrop" x-show="listOpen" x-transition.opacity @click="listOpen=false"></div>
     <div class="chat-menu-backdrop" x-show="rightMenuOpen" x-transition.opacity @click="rightMenuOpen=false"></div>
@@ -1742,6 +1899,9 @@
             </button>
             <button type="button" :class="{ 'is-active': modPanelOpen }" @click.stop="openModPanel" :disabled="!conversation?.id" title="管理当前对话使用的 Mod">
               <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 7h14M7 4v6m10 2v8M5 16h14m-8-3v6"/></svg><span>Mod</span>
+            </button>
+            <button type="button" :class="{ 'is-active': runtimeConfigOpen }" @click.stop="openRuntimeConfigPanel('preset')" :disabled="!conversation?.id" title="逐项调整当前会话的预设和世界书">
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M7 12h10M9 18h6M8 4v4m8 2v4m-4 2v4"/></svg><span>会话配置</span>
             </button>
             <button type="button" :class="{ 'is-active': galgameEnabled }" @click.stop="toggleGalgame" :disabled="!conversation || !conversation.id || galgameBusy" :title="conversation && conversation.id ? '仅对当前对话启用梦境选项 - 正常推进' : '请先创建或选择一个对话'">
               <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6.5h16v11H4zM7.5 10.5h3m-1.5-1.5v3M14.5 10.5h.01M17.5 13.5h.01"/></svg><span x-text="galgameBusy ? '切换中' : 'Galgame 选项'"></span>
@@ -2027,6 +2187,131 @@
       </div>
       <footer class="chat-dialog__foot"><span x-text="modSaving ? '正在保存…' : `已选择 ${modActive.length} 个 Mod`"></span><div><button type="button" class="chat-dialog__button" @click="closeModPanel">取消</button><button type="button" class="chat-dialog__button chat-dialog__button--primary" @click="saveActiveMods" :disabled="modSaving || !conversation?.id">保存到当前对话</button></div></footer>
     </section>
+
+    <template x-teleport="body">
+      <div class="runtime-config-teleport" x-show="runtimeConfigOpen" x-transition.opacity>
+        <div class="chat-dialog-mask" @click="closeRuntimeConfigPanel"></div>
+        <section class="chat-dialog runtime-config-dialog" @click.stop aria-label="当前会话预设与世界书">
+          <header class="chat-dialog__head">
+            <div><strong>当前会话配置</strong><small>只影响这个存档；不会改写角色卡、Mod 或后台全局配置。</small></div>
+            <button type="button" class="chat-dialog__close" @click="closeRuntimeConfigPanel" aria-label="关闭">×</button>
+          </header>
+          <nav class="runtime-config-tabs">
+            <button type="button" :class="{ 'is-active': runtimeConfigTab === 'preset' }" @click="runtimeConfigTab='preset'; runtimeConfigSearch=''">当前预设</button>
+            <button type="button" :class="{ 'is-active': runtimeConfigTab === 'worldbook' }" @click="runtimeConfigTab='worldbook'; runtimeConfigSearch=''">当前世界书</button>
+          </nav>
+
+          <template x-if="runtimeConfigTab === 'preset'">
+            <div class="min-h-0 flex flex-col">
+              <div class="runtime-config-toolbar">
+                <div class="runtime-config-subtabs">
+                  <button type="button" :class="{ 'is-active': runtimeConfigPresetKind === 'prompt' }" @click="runtimeConfigPresetKind='prompt'">Prompt</button>
+                  <button type="button" :class="{ 'is-active': runtimeConfigPresetKind === 'regex' }" @click="runtimeConfigPresetKind='regex'">Regex</button>
+                </div>
+                <input x-model="runtimeConfigSearch" placeholder="搜索条目名称或标识">
+                <button type="button" @click="batchSetRuntimePresetEntries(true)" :disabled="runtimeConfigSaving">筛选项全开</button>
+                <button type="button" @click="batchSetRuntimePresetEntries(false)" :disabled="runtimeConfigSaving">筛选项全关</button>
+                <button type="button" class="is-danger" @click="resetRuntimeOverrides(runtimeConfigPresetKind)" :disabled="runtimeConfigSaving">恢复继承</button>
+              </div>
+              <div class="runtime-config-body">
+                <div class="runtime-config-summary" x-show="runtimeConfig">
+                  <span x-text="`预设：${runtimePreset().name || '未启用'}`"></span>
+                  <span x-text="`已启用 ${runtimePreset().enabled_count || 0} / ${runtimePreset().total || 0}`"></span>
+                  <span x-show="runtimeConfig && !runtimeConfig.global_preset_enabled">总开关已关闭；恢复后逐项覆盖仍保留</span>
+                </div>
+                <div class="runtime-config-empty" x-show="runtimeConfigLoading">正在读取当前会话预设…</div>
+                <div class="runtime-config-empty" x-show="!runtimeConfigLoading && filteredRuntimePresetEntries().length === 0">没有匹配的预设条目</div>
+                <div class="runtime-config-list" x-show="!runtimeConfigLoading">
+                  <template x-for="entry in filteredRuntimePresetEntries()" :key="`${runtimeConfigPresetKind}:${entry.id}`">
+                    <article class="runtime-config-item" :class="{ 'is-disabled': !entry.enabled, 'is-locked': entry.locked }">
+                      <div class="runtime-config-item__main">
+                        <div class="runtime-config-item__meta">
+                          <strong x-text="entry.name || entry.id"></strong>
+                          <small x-text="`${entry.id}${entry.position ? ' · ' + entry.position : ''}${entry.placement?.length ? ' · placement ' + entry.placement.join('/') : ''}`"></small>
+                        </div>
+                        <span class="runtime-config-badge" :class="{ 'is-overridden': entry.overridden }" x-text="entry.locked ? '占位/锁定' : (entry.overridden ? '当前会话覆盖' : '继承后台')"></span>
+                        <button type="button" class="runtime-config-toggle" :class="{ 'is-on': entry.enabled }" @click="toggleRuntimePresetEntry(entry)" :disabled="entry.locked || runtimeConfigSaving" :aria-label="entry.enabled ? '停用条目' : '启用条目'"></button>
+                      </div>
+                    </article>
+                  </template>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <template x-if="runtimeConfigTab === 'worldbook'">
+            <div class="min-h-0 flex flex-col">
+              <div class="runtime-config-toolbar">
+                <div class="runtime-config-filter">
+                  <template x-for="source in ['all','required','mod','conversation','character']" :key="source">
+                    <button type="button" :class="{ 'is-active': runtimeConfigSourceFilter === source }" @click="runtimeConfigSourceFilter=source" x-text="runtimeSourceFilterLabel(source)"></button>
+                  </template>
+                </div>
+                <input x-model="runtimeConfigSearch" placeholder="搜索名称、关键词或正文">
+                <button type="button" @click="batchSetRuntimeWorldbookEntries(true)" :disabled="runtimeConfigSaving">筛选项全开</button>
+                <button type="button" @click="batchSetRuntimeWorldbookEntries(false)" :disabled="runtimeConfigSaving">筛选项全关</button>
+                <button type="button" class="is-danger" @click="resetRuntimeOverrides('worldbook')" :disabled="runtimeConfigSaving">恢复全部继承</button>
+              </div>
+              <div class="runtime-config-body">
+                <div class="runtime-config-summary" x-show="runtimeConfig">
+                  <span x-text="`共 ${runtimeConfig?.worldbook?.total || 0} 条`"></span>
+                  <span x-text="`启用 ${runtimeConfig?.worldbook?.enabled || 0} 条`"></span>
+                  <span x-text="`当前会话覆盖 ${runtimeConfig?.worldbook?.overridden || 0} 条`"></span>
+                  <span>顺序：平台必需 → Mod → 当前会话 → 角色卡</span>
+                </div>
+                <div class="runtime-config-empty" x-show="runtimeConfigLoading">正在读取当前会话世界书…</div>
+                <div class="runtime-config-empty" x-show="!runtimeConfigLoading && filteredRuntimeWorldbookEntries().length === 0">没有匹配的世界书条目</div>
+                <div class="runtime-config-list" x-show="!runtimeConfigLoading">
+                  <template x-for="entry in filteredRuntimeWorldbookEntries()" :key="entry.source_key">
+                    <article class="runtime-config-item" :class="{ 'is-disabled': !entry.enabled, 'is-locked': entry.locked }">
+                      <div class="runtime-config-item__main">
+                        <div class="runtime-config-item__meta">
+                          <strong x-text="entry.name || entry.id"></strong>
+                          <small x-text="`${runtimeSourceFilterLabel(entry.source)} · ${entry.keys?.length ? entry.keys.slice(0, 4).join(' / ') : (entry.constant ? '常量条目' : '无关键词')}`"></small>
+                        </div>
+                        <span class="runtime-config-badge" :class="{ 'is-overridden': entry.overridden }" x-text="entry.locked ? '平台锁定' : (entry.overridden ? '当前会话覆盖' : '继承原条目')"></span>
+                        <button type="button" class="runtime-config-toggle" :class="{ 'is-on': entry.enabled }" @click="toggleRuntimeWorldbookEntry(entry)" :disabled="entry.locked || runtimeConfigSaving" :aria-label="entry.enabled ? '停用条目' : '启用条目'"></button>
+                      </div>
+                      <details class="runtime-config-editor" x-show="!entry.locked">
+                        <summary>编辑这个存档中的条目</summary>
+                        <div class="runtime-config-fields">
+                          <label>名称<input x-model="entry.name" maxlength="80"></label>
+                          <label>位置<select x-model="entry.position"><option value="system">角色设定区</option><option value="post_history">历史后</option><option value="depth">指定深度</option></select></label>
+                          <label class="is-wide">主关键词<input :value="(entry.keys || []).join(', ')" @change="entry.keys=$event.target.value.split(/[,，\n]/).map(v=>v.trim()).filter(Boolean)"></label>
+                          <label class="is-wide">二级关键词<input :value="(entry.secondary_keys || []).join(', ')" @change="entry.secondary_keys=$event.target.value.split(/[,，\n]/).map(v=>v.trim()).filter(Boolean)"></label>
+                          <label class="is-wide">正文<textarea x-model="entry.content" maxlength="8000"></textarea></label>
+                          <label>消息身份<select x-model="entry.role"><option value="system">system</option><option value="user">user</option><option value="assistant">assistant</option></select></label>
+                          <label>选择逻辑<select x-model="entry.selective_logic"><option value="and_any">二级任一命中</option><option value="and_all">二级全部命中</option><option value="not_any">二级全部未命中</option><option value="not_all">二级至少一个未命中</option></select></label>
+                          <label>深度<input type="number" min="0" max="20" x-model.number="entry.depth"></label>
+                          <label>扫描深度<input type="number" min="0" max="100" x-model.number="entry.scan_depth"></label>
+                          <label>优先级<input type="number" min="-10000" max="10000" x-model.number="entry.priority"></label>
+                          <label>顺序<input type="number" min="-10000" max="10000" x-model.number="entry.order"></label>
+                          <label>概率 %<input type="number" min="0" max="100" x-model.number="entry.probability"></label>
+                          <label>Sticky<input type="number" min="0" max="9999" x-model.number="entry.sticky"></label>
+                          <label>Cooldown<input type="number" min="0" max="9999" x-model.number="entry.cooldown"></label>
+                          <label>Delay<input type="number" min="0" max="9999" x-model.number="entry.delay"></label>
+                          <div class="runtime-config-checks">
+                            <label><input type="checkbox" x-model="entry.constant">常量</label>
+                            <label><input type="checkbox" x-model="entry.selective">选择性</label>
+                            <label><input type="checkbox" x-model="entry.recursive">递归扫描</label>
+                            <label><input type="checkbox" x-model="entry.case_sensitive">区分大小写</label>
+                            <label><input type="checkbox" x-model="entry.match_whole_words">全词匹配</label>
+                          </div>
+                        </div>
+                        <div class="runtime-config-editor__foot"><button type="button" class="chat-dialog__button chat-dialog__button--primary" @click="saveRuntimeWorldbookEntry(entry)" :disabled="runtimeConfigSaving || !entry.content.trim()">保存到当前会话</button></div>
+                      </details>
+                      <div class="runtime-config-editor" x-show="entry.locked"><div class="runtime-config-summary"><span>平台必需条目正文已隐藏，始终启用且不可修改。</span></div></div>
+                    </article>
+                  </template>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <footer class="chat-dialog__foot"><span x-text="runtimeConfigSaving ? '正在保存当前会话覆盖…' : (runtimeConfigLoading ? '正在加载…' : '改动会在下一次生成时生效')"></span><div><button type="button" class="chat-dialog__button" @click="closeRuntimeConfigPanel">完成</button></div></footer>
+        </section>
+      </div>
+    </template>
 
     <div class="chat-dialog-mask" x-show="versionPickOpen" x-transition.opacity></div>
     <section class="chat-dialog chat-dialog--version" x-show="versionPickOpen" x-transition aria-label="选择角色卡版本">

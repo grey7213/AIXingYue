@@ -1,4 +1,4 @@
-import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js?v=20260720-community-versions';
+import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js?v=20260728-runtime-config-stable';
 import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-channels-closed';
 import { cleanCardExperienceText, consumeCardExperienceText, mountCardExperience } from '/app/assets/js/card-experience-runtime.mjs?v=20260720-community-versions';
 import { destroyOpenChatRuntime, mountOpenChatRuntime } from '/app/assets/js/open-chat-runtime.mjs?v=20260721-open-chat-runtime';
@@ -55,12 +55,34 @@ const MESSAGE_LOAD_LIMIT = 80;
 const CHAT_SCROLL_KEY_PREFIX = 'ai_xingyue_chat_scroll:';
 const ADVANCED_RENDER_SETTINGS_KEY = 'ai_xingyue_tavo_render_settings';
 const ADVANCED_JS_MODES = new Set(['disabled', 'auto', 'script', 'code-block']);
+const CONVERSATION_WORLDBOOK_NAMES = new Map();
 const DEFAULT_ADVANCED_RENDER_SETTINGS = Object.freeze({
   enabled: true,
   javascript: 'auto',
   confirmTavoJs: true,
   formula: 'disabled',
 });
+
+function cacheConversationWorldbookNames(conversationId, config = {}) {
+  const id = String(conversationId || '').trim();
+  if (!id) return;
+  const source = config?.worldbook?.names || config?.names || config;
+  if (!source || typeof source !== 'object') return;
+  const character = source.character && typeof source.character === 'object' ? source.character : {};
+  CONVERSATION_WORLDBOOK_NAMES.set(id, {
+    all: Array.isArray(source.all) ? source.all.map(String) : [],
+    global: Array.isArray(source.global) ? source.global.map(String) : [],
+    chat: source.chat ? String(source.chat) : null,
+    character: {
+      primary: character.primary ? String(character.primary) : null,
+      additional: Array.isArray(character.additional) ? character.additional.map(String) : [],
+    },
+  });
+}
+
+function conversationWorldbookNames(conversationId) {
+  return CONVERSATION_WORLDBOOK_NAMES.get(String(conversationId || '').trim()) || {};
+}
 
 function escapeHtml(value) {
   return String(value == null ? '' : value)
@@ -109,6 +131,7 @@ function normalizeRenderOptions(options = {}) {
     settings: normalizeAdvancedRenderSettings(options.advancedRenderSettings || options.settings || {}),
     confirmedTavoFrames: options.confirmedTavoFrames || {},
     pluginFragments: Array.isArray(options.pluginFragments) ? options.pluginFragments : [],
+    worldbookNames: options.worldbookNames && typeof options.worldbookNames === 'object' ? options.worldbookNames : {},
     fromFence: !!options.fromFence,
     fenceLang: normalizeFenceLang(options.fenceLang || ''),
   };
@@ -136,6 +159,7 @@ const INTERNAL_SECTION_MARKERS = [
 ];
 const CHINESE_INTERNAL_SECTION_MARKERS = new Set([
   '思考', '思考过程', '推理', '推理过程', '分析', '分析过程', '计划', '内部推理', '创作思路',
+  '检设定', '检查设定', '设定检查', '历史记录分析', '剧情设定分析', '回复规划', '正文规划',
 ]);
 const METADATA_FENCE_LANGS = new Set(['yaml', 'yml', 'json', 'jsonc', 'toml', 'ini', 'properties', 'meta', 'metadata']);
 const METADATA_FENCE_MARKERS = [
@@ -211,6 +235,7 @@ function cleanInternalHeading(line) {
   return String(line || '')
     .trim()
     .replace(/^\s{0,3}#{1,6}\s*/, '')
+    .replace(/^(?:[一二三四五六七八九十]+|[A-Za-z0-9]+)\s*[、.．)）]\s*/, '')
     .replace(/^[*_`#\s]+|[*_`#\s]+$/g, '')
     .replace(/\s+/g, ' ')
     .trim();
@@ -593,7 +618,11 @@ function sanitizeAdvancedHtml(raw, options = {}) {
   };
 }
 
-function buildTavoBridgeScript() {
+function buildTavoBridgeScript(worldbookNames = {}) {
+  const worldbookNamesJson = JSON.stringify(worldbookNames && typeof worldbookNames === 'object' ? worldbookNames : {})
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026');
   return `
     (() => {
       const listeners = Object.create(null);
@@ -700,8 +729,87 @@ function buildTavoBridgeScript() {
         } catch (e) { return false; }
       };
       topProxy.triggerSlash = triggerSlash;
-      const emptyWorldNames = () => [];
-      const emptyWorld = () => Promise.resolve([]);
+      const rpcPending = new Map();
+      let rpcSequence = 0;
+      const rpc = (method, params = {}) => new Promise((resolve, reject) => {
+        const requestId = 'tavo-' + Date.now().toString(36) + '-' + (++rpcSequence) + '-' + Math.random().toString(36).slice(2, 8);
+        const timer = setTimeout(() => {
+          rpcPending.delete(requestId);
+          reject(new Error('惑梦当前会话 RPC 超时'));
+        }, 12000);
+        rpcPending.set(requestId, { resolve, reject, timer });
+        try {
+          parent.postMessage({
+            type: 'xy-tavo-rpc-request',
+            request_id: requestId,
+            method: String(method || '').slice(0, 80),
+            params: clone(params),
+          }, '*');
+        } catch (error) {
+          clearTimeout(timer);
+          rpcPending.delete(requestId);
+          reject(error);
+        }
+      });
+      window.addEventListener('message', event => {
+        const data = event && event.data;
+        if (!data || data.type !== 'xy-tavo-rpc-response') return;
+        const pending = rpcPending.get(String(data.request_id || ''));
+        if (!pending) return;
+        rpcPending.delete(String(data.request_id || ''));
+        clearTimeout(pending.timer);
+        if (data.ok) pending.resolve(clone(data.result));
+        else pending.reject(new Error(String(data.error || '当前会话操作失败')));
+      });
+      let worldNameCache = Object.assign({ all: [], global: [], chat: null, character: { primary: null, additional: [] } }, ${worldbookNamesJson});
+      const refreshWorldbookNames = () => rpc('worldbook.names').then(value => {
+        if (value && typeof value === 'object') worldNameCache = Object.assign({}, worldNameCache, clone(value));
+        return clone(worldNameCache);
+      });
+      if (!Array.isArray(worldNameCache.all) || worldNameCache.all.length === 0 || !worldNameCache.chat) {
+        refreshWorldbookNames().catch(() => {});
+      }
+      const getWorldbookNames = () => Array.isArray(worldNameCache.all) ? clone(worldNameCache.all) : [];
+      const getGlobalWorldbookNames = () => Array.isArray(worldNameCache.global) ? clone(worldNameCache.global) : [];
+      const getCharWorldbookNames = () => clone(worldNameCache.character || { primary: null, additional: [] });
+      const getChatWorldbookName = () => worldNameCache.chat || null;
+      const getWorldbook = async name => {
+        const requested = String(name || '');
+        if (!requested || !getWorldbookNames().includes(requested)) await refreshWorldbookNames();
+        return rpc('worldbook.get', { name: requested }).then(value => Array.isArray(value?.entries) ? value.entries : []);
+      };
+      const replaceWorldbook = (name, entries, options) => rpc('worldbook.replace', {
+        name: String(name || ''),
+        entries: Array.isArray(entries) ? entries : [],
+        options: options && typeof options === 'object' ? { render: String(options.render || '').slice(0, 20) } : {},
+      }).then(value => Array.isArray(value?.entries) ? value.entries : []);
+      const updateWorldbookWith = async (name, updater, options) => {
+        const current = await getWorldbook(name);
+        const next = typeof updater === 'function' ? await updater(clone(current)) : current;
+        return replaceWorldbook(name, Array.isArray(next) ? next : current, options);
+      };
+      const createWorldbookEntries = async (name, newEntries, options) => {
+        let added = [];
+        const result = await updateWorldbookWith(name, current => {
+          const start = current.length;
+          added = (Array.isArray(newEntries) ? newEntries : []).slice(0, 80);
+          return current.concat(added);
+        }, options);
+        return { worldbook: result, new_entries: result.slice(Math.max(0, result.length - added.length)) };
+      };
+      const deleteWorldbookEntries = async (name, predicate, options) => {
+        let deleted = [];
+        const result = await updateWorldbookWith(name, current => {
+          const kept = [];
+          current.forEach(item => {
+            let match = false;
+            try { match = typeof predicate === 'function' && predicate(item); } catch (e) { match = false; }
+            if (match) deleted.push(item); else kept.push(item);
+          });
+          return kept;
+        }, options);
+        return { worldbook: result, deleted_entries: deleted };
+      };
       window.__xyLocalStorage = storage;
       window.__xySessionStorage = storage;
       window.__xySTTop = topProxy;
@@ -713,13 +821,19 @@ function buildTavoBridgeScript() {
       window.getLastMessageId = () => 0;
       window.getCurrentMessageId = () => 0;
       window.triggerSlash = triggerSlash;
-      window.getCharWorldbookNames = () => ({ primary: '', additional: [] });
-      window.getChatWorldbookName = () => '';
-      window.getGlobalWorldbookNames = emptyWorldNames;
-      window.getWorldbook = emptyWorld;
-      window.updateWorldbookWith = (name, updater) => emptyWorld().then(entries => {
-        try { return typeof updater === 'function' ? updater(entries) : entries; } catch (e) { return entries; }
-      });
+      window.getWorldbookNames = getWorldbookNames;
+      window.getCharWorldbookNames = getCharWorldbookNames;
+      window.getChatWorldbookName = getChatWorldbookName;
+      window.getGlobalWorldbookNames = getGlobalWorldbookNames;
+      window.getWorldbook = getWorldbook;
+      window.replaceWorldbook = replaceWorldbook;
+      window.updateWorldbookWith = updateWorldbookWith;
+      window.createWorldbookEntries = createWorldbookEntries;
+      window.deleteWorldbookEntries = deleteWorldbookEntries;
+      window.rebindGlobalWorldbooks = names => rpc('worldbook.rebind-global', { names: Array.isArray(names) ? names : [] });
+      window.rebindCharWorldbooks = (_name, books) => rpc('worldbook.rebind-character', { books: books || {} });
+      window.rebindChatWorldbook = (_name, name) => rpc('worldbook.rebind-chat', { name: String(name || '') });
+      window.getOrCreateChatWorldbook = (_name, name) => rpc('worldbook.get-or-create-chat', { name: String(name || '') }).then(value => value?.name || '');
       const api = {
         version: 'ai-xingyue-safe',
         notify(message) {
@@ -749,12 +863,38 @@ function buildTavoBridgeScript() {
           resize();
           return value;
         },
+        getWorldbookNames,
+        getGlobalWorldbookNames,
+        getCharWorldbookNames,
+        getChatWorldbookName,
+        getWorldbook,
+        replaceWorldbook,
+        updateWorldbookWith,
+        createWorldbookEntries,
+        deleteWorldbookEntries,
         confirm(action) {
           try { parent.postMessage({ type: 'xy-tavo-confirm-request', action: String(action || '').slice(0, 120) }, '*'); } catch (e) {}
           return false;
         },
         request() { return Promise.reject(new Error('Network access is disabled in 惑梦（Homer） Tavo sandbox')); },
       };
+      const tavernHelper = {
+        getWorldbookNames,
+        getGlobalWorldbookNames,
+        getCharWorldbookNames,
+        getChatWorldbookName,
+        getWorldbook,
+        replaceWorldbook,
+        updateWorldbookWith,
+        createWorldbookEntries,
+        deleteWorldbookEntries,
+        rebindGlobalWorldbooks: window.rebindGlobalWorldbooks,
+        rebindCharWorldbooks: window.rebindCharWorldbooks,
+        rebindChatWorldbook: window.rebindChatWorldbook,
+        getOrCreateChatWorldbook: window.getOrCreateChatWorldbook,
+      };
+      topProxy.TavernHelper = tavernHelper;
+      window.TavernHelper = tavernHelper;
       Object.defineProperty(window, 'TavoJS', { value: api, configurable: false, writable: false });
       window.tavo = api;
       window.Tavo = api;
@@ -833,7 +973,7 @@ function buildSandboxSrcdoc(raw, options = {}) {
   const resizeScript = `
     (()=>{let last=0;const send=()=>{const root=document.documentElement;const body=document.body;root.style.setProperty('--xy-frame-width',Math.round(innerWidth||root.clientWidth||0)+'px');const h=Math.ceil(Math.max(root.scrollHeight,body?body.scrollHeight:0,260));if(Math.abs(h-last)>4){last=h;parent.postMessage({type:'xy-tavo-resize',height:h,layout:body?.dataset.xyLayout||'fragment'},'*');}};addEventListener('load',send);addEventListener('resize',send);addEventListener('orientationchange',()=>setTimeout(send,120));addEventListener('message',event=>{if(event&&event.data&&event.data.type==='xy-tavo-parent-resize'){try{dispatchEvent(new Event('resize'));}catch(e){}setTimeout(send,20);}});try{new ResizeObserver(send).observe(document.documentElement);if(document.body)new ResizeObserver(send).observe(document.body);}catch(e){}setTimeout(send,80);setTimeout(send,600);})();
   `;
-  const bridge = allowScripts ? `<script>${buildTavoBridgeScript()}<\/script>` : '';
+  const bridge = allowScripts ? `<script>${buildTavoBridgeScript(options.worldbookNames)}<\/script>` : '';
   const resize = allowScripts ? `<script>${resizeScript}<\/script>` : '';
   const rawStore = /id=["']raw-data-store["']/i.test(sanitized.body)
     ? ''
@@ -873,7 +1013,11 @@ function renderAdvancedFrame(code, options = {}) {
     const action = `<div class="tavo-confirm"><button type="button" class="tavo-run-btn" data-tavo-key="${escapeAttr(key)}">启用 TavoJS</button><span>隔离执行</span></div>`;
     return renderAdvancedPausedCard(source, 'TavoJS', '等待确认', action);
   }
-  const srcdoc = buildSandboxSrcdoc(source, { allowScripts, pluginFragments: renderOptions.pluginFragments });
+  const srcdoc = buildSandboxSrcdoc(source, {
+    allowScripts,
+    pluginFragments: renderOptions.pluginFragments,
+    worldbookNames: renderOptions.worldbookNames,
+  });
   const sandbox = allowScripts ? 'allow-scripts' : '';
   const status = allowScripts ? '隔离 TavoJS' : '静态渲染';
   return `<section class="tavo-frame-card"><div class="tavo-frame-card__bar"><span>可视化</span><span>${status}</span></div><iframe class="tavo-frame" sandbox="${sandbox}" referrerpolicy="no-referrer" loading="lazy" srcdoc="${escapeAttr(srcdoc)}"></iframe>${renderAdvancedSourcePreview(source)}</section>`;
@@ -1134,6 +1278,35 @@ function bindTavoFrameResizeListener() {
       if (message && typeof window.__xyTavoSendMessage === 'function') window.__xyTavoSendMessage(message);
       return;
     }
+    if (data.type === 'xy-tavo-rpc-request') {
+      const requestId = String(data.request_id || '').trim().slice(0, 160);
+      const method = String(data.method || '').trim().slice(0, 80);
+      if (!requestId || !method || typeof window.__xyTavoRuntimeRpc !== 'function') return;
+      let params = data.params;
+      try {
+        const serialized = JSON.stringify(params == null ? {} : params);
+        if (serialized.length > 120000) throw new Error('RPC 参数过大');
+        params = JSON.parse(serialized);
+      } catch (error) {
+        try { event.source?.postMessage({ type: 'xy-tavo-rpc-response', request_id: requestId, ok: false, error: String(error?.message || 'RPC 参数无效').slice(0, 240) }, '*'); } catch { /* ignore */ }
+        return;
+      }
+      Promise.resolve()
+        .then(() => window.__xyTavoRuntimeRpc(method, params, sourceFrame))
+        .then(result => {
+          try {
+            const serialized = JSON.stringify(result == null ? null : result);
+            if (serialized.length > 2_000_000) throw new Error('RPC 返回值过大');
+            event.source?.postMessage({ type: 'xy-tavo-rpc-response', request_id: requestId, ok: true, result: JSON.parse(serialized) }, '*');
+          } catch (error) {
+            try { event.source?.postMessage({ type: 'xy-tavo-rpc-response', request_id: requestId, ok: false, error: String(error?.message || 'RPC 返回值无效').slice(0, 240) }, '*'); } catch { /* ignore */ }
+          }
+        })
+        .catch(error => {
+          try { event.source?.postMessage({ type: 'xy-tavo-rpc-response', request_id: requestId, ok: false, error: String(error?.message || '当前会话操作失败').slice(0, 240) }, '*'); } catch { /* ignore */ }
+        });
+      return;
+    }
     if (data.type !== 'xy-tavo-resize') return;
     const maxHeight = data.layout === 'document' ? 1200 : 860;
     const height = Math.max(260, Math.min(parseInt(data.height, 10) || 0, maxHeight));
@@ -1200,6 +1373,15 @@ function chatPage() {
     modLoading: false,
     modSaving: false,
     modDragId: '',
+    runtimeConfigOpen: false,
+    runtimeConfigTab: 'preset',
+    runtimeConfigPresetKind: 'prompt',
+    runtimeConfigSearch: '',
+    runtimeConfigSourceFilter: 'all',
+    runtimeConfig: null,
+    runtimeConfigLoading: false,
+    runtimeConfigSaving: false,
+    _runtimeConfigLoadSeq: 0,
     versionPickOpen: false,
     versionPickList: [],
     versionPickSelectedId: '',
@@ -1265,6 +1447,7 @@ function chatPage() {
         await this.sendMessage(message);
         return true;
       };
+      window.__xyTavoRuntimeRpc = (method, params, sourceFrame) => this.handleTavoRuntimeRpc(method, params, sourceFrame);
       this.siteSettings = await loadPublicSiteSettings().catch(() => null);
       if (!requireAuth()) return;
       const cached = getCachedUser();
@@ -1335,6 +1518,7 @@ function chatPage() {
     toggleAdvancedRenderPanel() {
       this.advancedRenderOpen = !this.advancedRenderOpen;
       if (this.advancedRenderOpen) this.memoryOpen = false;
+      if (this.advancedRenderOpen) this.runtimeConfigOpen = false;
       this.rightMenuOpen = false;
     },
 
@@ -1344,6 +1528,7 @@ function chatPage() {
 
     async openModPanel() {
       this.rightMenuOpen = false;
+      this.runtimeConfigOpen = false;
       if (!this.conversation?.id) {
         alert('请先创建或选择一个对话，再管理当前对话使用的 Mod。');
         return;
@@ -1352,6 +1537,292 @@ function chatPage() {
       this.modLibrarySearch = '';
       this.modActiveSearch = '';
       await this.loadMods();
+    },
+
+    async openRuntimeConfigPanel(tab = 'preset') {
+      this.rightMenuOpen = false;
+      this.memoryOpen = false;
+      this.advancedRenderOpen = false;
+      this.modPanelOpen = false;
+      if (!this.conversation?.id) {
+        alert('请先创建或选择一个对话，再管理当前会话配置。');
+        return;
+      }
+      this.runtimeConfigTab = tab === 'worldbook' ? 'worldbook' : 'preset';
+      this.runtimeConfigSearch = '';
+      this.runtimeConfigSourceFilter = 'all';
+      this.runtimeConfigOpen = true;
+      await this.loadRuntimeConfig();
+    },
+
+    closeRuntimeConfigPanel() {
+      if (this.runtimeConfigSaving) return;
+      this.runtimeConfigOpen = false;
+    },
+
+    async loadRuntimeConfig() {
+      const conversationId = this.conversation?.id;
+      if (!conversationId) return;
+      const seq = ++this._runtimeConfigLoadSeq;
+      this.runtimeConfigLoading = true;
+      try {
+        const response = await api.conversationRuntimeConfig(conversationId);
+        if (seq !== this._runtimeConfigLoadSeq || this.conversation?.id !== conversationId) return;
+        const config = response?.data || response || null;
+        cacheConversationWorldbookNames(conversationId, config || {});
+        this.runtimeConfig = config;
+      } catch (err) {
+        if (seq === this._runtimeConfigLoadSeq && this.conversation?.id === conversationId) {
+          this.runtimeConfig = null;
+          alert(err?.message || '当前会话配置加载失败');
+        }
+      } finally {
+        if (seq === this._runtimeConfigLoadSeq) this.runtimeConfigLoading = false;
+      }
+    },
+
+    runtimePreset() {
+      return this.runtimeConfig?.preset?.[this.runtimeConfigPresetKind] || { entries: [], name: '', enabled: false };
+    },
+
+    filteredRuntimePresetEntries() {
+      const query = String(this.runtimeConfigSearch || '').trim().toLowerCase();
+      const entries = Array.isArray(this.runtimePreset().entries) ? this.runtimePreset().entries : [];
+      return entries.filter(item => !query || `${item.name || ''} ${item.id || ''} ${item.position || ''}`.toLowerCase().includes(query));
+    },
+
+    filteredRuntimeWorldbookEntries() {
+      const query = String(this.runtimeConfigSearch || '').trim().toLowerCase();
+      const source = this.runtimeConfigSourceFilter;
+      const entries = Array.isArray(this.runtimeConfig?.worldbook?.entries) ? this.runtimeConfig.worldbook.entries : [];
+      return entries.filter(item => {
+        if (source !== 'all' && item.source !== source) return false;
+        return !query || `${item.name || ''} ${item.id || ''} ${item.content || ''} ${(item.keys || []).join(' ')}`.toLowerCase().includes(query);
+      });
+    },
+
+    runtimeSourceFilterLabel(source) {
+      return ({ all: '全部', required: '平台必需', mod: 'Mod', conversation: '当前会话', character: '角色卡' })[source] || source;
+    },
+
+    runtimeConfigResponseData(response) {
+      const raw = response?.data || response || {};
+      return raw?.runtime_config || raw;
+    },
+
+    async saveRuntimePresetItems(items, reset = false) {
+      const conversationId = this.conversation?.id;
+      const preset = this.runtimePreset();
+      if (!conversationId || !preset?.preset_id || this.runtimeConfigSaving) return;
+      this.runtimeConfigSaving = true;
+      try {
+        const response = await api.saveConversationPresetOverrides(conversationId, {
+          preset_kind: this.runtimeConfigPresetKind,
+          preset_id: preset.preset_id,
+          items,
+          reset,
+        });
+        if (this.conversation?.id !== conversationId) return;
+        const config = this.runtimeConfigResponseData(response);
+        cacheConversationWorldbookNames(conversationId, config);
+        this.runtimeConfig = config;
+      } catch (err) {
+        alert(err?.message || '预设覆盖保存失败');
+      } finally {
+        this.runtimeConfigSaving = false;
+      }
+    },
+
+    async toggleRuntimePresetEntry(entry) {
+      if (!entry || entry.locked) return;
+      await this.saveRuntimePresetItems([{ entry_id: entry.id, enabled: !entry.enabled }]);
+    },
+
+    async batchSetRuntimePresetEntries(enabled) {
+      const items = this.filteredRuntimePresetEntries().filter(item => !item.locked).map(item => ({ entry_id: item.id, enabled: !!enabled }));
+      if (items.length) await this.saveRuntimePresetItems(items);
+    },
+
+    async toggleRuntimeWorldbookEntry(entry) {
+      if (!entry || entry.locked || this.runtimeConfigSaving) return;
+      await this.saveRuntimeWorldbookItems([{ source_key: entry.source_key, enabled: !entry.enabled }]);
+    },
+
+    async saveRuntimeWorldbookEntry(entry) {
+      if (!entry || entry.locked || this.runtimeConfigSaving) return;
+      const patch = {
+        name: String(entry.name || '').slice(0, 80),
+        keys: Array.isArray(entry.keys) ? entry.keys.slice(0, 30).map(item => String(item).slice(0, 80)) : [],
+        secondary_keys: Array.isArray(entry.secondary_keys) ? entry.secondary_keys.slice(0, 30).map(item => String(item).slice(0, 80)) : [],
+        content: String(entry.content || '').slice(0, 8000),
+        constant: !!entry.constant,
+        selective: !!entry.selective,
+        position: String(entry.position || 'system'),
+        depth: Number(entry.depth || 4),
+        priority: Number(entry.priority || 100),
+        order: Number(entry.order || 0),
+        probability: Number(entry.probability ?? 100),
+        recursive: !!entry.recursive,
+        case_sensitive: !!entry.case_sensitive,
+        match_whole_words: !!entry.match_whole_words,
+        selective_logic: String(entry.selective_logic || 'and_any'),
+        role: String(entry.role || 'system'),
+        scan_depth: Number(entry.scan_depth || 2),
+        sticky: Number(entry.sticky || 0),
+        cooldown: Number(entry.cooldown || 0),
+        delay: Number(entry.delay || 0),
+      };
+      await this.saveRuntimeWorldbookItems([{ source_key: entry.source_key, enabled: !!entry.enabled, patch }]);
+    },
+
+    async saveRuntimeWorldbookItems(items, reset = false) {
+      const conversationId = this.conversation?.id;
+      if (!conversationId || this.runtimeConfigSaving) return;
+      this.runtimeConfigSaving = true;
+      try {
+        const response = await api.saveConversationWorldbookOverrides(conversationId, { items, reset });
+        if (this.conversation?.id !== conversationId) return;
+        const config = this.runtimeConfigResponseData(response);
+        cacheConversationWorldbookNames(conversationId, config);
+        this.runtimeConfig = config;
+      } catch (err) {
+        alert(err?.message || '世界书覆盖保存失败');
+      } finally {
+        this.runtimeConfigSaving = false;
+      }
+    },
+
+    async batchSetRuntimeWorldbookEntries(enabled) {
+      const items = this.filteredRuntimeWorldbookEntries().filter(item => !item.locked).map(item => ({ source_key: item.source_key, enabled: !!enabled }));
+      if (items.length) await this.saveRuntimeWorldbookItems(items);
+    },
+
+    async resetRuntimeOverrides(kind = '') {
+      if (kind === 'worldbook') {
+        await this.saveRuntimeWorldbookItems([], true);
+        return;
+      }
+      const selectedKind = kind === 'regex' || kind === 'prompt' ? kind : this.runtimeConfigPresetKind;
+      const previous = this.runtimeConfigPresetKind;
+      this.runtimeConfigPresetKind = selectedKind;
+      await this.saveRuntimePresetItems([], true);
+      this.runtimeConfigPresetKind = previous;
+    },
+
+    runnerWorldbookEntry(entry = {}) {
+      const position = String(entry.position || 'system');
+      const positionType = position === 'depth' ? 'at_depth' : (position === 'post_history' ? 'after_author_note' : 'after_character_definition');
+      return {
+        uid: Number(entry.uid || 0),
+        source_key: String(entry.source_key || ''),
+        name: String(entry.name || ''),
+        enabled: entry.enabled !== false,
+        strategy: {
+          type: entry.constant ? 'constant' : (entry.selective ? 'selective' : 'selective'),
+          keys: Array.isArray(entry.keys) ? entry.keys.map(String) : [],
+          keys_secondary: {
+            logic: String(entry.selective_logic || 'and_any'),
+            keys: Array.isArray(entry.secondary_keys) ? entry.secondary_keys.map(String) : [],
+          },
+          scan_depth: Number.isFinite(Number(entry.scan_depth)) ? Number(entry.scan_depth) : 'same_as_global',
+        },
+        position: {
+          type: positionType,
+          role: ['system', 'assistant', 'user'].includes(String(entry.role)) ? String(entry.role) : 'system',
+          depth: Number(entry.depth || 4),
+          order: Number(entry.order || 0),
+        },
+        content: String(entry.content || ''),
+        probability: Number(entry.probability ?? 100),
+        recursion: {
+          prevent_incoming: false,
+          prevent_outgoing: !entry.recursive,
+          delay_until: null,
+        },
+        effect: {
+          sticky: Number(entry.sticky || 0) > 0 ? Number(entry.sticky) : null,
+          cooldown: Number(entry.cooldown || 0) > 0 ? Number(entry.cooldown) : null,
+          delay: Number(entry.delay || 0) > 0 ? Number(entry.delay) : null,
+        },
+        extra: {
+          homer_source_key: String(entry.source_key || ''),
+          homer_locked: !!entry.locked,
+          homer_source: String(entry.source || ''),
+        },
+      };
+    },
+
+    async handleTavoRuntimeRpc(method, params = {}, sourceFrame = null) {
+      if (!this.conversation?.id) throw new Error('当前没有可操作的会话');
+      if (sourceFrame && !document.body.contains(sourceFrame)) throw new Error('卡片运行时已失效');
+      const name = String(method || '').trim();
+      const configResponse = async () => {
+        const response = await api.conversationRuntimeConfig(this.conversation.id);
+        const data = response?.data || response || {};
+        if (this.conversation?.id !== data.conversation_id) throw new Error('会话已切换，请重试');
+        cacheConversationWorldbookNames(data.conversation_id, data);
+        this.runtimeConfig = data;
+        return data;
+      };
+      if (name === 'runtime-config.get') return configResponse();
+      if (name === 'worldbook.names') {
+        const config = await configResponse();
+        return config.worldbook?.names || { all: [], global: [], chat: null, character: { primary: null, additional: [] } };
+      }
+      if (name === 'worldbook.get') {
+        const config = await configResponse();
+        const bookName = String(params?.name || '').trim();
+        const book = (config.worldbook?.books || []).find(item => item?.name === bookName);
+        if (!book) throw new Error('世界书不存在：' + bookName);
+        const keys = new Set((book.source_keys || []).map(String));
+        const entries = (config.worldbook?.entries || []).filter(item => keys.has(String(item.source_key || '')));
+        return { name: bookName, entries: entries.map(item => this.runnerWorldbookEntry(item)) };
+      }
+      if (name === 'worldbook.replace') {
+        const bookName = String(params?.name || '').trim();
+        const entries = Array.isArray(params?.entries) ? params.entries.slice(0, 800) : [];
+        if (!bookName) throw new Error('世界书名称不能为空');
+        const response = await api.saveConversationWorldbookOverrides(this.conversation.id, {
+          worldbook_name: bookName,
+          replace_entries: entries,
+        });
+        const config = response?.data || response || {};
+        cacheConversationWorldbookNames(this.conversation.id, config);
+        this.runtimeConfig = config;
+        const book = (config.worldbook?.books || []).find(item => item?.name === bookName);
+        const keys = new Set((book?.source_keys || []).map(String));
+        return { name: bookName, entries: (config.worldbook?.entries || []).filter(item => keys.has(String(item.source_key || ''))).map(item => this.runnerWorldbookEntry(item)) };
+      }
+      if (name === 'worldbook.get-or-create-chat') {
+        return { name: (await configResponse()).worldbook?.names?.chat || '当前会话世界书' };
+      }
+      if (name === 'worldbook.rebind-chat') {
+        const config = await configResponse();
+        const requested = String(params?.name || '').trim();
+        if (requested && requested !== config.worldbook?.names?.chat) throw new Error('惑梦只允许绑定当前会话世界书');
+        return { name: config.worldbook?.names?.chat || '当前会话世界书' };
+      }
+      if (name === 'worldbook.rebind-global' || name === 'worldbook.rebind-character') {
+        throw new Error('角色卡和平台世界书绑定由当前会话版本锁定，不能在卡内改绑');
+      }
+      if (name === 'preset.get') return (await configResponse()).preset || {};
+      if (name === 'preset.update') {
+        const kind = String(params?.preset_kind || '').trim();
+        const config = await configResponse();
+        const current = config.preset?.[kind];
+        if (!current || !['prompt', 'regex'].includes(kind)) throw new Error('预设类型无效');
+        const items = Array.isArray(params?.items) ? params.items.slice(0, 400) : [];
+        const response = await api.saveConversationPresetOverrides(this.conversation.id, {
+          preset_kind: kind,
+          preset_id: current.preset_id,
+          items,
+        });
+        const configResult = response?.data?.runtime_config || response?.runtime_config || response?.data || response || {};
+        cacheConversationWorldbookNames(this.conversation.id, configResult);
+        this.runtimeConfig = configResult;
+        return this.runtimeConfig.preset || {};
+      }
+      throw new Error('不支持的当前会话 RPC：' + name);
     },
 
     closeModPanel() {
@@ -1758,6 +2229,9 @@ function chatPage() {
         advancedRenderSettings: this.advancedRenderSettings,
         confirmedTavoFrames: this.confirmedTavoFrames,
         pluginFragments: this.tavoPluginFragments,
+        // Keep the iframe srcdoc independent from reactive panel refreshes. Card RPC reads and
+        // writes may update runtimeConfig while the requesting sandbox is still awaiting a reply.
+        worldbookNames: conversationWorldbookNames(this.conversation?.id),
       };
     },
 
@@ -1879,6 +2353,7 @@ function chatPage() {
     openModelPicker() {
       this.modelPickerOpen = true;
       this.rightMenuOpen = false;
+      this.runtimeConfigOpen = false;
     },
 
     closeModelPicker() { this.modelPickerOpen = false; },
@@ -2052,6 +2527,9 @@ function chatPage() {
       this.busy = true;
       this.galgameEnabled = false;
       this.globalPresetEnabled = true;
+      this.runtimeConfigOpen = false;
+      this.runtimeConfig = null;
+      this._runtimeConfigLoadSeq += 1;
       try {
         const payload = { app_id: this.appId, app_name: this.appName, app_icon: this.appIcon };
         if (versionId) payload.version_id = versionId;
@@ -2120,6 +2598,9 @@ function chatPage() {
       this.listOpen = false;
       this.rightMenuOpen = false;
       this.modPanelOpen = false;
+      this.runtimeConfigOpen = false;
+      this.runtimeConfig = null;
+      this._runtimeConfigLoadSeq += 1;
       this.versionPickOpen = false;
       try { localStorage.setItem('ai_xingyue_last_conversation_id', c.id); } catch { /* ignore storage errors */ }
       this.messages = [];
@@ -2266,6 +2747,7 @@ function chatPage() {
       if (!confirm(this.chatText('delete_conversation_confirm', '删除这个对话？聊天记录将无法恢复。'))) return;
       try {
         await api.deleteConversation(c.id);
+        CONVERSATION_WORLDBOOK_NAMES.delete(String(c.id || ''));
         if (this.conversation?.id === c.id) {
           destroyOpenChatRuntime('conversation-deleted');
           this.runtimeCard = null;
@@ -2273,6 +2755,9 @@ function chatPage() {
           this.messages = [];
           this.messageTotal = 0;
           this.hasOlderMessages = false;
+          this.runtimeConfigOpen = false;
+          this.runtimeConfig = null;
+          this._runtimeConfigLoadSeq += 1;
         }
         await this.loadConversations();
       } catch (err) {
@@ -2314,6 +2799,7 @@ function chatPage() {
     async toggleMemoryPanel() {
       this.memoryOpen = !this.memoryOpen;
       if (this.memoryOpen) this.advancedRenderOpen = false;
+      if (this.memoryOpen) this.runtimeConfigOpen = false;
       this.rightMenuOpen = false;
       if (this.memoryOpen) await this.loadMemoryContext();
     },

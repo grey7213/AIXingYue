@@ -1,5 +1,5 @@
 // 惑梦（Homer） 管理后台 Alpine.js 应用
-import { api, isLoggedIn, formatDateTime, ApiError } from '/assets/js/api.js?v=20260720-community-versions';
+import { api, isLoggedIn, formatDateTime, ApiError } from '/assets/js/api.js?v=20260728-model-discovery';
 
 function adminPanel() {
   return {
@@ -1663,6 +1663,12 @@ function adminPanel() {
           clear_api_key: false,
           has_api_key: !!p.has_api_key,
           api_key_preview: p.api_key_preview || '',
+          catalog_loading: false,
+          probe_loading: false,
+          auto_loading: false,
+          catalog_meta: null,
+          probe_summary: null,
+          probe_results: [],
         }));
         this.llmForm = {
           enabled: data.enabled !== false,
@@ -1726,6 +1732,14 @@ function adminPanel() {
         this.llmSettings = r.data || r;
         this.llmForm.image_model = this.normalizeImageModelSettings(this.llmSettings.image_model || payload.image_model);
         this.llmForm.memory_settings = this.normalizeMemorySettings(this.llmSettings.memory_settings || payload.memory_settings);
+        const savedPresets = Array.isArray(this.llmSettings.presets) ? this.llmSettings.presets : [];
+        this.llmForm.presets.forEach((preset) => {
+          const saved = savedPresets.find(item => item.id === preset.id);
+          preset.api_key = '';
+          preset.clear_api_key = false;
+          preset.has_api_key = saved ? !!saved.has_api_key : !!preset.has_api_key;
+          preset.api_key_preview = saved?.api_key_preview || preset.api_key_preview || '';
+        });
         this.llmForm.api_key = '';
         this.llmForm.clear_api_key = false;
         this.llmForm.image_model.api_key = '';
@@ -1744,7 +1758,7 @@ function adminPanel() {
       const id = this.newPresetId();
       this.llmForm.presets.push({
         id,
-        name: '新模型预设',
+        name: '新 API 节点',
         enabled: true,
         protocol: 'openai',
         base_url: '',
@@ -1755,8 +1769,153 @@ function adminPanel() {
         clear_api_key: false,
         has_api_key: false,
         api_key_preview: '',
+        catalog_loading: false,
+        probe_loading: false,
+        auto_loading: false,
+        catalog_meta: null,
+        probe_summary: null,
+        probe_results: [],
       });
       if (!this.llmForm.default_model_preset_id) this.llmForm.default_model_preset_id = id;
+    },
+
+    modelNodePayload(preset) {
+      return {
+        preset_id: String(preset?.id || '').trim(),
+        protocol: String(preset?.protocol || 'openai').trim(),
+        base_url: String(preset?.base_url || '').trim(),
+        api_key: String(preset?.api_key || '').trim(),
+        clear_api_key: !!preset?.clear_api_key,
+      };
+    },
+
+    async discoverPresetModels(preset, { quiet = false } = {}) {
+      if (!String(preset?.base_url || '').trim()) {
+        const err = new Error('请先填写 Base URL');
+        if (!quiet) this.showToast(err.message, 'error');
+        throw err;
+      }
+      preset.catalog_loading = true;
+      preset.catalog_meta = null;
+      try {
+        const response = await api.admin.discoverLlmModels(this.modelNodePayload(preset));
+        const data = response.data || response;
+        const models = this.parseModelsText(data.models || []);
+        if (!models.length) throw new Error('模型目录没有返回可用的模型 ID');
+        preset.modelsText = models.join('\n');
+        if (!models.includes(String(preset.model || '').trim())) preset.model = models[0];
+        preset.catalog_meta = {
+          total: Number(data.total || models.length),
+          elapsed_ms: Number(data.elapsed_ms || 0),
+          truncated: !!data.truncated,
+        };
+        preset.probe_summary = null;
+        preset.probe_results = [];
+        if (!quiet) this.showToast(`已读取 ${models.length} 个候选模型`, 'success');
+        return models;
+      } catch (err) {
+        if (!quiet) this.showToast(err.message || '读取模型目录失败', 'error');
+        throw err;
+      } finally {
+        preset.catalog_loading = false;
+      }
+    },
+
+    async probePresetModels(preset, models = null, { quiet = false, apply = true } = {}) {
+      const candidates = this.parseModelsText(models || preset?.modelsText || preset?.model);
+      if (!candidates.length) {
+        const err = new Error('请先填写或读取模型列表');
+        if (!quiet) this.showToast(err.message, 'error');
+        throw err;
+      }
+      preset.probe_loading = true;
+      preset.probe_summary = null;
+      preset.probe_results = [];
+      try {
+        const results = [];
+        let elapsedMs = 0;
+        for (let offset = 0; offset < candidates.length; offset += 12) {
+          const batch = candidates.slice(offset, offset + 12);
+          const response = await api.admin.probeLlmModels({
+            ...this.modelNodePayload(preset),
+            models: batch,
+            timeout: 45,
+          });
+          const data = response.data || response;
+          results.push(...(Array.isArray(data.results) ? data.results : []));
+          elapsedMs += Number(data.elapsed_ms || 0);
+          const currentAvailable = results.filter(item => item.available).length;
+          preset.probe_results = [...results];
+          preset.probe_summary = {
+            total: results.length,
+            available: currentAvailable,
+            failed: results.length - currentAvailable,
+            elapsed_ms: elapsedMs,
+          };
+        }
+        const availableModels = this.parseModelsText(results.filter(item => item.available).map(item => item.model));
+        if (apply && availableModels.length) this.applyAvailableModels(preset, availableModels, false);
+        const message = availableModels.length
+          ? `检测完成：${availableModels.length}/${results.length || candidates.length} 个模型可对话，已填入当前节点`
+          : '检测完成：没有模型通过真实对话探测，原列表未改动';
+        if (!quiet) this.showToast(message, availableModels.length ? 'success' : 'error');
+        return {
+          results,
+          available_models: availableModels,
+          total: results.length,
+          available: availableModels.length,
+          failed: results.length - availableModels.length,
+          elapsed_ms: elapsedMs,
+        };
+      } catch (err) {
+        if (!quiet) this.showToast(err.message || '模型检测失败', 'error');
+        throw err;
+      } finally {
+        preset.probe_loading = false;
+      }
+    },
+
+    async autoConfigurePreset(preset) {
+      preset.auto_loading = true;
+      try {
+        const models = await this.discoverPresetModels(preset, { quiet: true });
+        const result = await this.probePresetModels(preset, models, { quiet: true, apply: true });
+        const available = Number(result.available || 0);
+        this.showToast(
+          available
+            ? `自动接入完成：${available} 个可用模型已填入，点击“保存模型配置”后对用户生效`
+            : '自动接入完成，但没有模型通过真实对话探测',
+          available ? 'success' : 'error',
+        );
+      } catch (err) {
+        this.showToast(err.message || '自动接入模型节点失败', 'error');
+      } finally {
+        preset.auto_loading = false;
+      }
+    },
+
+    applyAvailableModels(preset, models = null, notify = true) {
+      const available = this.parseModelsText(
+        models || (preset?.probe_results || []).filter(item => item.available).map(item => item.model),
+      );
+      if (!available.length) {
+        if (notify) this.showToast('当前没有通过检测的模型', 'error');
+        return;
+      }
+      preset.modelsText = available.join('\n');
+      if (!available.includes(String(preset.model || '').trim())) preset.model = available[0];
+      preset.enabled = true;
+      if (notify) this.showToast(`已仅保留 ${available.length} 个可用模型`, 'success');
+    },
+
+    modelProbeStatusLabel(item) {
+      if (item?.available) return '可用';
+      return {
+        timeout: '超时',
+        http_error: 'HTTP 失败',
+        empty_response: '空回复',
+        incomplete_stream: '截流',
+      }[item?.status] || '失败';
     },
 
     removeModelPreset(index) {

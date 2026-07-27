@@ -10,7 +10,7 @@
   <script src="/assets/vendor/tailwindcss-browser.js?v=20260713-local"></script>
   <link rel="stylesheet" href="/assets/css/custom.css?v=20260703-fengyue-ui2">
   <link rel="stylesheet" href="/assets/css/admin.css?v=20260711-reference-ui1">
-  <script type="module" src="/assets/js/admin-app.js?v=20260720-community-versions"></script>
+  <script type="module" src="/assets/js/admin-app.js?v=20260728-model-discovery"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="xy-admin min-h-screen">
@@ -605,7 +605,7 @@
             <div class="flex items-center justify-between mb-6 flex-wrap gap-3">
               <div>
                 <h1 class="text-2xl font-bold xy-gradient-text">模型配置</h1>
-                <p class="text-sm text-slate-400 mt-1">配置多个模型预设，用户创建角色时从这里选择</p>
+                <p class="text-sm text-slate-400 mt-1">手动添加 API 节点，或自动读取目录并检测真正可对话的模型</p>
               </div>
               <button @click="loadLlmSettings" class="xy-btn xy-btn-ghost text-sm" :disabled="loading">刷新</button>
             </div>
@@ -617,7 +617,7 @@
                     <input type="checkbox" x-model="llmForm.enabled" class="accent-violet-500">
                     启用站点模型 API
                   </label>
-                  <button type="button" @click="addModelPreset" class="xy-btn xy-btn-ghost text-sm">添加模型预设</button>
+                  <button type="button" @click="addModelPreset" class="xy-btn xy-btn-ghost text-sm">新增 API 节点</button>
                 </div>
                 <div class="space-y-4">
                   <template x-for="(preset, idx) in llmForm.presets" :key="preset.id">
@@ -660,12 +660,52 @@
                           <input class="xy-input" x-model="preset.base_url" :placeholder="preset.protocol === 'anthropic' ? 'https://api.anthropic.com/v1' : 'https://api.openai.com/v1'">
                           <div class="text-xs text-slate-500 mt-1">填到 /v1 即可，系统会按协议自动调用对应端点。</div>
                         </div>
+                        <div class="rounded-lg border border-cyan-300/15 bg-cyan-400/5 p-3">
+                          <div class="text-xs font-semibold text-cyan-100">自动接入</div>
+                          <div class="text-xs text-slate-400 mt-1">先读取 `/models`，再用真实流式对话逐个检测；只把通过检测的模型填入列表。</div>
+                          <div class="flex flex-wrap gap-2 mt-3">
+                            <button type="button" @click="autoConfigurePreset(preset)" class="xy-btn xy-btn-primary text-xs py-2 px-3" :disabled="preset.auto_loading || preset.catalog_loading || preset.probe_loading">
+                              <span x-show="!preset.auto_loading">自动读取并检测</span>
+                              <span x-show="preset.auto_loading" class="xy-loading"></span>
+                            </button>
+                            <button type="button" @click="discoverPresetModels(preset)" class="xy-btn xy-btn-ghost text-xs py-2 px-3" :disabled="preset.auto_loading || preset.catalog_loading || preset.probe_loading">
+                              <span x-text="preset.catalog_loading ? '读取中…' : '只读取目录'"></span>
+                            </button>
+                            <button type="button" @click="probePresetModels(preset)" class="xy-btn xy-btn-ghost text-xs py-2 px-3" :disabled="preset.auto_loading || preset.catalog_loading || preset.probe_loading">
+                              <span x-text="preset.probe_loading ? '检测中…' : '检测当前列表'"></span>
+                            </button>
+                          </div>
+                        </div>
                       </div>
                       <div>
                         <label class="xy-label">模型列表（每行一个，或用逗号分隔）</label>
                         <textarea class="xy-input" style="min-height:90px" x-model="preset.modelsText" placeholder="gpt-4o-mini&#10;gpt-4o&#10;gemini-2.5-flash"></textarea>
                         <div class="text-xs text-slate-500 mt-1">用户在编辑器里会看到「供应商 / 模型」的可搜索条目，所有模型共用这个供应商的 Base URL 和 API Key。</div>
                       </div>
+                      <template x-if="preset.catalog_meta || preset.probe_summary">
+                        <div class="rounded-lg border border-white/10 bg-black/15 p-3 space-y-2">
+                          <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-300">
+                            <span x-show="preset.catalog_meta">目录：<strong class="text-white" x-text="preset.catalog_meta?.total || 0"></strong> 个 · <span x-text="preset.catalog_meta?.elapsed_ms || 0"></span> ms</span>
+                            <span x-show="preset.probe_summary">检测：<strong class="text-emerald-300" x-text="preset.probe_summary?.available || 0"></strong> 可用 / <strong class="text-rose-300" x-text="preset.probe_summary?.failed || 0"></strong> 失败 · <span x-text="preset.probe_summary?.elapsed_ms || 0"></span> ms</span>
+                            <button x-show="preset.probe_summary?.available" type="button" @click="applyAvailableModels(preset)" class="text-cyan-300 hover:text-cyan-200 underline underline-offset-2">仅保留可用模型</button>
+                          </div>
+                          <div x-show="(preset.probe_results || []).length" class="max-h-52 overflow-y-auto space-y-1 pr-1">
+                            <template x-for="item in preset.probe_results" :key="item.model">
+                              <div class="grid grid-cols-[minmax(0,1fr)_auto] gap-3 rounded-md border border-white/5 bg-white/[0.03] px-3 py-2 text-xs">
+                                <div class="min-w-0">
+                                  <div class="truncate text-slate-100" x-text="item.model"></div>
+                                  <div x-show="item.error" class="mt-1 break-words text-slate-500" x-text="item.error"></div>
+                                </div>
+                                <div class="text-right whitespace-nowrap">
+                                  <div :class="item.available ? 'text-emerald-300' : 'text-rose-300'" x-text="modelProbeStatusLabel(item)"></div>
+                                  <div class="text-slate-500 mt-1"><span x-text="item.elapsed_ms || 0"></span> ms</div>
+                                </div>
+                              </div>
+                            </template>
+                          </div>
+                          <div class="text-[11px] text-amber-200/75">检测会产生少量真实模型请求；通过后仍需点击页面底部“保存模型预设”才会对用户生效。</div>
+                        </div>
+                      </template>
                       <div class="grid md:grid-cols-2 gap-3">
                         <div>
                           <label class="xy-label">Temperature</label>

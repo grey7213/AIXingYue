@@ -25,6 +25,7 @@ import time
 import uuid
 import zipfile
 import zlib
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -160,6 +161,10 @@ LLM_UPSTREAM_USER_AGENT = os.environ.get(
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
 )
+LLM_DISCOVERY_MAX_MODELS = env_int("LLM_DISCOVERY_MAX_MODELS", 100, 1, 500)
+LLM_PROBE_MAX_MODELS = env_int("LLM_PROBE_MAX_MODELS", 12, 1, 50)
+LLM_PROBE_CONCURRENCY = env_int("LLM_PROBE_CONCURRENCY", 6, 1, 12)
+LLM_PROBE_TIMEOUT_SECONDS = env_int("LLM_PROBE_TIMEOUT_SECONDS", 45, 5, 120)
 AIFADIAN_URL = os.environ.get("AIFADIAN_URL", "").strip()
 ZPAY_ENABLED = env_bool("ZPAY_ENABLED", False)
 ZPAY_PID = os.environ.get("ZPAY_PID", "").strip()
@@ -336,6 +341,28 @@ def model_selection_id(preset_id: str, model: str) -> str:
         digest = hashlib.sha1(raw_model.encode("utf-8")).hexdigest()[:8]
         slug = f"{slug}-{digest}" if slug else digest
     return f"{preset_id}::{slug or hashlib.sha1(str(model).encode('utf-8')).hexdigest()[:10]}"
+
+
+def normalize_llm_base_url(value: object) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        raise ValueError("Base URL is required")
+    parsed = urlparse(raw)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("Base URL must use http or https")
+    if parsed.username or parsed.password:
+        raise ValueError("Base URL must not contain credentials")
+    path = re.sub(r"/+", "/", parsed.path or "").rstrip("/")
+    lowered = path.lower()
+    for suffix in ("/chat/completions", "/messages", "/models"):
+        if lowered.endswith(suffix):
+            path = path[: -len(suffix)].rstrip("/")
+            break
+    return parsed._replace(path=path, params="", query="", fragment="").geturl().rstrip("/")
+
+
+def llm_endpoint_url(base_url: object, endpoint_path: str) -> str:
+    return normalize_llm_base_url(base_url) + "/" + str(endpoint_path or "").strip("/")
 
 
 def _bounded_float(value: object, default: float, low: float, high: float) -> float:
@@ -2595,6 +2622,29 @@ class Store:
                     updated_at integer not null
                 );
                 create index if not exists idx_conversations_user on conversations(user_id, updated_at desc);
+                create table if not exists conversation_preset_overrides (
+                    user_id text not null,
+                    conversation_id text not null,
+                    preset_kind text not null,
+                    preset_id text not null,
+                    entry_id text not null,
+                    enabled integer not null,
+                    updated_at integer not null,
+                    primary key(user_id, conversation_id, preset_kind, preset_id, entry_id)
+                );
+                create index if not exists idx_conversation_preset_overrides_conversation
+                    on conversation_preset_overrides(user_id, conversation_id, preset_kind, preset_id);
+                create table if not exists conversation_worldbook_overrides (
+                    user_id text not null,
+                    conversation_id text not null,
+                    source_key text not null,
+                    enabled integer,
+                    patch_json text,
+                    updated_at integer not null,
+                    primary key(user_id, conversation_id, source_key)
+                );
+                create index if not exists idx_conversation_worldbook_overrides_conversation
+                    on conversation_worldbook_overrides(user_id, conversation_id, updated_at);
                 create table if not exists messages (
                     id text primary key,
                     conversation_id text not null,
@@ -4707,6 +4757,170 @@ class Store:
             updated["global_preset_enabled"] = bool(updated.get("global_preset_enabled", 1))
             return updated
 
+    def conversation_preset_override_map(self, conv_id: str, user_id: str) -> dict:
+        with self.lock:
+            rows = self.conn.execute(
+                """
+                select preset_kind,preset_id,entry_id,enabled
+                from conversation_preset_overrides
+                where conversation_id=? and user_id=?
+                order by preset_kind,preset_id,entry_id
+                """,
+                (conv_id, user_id),
+            ).fetchall()
+        out = {"prompt": {}, "regex": {}}
+        for row in rows:
+            kind = str(row["preset_kind"] or "")
+            if kind not in out:
+                continue
+            preset_id = str(row["preset_id"] or "")
+            entry_id = str(row["entry_id"] or "")
+            if not preset_id or not entry_id:
+                continue
+            out[kind].setdefault(preset_id, {})[entry_id] = bool(row["enabled"])
+        return out
+
+    def save_conversation_preset_overrides(
+        self,
+        conv_id: str,
+        user_id: str,
+        preset_kind: str,
+        preset_id: str,
+        items: list,
+        *,
+        reset: bool = False,
+    ) -> dict:
+        conversation = self.get_conversation(conv_id, user_id)
+        if not conversation:
+            raise PermissionError("conversation not found")
+        kind = str(preset_kind or "").strip().lower()
+        if kind not in {"prompt", "regex"}:
+            raise ValueError("invalid preset kind")
+        preset = self.global_prompt_preset() if kind == "prompt" else self.global_regex_preset()
+        active_id = str(preset.get("id") or "")
+        requested_id = str(preset_id or active_id).strip()
+        if requested_id != active_id:
+            raise ValueError("active preset changed; reload current conversation settings")
+        if kind == "prompt":
+            normalized = normalize_full_prompt_preset(preset)
+            base_entries = {
+                str(item.get("identifier") or ""): bool(item.get("in_order") and item.get("order_enabled"))
+                for item in normalized.get("prompts") or []
+                if isinstance(item, dict) and str(item.get("identifier") or "")
+            }
+        else:
+            normalized = normalize_full_regex_preset(preset)
+            base_entries = {
+                str(item.get("id") or ""): not bool(item.get("disabled"))
+                for item in normalized.get("scripts") or []
+                if isinstance(item, dict) and str(item.get("id") or "")
+            }
+        if not active_id:
+            if reset:
+                return {"conversation_id": conv_id, "preset_kind": kind, "preset_id": "", "items": []}
+            raise ValueError("no active preset")
+        clean_items: list[tuple[str, bool]] = []
+        if not reset:
+            if not isinstance(items, list) or len(items) > 400:
+                raise ValueError("preset override items are invalid")
+            seen: set[str] = set()
+            for raw in items:
+                if not isinstance(raw, dict) or not isinstance(raw.get("enabled"), bool):
+                    raise ValueError("each preset override needs entry_id and enabled")
+                entry_id = str(raw.get("entry_id") or raw.get("id") or "").strip()[:160]
+                if not entry_id or entry_id in seen or entry_id not in base_entries:
+                    raise ValueError("preset entry is unavailable")
+                seen.add(entry_id)
+                clean_items.append((entry_id, bool(raw["enabled"])))
+        ts = now_ms()
+        with self.lock:
+            self.conn.execute("begin immediate")
+            try:
+                if reset:
+                    self.conn.execute(
+                        "delete from conversation_preset_overrides where user_id=? and conversation_id=? and preset_kind=?",
+                        (user_id, conv_id, kind),
+                    )
+                else:
+                    for entry_id, enabled in clean_items:
+                        if enabled == base_entries[entry_id]:
+                            self.conn.execute(
+                                "delete from conversation_preset_overrides where user_id=? and conversation_id=? and preset_kind=? and preset_id=? and entry_id=?",
+                                (user_id, conv_id, kind, active_id, entry_id),
+                            )
+                            continue
+                        self.conn.execute(
+                            """
+                            insert into conversation_preset_overrides(user_id,conversation_id,preset_kind,preset_id,entry_id,enabled,updated_at)
+                            values(?,?,?,?,?,?,?)
+                            on conflict(user_id,conversation_id,preset_kind,preset_id,entry_id) do update set
+                                enabled=excluded.enabled, updated_at=excluded.updated_at
+                            """,
+                            (user_id, conv_id, kind, active_id, entry_id, 1 if enabled else 0, ts),
+                        )
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
+        overrides = self.conversation_preset_override_map(conv_id, user_id).get(kind, {}).get(active_id, {})
+        return {
+            "conversation_id": conv_id,
+            "preset_kind": kind,
+            "preset_id": active_id,
+            "items": [{"entry_id": key, "enabled": value} for key, value in overrides.items()],
+        }
+
+    def conversation_worldbook_override_rows(self, conv_id: str, user_id: str) -> list[dict]:
+        with self.lock:
+            rows = self.conn.execute(
+                """
+                select source_key,enabled,patch_json,updated_at
+                from conversation_worldbook_overrides
+                where conversation_id=? and user_id=?
+                order by updated_at,source_key
+                """,
+                (conv_id, user_id),
+            ).fetchall()
+        out: list[dict] = []
+        for row in rows:
+            item = dict(row)
+            try:
+                item["patch"] = json.loads(item.get("patch_json") or "{}")
+            except Exception:
+                item["patch"] = {}
+            item["enabled"] = None if item.get("enabled") is None else bool(item.get("enabled"))
+            out.append(item)
+        return out
+
+    def save_conversation_worldbook_overrides(
+        self,
+        conv_id: str,
+        user_id: str,
+        items: list | None = None,
+        *,
+        reset: bool = False,
+        replace_entries: list | None = None,
+        worldbook_name: str = "",
+    ) -> dict:
+        return save_conversation_worldbook_overrides_for_store(
+            self,
+            conv_id,
+            user_id,
+            items or [],
+            reset=reset,
+            replace_entries=replace_entries,
+            worldbook_name=worldbook_name,
+        )
+
+    def apply_conversation_worldbook_overrides(self, app: dict, user_id: str, conv_id: str) -> dict:
+        if not isinstance(app, dict) or not conv_id:
+            return app
+        rows = self.conversation_worldbook_override_rows(conv_id, user_id)
+        return apply_conversation_worldbook_override_rows(app, rows)
+
+    def conversation_runtime_config(self, conv_id: str, user_id: str) -> dict:
+        return build_conversation_runtime_config(self, conv_id, user_id)
+
     def append_message(self, conv_id: str, user_id: str, role: str, content: str, swipes: list | None = None) -> sqlite3.Row:
         with self.lock:
             mid = str(uuid.uuid4())
@@ -4983,6 +5197,8 @@ class Store:
             self.conn.execute("delete from messages where conversation_id=? and user_id=?", (conv_id, user_id))
             self.conn.execute("delete from conversation_summaries where conversation_id=? and user_id=?", (conv_id, user_id))
             self.conn.execute("delete from conversation_mods_v2 where conversation_id=? and user_id=?", (conv_id, user_id))
+            self.conn.execute("delete from conversation_preset_overrides where conversation_id=? and user_id=?", (conv_id, user_id))
+            self.conn.execute("delete from conversation_worldbook_overrides where conversation_id=? and user_id=?", (conv_id, user_id))
             self.conn.execute("delete from conversations where id=? and user_id=?", (conv_id, user_id))
             self.conn.commit()
             return True
@@ -5002,6 +5218,14 @@ class Store:
             if cur.rowcount > 0:
                 self.conn.execute(
                     "delete from conversation_summaries where conversation_id=? and user_id=?",
+                    (conv_id, user_id),
+                )
+                self.conn.execute(
+                    "delete from conversation_preset_overrides where conversation_id=? and user_id=?",
+                    (conv_id, user_id),
+                )
+                self.conn.execute(
+                    "delete from conversation_worldbook_overrides where conversation_id=? and user_id=?",
                     (conv_id, user_id),
                 )
             self.conn.commit()
@@ -5146,6 +5370,42 @@ class Store:
             self.conn.executemany(
                 "insert into conversation_mods_v2(user_id,conversation_id,position,work_id,version_id,updated_at) values(?,?,?,?,?,?)",
                 [(user_id, new_id, int(row["position"]), row["work_id"], row["version_id"], ts) for row in mod_rows],
+            )
+            preset_override_rows = self.conn.execute(
+                """
+                select preset_kind,preset_id,entry_id,enabled
+                from conversation_preset_overrides
+                where user_id=? and conversation_id=?
+                """,
+                (user_id, conv_id),
+            ).fetchall()
+            self.conn.executemany(
+                """
+                insert into conversation_preset_overrides(user_id,conversation_id,preset_kind,preset_id,entry_id,enabled,updated_at)
+                values(?,?,?,?,?,?,?)
+                """,
+                [
+                    (user_id, new_id, row["preset_kind"], row["preset_id"], row["entry_id"], int(row["enabled"]), ts)
+                    for row in preset_override_rows
+                ],
+            )
+            world_override_rows = self.conn.execute(
+                """
+                select source_key,enabled,patch_json
+                from conversation_worldbook_overrides
+                where user_id=? and conversation_id=?
+                """,
+                (user_id, conv_id),
+            ).fetchall()
+            self.conn.executemany(
+                """
+                insert into conversation_worldbook_overrides(user_id,conversation_id,source_key,enabled,patch_json,updated_at)
+                values(?,?,?,?,?,?)
+                """,
+                [
+                    (user_id, new_id, row["source_key"], row["enabled"], row["patch_json"], ts)
+                    for row in world_override_rows
+                ],
             )
             self.conn.commit()
             return self.get_conversation(new_id, user_id)
@@ -5497,6 +5757,7 @@ class Store:
         if conversation:
             conversation_settings = {
                 "global_preset_enabled": bool(conversation.get("global_preset_enabled", 1)),
+                "preset_overrides": self.conversation_preset_override_map(conv_id, user_id),
             }
             if bool(conversation.get("galgame_enabled")):
                 conversation_settings["galgame_enabled"] = True
@@ -6051,7 +6312,7 @@ class Store:
                         if world_mode == "replace":
                             new_world = world_entries
                         elif world_mode == "append":
-                            new_world = normalize_world_info((existing_world + world_entries)[:200])
+                            new_world = normalize_world_info((existing_world + world_entries)[:WORLD_INFO_MAX_ENTRIES])
                         else:
                             new_world = merge_world_info_entries(existing_world, world_entries)
                         extra["world_info"] = strip_required_world_info(new_world)
@@ -7046,6 +7307,60 @@ class Store:
             default_id = normalized[0]["id"] if normalized else "default"
         return normalized, default_id
 
+    def admin_llm_connection(self, data: dict) -> dict:
+        if not isinstance(data, dict):
+            raise ValueError("invalid model node")
+        presets, _ = self.llm_presets(include_secrets=True)
+        preset_id = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(data.get("preset_id") or data.get("id") or "")).strip("-")
+        saved = next((item for item in presets if item.get("id") == preset_id), {})
+        protocol = normalize_llm_protocol(
+            data.get("protocol") or saved.get("protocol"),
+            provider=data.get("provider") or saved.get("provider"),
+            base_url=data.get("base_url") or saved.get("base_url"),
+        )
+        base_url = normalize_llm_base_url(data.get("base_url") or saved.get("base_url"))
+        incoming_key = str(data.get("api_key") or "").strip()
+        api_key = "" if data.get("clear_api_key") else (incoming_key or str(saved.get("api_key") or "").strip())
+        if not api_key:
+            raise ValueError("API Key is required; enter a new key or save the node first")
+        return {
+            "preset_id": preset_id or str(saved.get("id") or "unsaved"),
+            "protocol": protocol,
+            "base_url": base_url,
+            "api_key": api_key,
+        }
+
+    def discover_admin_llm_models(self, data: dict) -> dict:
+        connection = self.admin_llm_connection(data)
+        result = discover_llm_model_catalog(connection)
+        log(
+            "admin llm catalog checked: "
+            f"preset={connection.get('preset_id') or 'unsaved'} total={result.get('total') or 0} "
+            f"elapsed_ms={result.get('elapsed_ms') or 0}"
+        )
+        return result
+
+    def probe_admin_llm_models(self, data: dict) -> dict:
+        connection = self.admin_llm_connection(data)
+        models = split_model_names(data.get("models"))
+        if not models:
+            raise ValueError("at least one model is required")
+        if len(models) > LLM_PROBE_MAX_MODELS:
+            raise ValueError(f"probe at most {LLM_PROBE_MAX_MODELS} models per batch")
+        timeout = _bounded_int(
+            data.get("timeout"),
+            LLM_PROBE_TIMEOUT_SECONDS,
+            5,
+            120,
+        )
+        result = probe_llm_model_list(connection, models, timeout=timeout)
+        log(
+            "admin llm models probed: "
+            f"preset={connection.get('preset_id') or 'unsaved'} total={result.get('total') or 0} "
+            f"available={result.get('available') or 0} elapsed_ms={result.get('elapsed_ms') or 0}"
+        )
+        return result
+
     def global_prompt_presets(self) -> dict:
         saved = self.get_api_settings_raw()
         return normalize_prompt_preset_collection(
@@ -7862,11 +8177,11 @@ def merge_world_info_entries(existing: list, incoming: list) -> list:
         key = world_merge_key(entry)
         if key and key in index_by_key:
             merged[index_by_key[key]] = entry
-        elif len(merged) < 200:
+        elif len(merged) < WORLD_INFO_MAX_ENTRIES:
             merged.append(entry)
             if key:
                 index_by_key[key] = len(merged) - 1
-    return merged[:200]
+    return merged[:WORLD_INFO_MAX_ENTRIES]
 
 
 def apply_macros(text: object, char_name: str = "", user_name: str = "") -> str:
@@ -9027,11 +9342,15 @@ def template_context_with_world(template_context: dict | None, entry: dict) -> d
 
 def world_runtime_order_key(entry: dict) -> tuple:
     group = str(entry.get("_homer_world_group") or "")
+    if group == "required":
+        return (-1, int(entry.get("_homer_world_group_index") or 0), int(entry.get("_homer_world_sequence") or 0))
     if group == "mod":
         return (0, int(entry.get("_homer_world_group_index") or 0), int(entry.get("_homer_world_sequence") or 0))
+    if group == "conversation":
+        return (1, int(entry.get("_homer_world_group_index") or 0), int(entry.get("_homer_world_sequence") or 0))
     if group == "character":
-        return (1, int(entry.get("_homer_world_group_index") or 1_000_000), int(entry.get("_homer_world_sequence") or 0))
-    return (2, -int(entry.get("priority") or 0), int(entry.get("order") or 0))
+        return (2, int(entry.get("_homer_world_group_index") or 1_000_000), int(entry.get("_homer_world_sequence") or 0))
+    return (3, -int(entry.get("priority") or 0), int(entry.get("order") or 0))
 
 
 def collect_tavern_prompt_injections(entries: list, chat_messages: list[dict], recent_text: str, *, char_name: str = "", user_name: str = "", template_context: dict | None = None, max_chars: int = 12000) -> list[dict]:
@@ -9868,7 +10187,10 @@ def app_to_silly_card(card: dict) -> dict:
     return {"spec": "chara_card_v2", "spec_version": "2.0", "data": data}
 
 
-def normalize_world_info(value: object, limit: int = 200) -> list:
+WORLD_INFO_MAX_ENTRIES = 800
+
+
+def normalize_world_info(value: object, limit: int = WORLD_INFO_MAX_ENTRIES) -> list:
     """规整世界书条目列表，兼容基础条目和 SillyTavern Character Book 常用字段。"""
     if not isinstance(value, list):
         return []
@@ -9900,8 +10222,8 @@ def normalize_world_info(value: object, limit: int = 200) -> list:
         return max(lo, min(hi, n))
 
     out = []
-    requested_limit = int(limit or 200)
-    if requested_limit == 200 and any(isinstance(item, dict) and item.get("_homer_world_group") for item in value):
+    requested_limit = int(limit or WORLD_INFO_MAX_ENTRIES)
+    if requested_limit == WORLD_INFO_MAX_ENTRIES and any(isinstance(item, dict) and item.get("_homer_world_group") for item in value):
         requested_limit = 12000
     safe_limit = max(1, min(requested_limit, 12000))
     for idx, raw in enumerate(value[:safe_limit]):
@@ -9944,10 +10266,13 @@ def normalize_world_info(value: object, limit: int = 200) -> list:
             "delay": _int(raw.get("delay"), 0, 0, 9999),
             "media_bindings": [dict(item) for item in media_bindings[:30] if isinstance(item, dict)],
         }
-        if raw.get("_homer_world_group") in {"mod", "character"}:
+        if raw.get("_homer_world_group") in {"required", "mod", "conversation", "character"}:
             item["_homer_world_group"] = str(raw.get("_homer_world_group"))
             item["_homer_world_group_index"] = _int(raw.get("_homer_world_group_index"), 0, 0, 1_000_000)
             item["_homer_world_sequence"] = _int(raw.get("_homer_world_sequence"), idx, 0, 1_000_000)
+        for meta_key in ("_homer_world_source_key", "_mod_id", "_mod_version_id"):
+            if raw.get(meta_key):
+                item[meta_key] = str(raw.get(meta_key))[:240]
         out.append(item)
     return out
 
@@ -9998,7 +10323,7 @@ def _world_content_signature(value: object) -> str:
 
 def ensure_required_world_info(entries: object) -> list:
     runtime_ordered = bool(isinstance(entries, list) and any(isinstance(item, dict) and item.get("_homer_world_group") for item in entries))
-    limit = 12000 if runtime_ordered else 200
+    limit = 12000 if runtime_ordered else WORLD_INFO_MAX_ENTRIES
     normalized = normalize_world_info(entries if isinstance(entries, list) else [], limit=limit)
     required = required_world_info_entry()
     if not required:
@@ -10020,7 +10345,561 @@ def strip_required_world_info(entries: object) -> list:
         entry for entry in normalize_world_info(entries if isinstance(entries, list) else [])
         if str(entry.get("id") or "") != REQUIRED_WORLD_BOOK_ID
         and not (required_content and _world_content_signature(entry.get("content")) == required_content)
-    ][:199]
+    ][: WORLD_INFO_MAX_ENTRIES - 1]
+
+
+CONVERSATION_WORLD_CHAT_BOOK = "当前会话世界书"
+CONVERSATION_WORLD_REQUIRED_BOOK = "惑梦平台必需世界书"
+CONVERSATION_WORLD_PATCH_FIELDS = (
+    "name",
+    "keys",
+    "secondary_keys",
+    "content",
+    "constant",
+    "selective",
+    "position",
+    "depth",
+    "priority",
+    "order",
+    "probability",
+    "recursive",
+    "case_sensitive",
+    "match_whole_words",
+    "selective_logic",
+    "role",
+    "scan_depth",
+    "sticky",
+    "cooldown",
+    "delay",
+)
+
+
+def _conversation_worldbook_raw_extras(app: dict) -> dict:
+    raw = app.get("extra_settings") if isinstance(app, dict) else None
+    if isinstance(raw, str) and raw.strip():
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = {}
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _conversation_worldbook_group(entry: dict) -> str:
+    if str(entry.get("id") or "") == REQUIRED_WORLD_BOOK_ID:
+        return "required"
+    group = str(entry.get("_homer_world_group") or "").strip().lower()
+    if group in {"required", "mod", "conversation", "character"}:
+        return group
+    if str(entry.get("id") or "").startswith("mod:"):
+        return "mod"
+    return "character"
+
+
+def _conversation_worldbook_source_key(entry: dict, index: int, used: set[str]) -> str:
+    existing = str(entry.get("_homer_world_source_key") or "").strip()
+    group = _conversation_worldbook_group(entry)
+    raw_id = str(entry.get("id") or f"world-{index + 1}").strip()[:160]
+    if existing:
+        key = existing[:320]
+    elif group == "required":
+        key = f"required:{REQUIRED_WORLD_BOOK_ID}"
+    elif group == "mod":
+        key = f"mod:{raw_id}"
+    elif group == "conversation":
+        key = f"conversation:{raw_id or uuid.uuid4().hex}"
+    else:
+        sequence = int(entry.get("_homer_world_sequence") or index)
+        key = f"character:{raw_id}:{sequence}"
+    base = key
+    suffix = 2
+    while key in used:
+        key = f"{base}:{suffix}"
+        suffix += 1
+    used.add(key)
+    return key
+
+
+def prepare_conversation_worldbook_entries(app: dict) -> list[dict]:
+    extras = app_extras(app or {})
+    normalized = normalize_world_info(extras.get("world_info") or [], limit=12000)
+    out: list[dict] = []
+    used: set[str] = set()
+    for index, raw in enumerate(normalized[:12000]):
+        entry = dict(raw)
+        group = _conversation_worldbook_group(entry)
+        source_key = _conversation_worldbook_source_key(entry, index, used)
+        entry["_homer_world_group"] = group
+        entry["_homer_world_group_index"] = int(entry.get("_homer_world_group_index") or (0 if group != "character" else 1_000_000))
+        entry["_homer_world_sequence"] = int(entry.get("_homer_world_sequence") or index)
+        entry["_homer_world_source_key"] = source_key
+        out.append(entry)
+    return out
+
+
+def worldbook_compat_to_canonical(raw: object) -> dict:
+    if not isinstance(raw, dict):
+        raise ValueError("worldbook entry must be an object")
+    item = dict(raw)
+    strategy = item.get("strategy") if isinstance(item.get("strategy"), dict) else {}
+    position = item.get("position") if isinstance(item.get("position"), dict) else {}
+    recursion = item.get("recursion") if isinstance(item.get("recursion"), dict) else {}
+    effect = item.get("effect") if isinstance(item.get("effect"), dict) else {}
+    secondary = strategy.get("keys_secondary") if isinstance(strategy.get("keys_secondary"), dict) else {}
+    position_type = str(position.get("type") or item.get("position") or "system")
+    position_map = {
+        "before_character_definition": "system",
+        "after_character_definition": "system",
+        "before_example_messages": "system",
+        "after_example_messages": "system",
+        "before_author_note": "post_history",
+        "after_author_note": "post_history",
+        "at_depth": "depth",
+        "outlet": "post_history",
+    }
+    canonical = {
+        "id": str(item.get("id") or f"conversation-{uuid.uuid4().hex[:12]}")[:80],
+        "name": item.get("name"),
+        "keys": strategy.get("keys", item.get("keys")),
+        "secondary_keys": secondary.get("keys", item.get("secondary_keys")),
+        "content": item.get("content"),
+        "enabled": item.get("enabled", True),
+        "constant": (str(strategy.get("type") or "") == "constant") if strategy else item.get("constant", False),
+        "selective": (str(strategy.get("type") or "") == "selective") if strategy else item.get("selective", False),
+        "position": position_map.get(position_type, position_type),
+        "depth": position.get("depth", item.get("depth")),
+        "priority": item.get("priority", position.get("order", item.get("order"))),
+        "order": position.get("order", item.get("order")),
+        "probability": item.get("probability"),
+        "recursive": item.get("recursive", not bool(recursion.get("prevent_outgoing", False))),
+        "case_sensitive": item.get("case_sensitive", item.get("caseSensitive", False)),
+        "match_whole_words": item.get("match_whole_words", item.get("matchWholeWords", False)),
+        "selective_logic": secondary.get("logic", item.get("selective_logic")),
+        "role": position.get("role", item.get("role")),
+        "scan_depth": strategy.get("scan_depth", item.get("scan_depth")),
+        "sticky": effect.get("sticky", item.get("sticky")),
+        "cooldown": effect.get("cooldown", item.get("cooldown")),
+        "delay": effect.get("delay", item.get("delay")),
+    }
+    if canonical.get("scan_depth") == "same_as_global":
+        canonical["scan_depth"] = 2
+    return canonical
+
+
+def _normalize_conversation_worldbook_entry(raw: object, *, fallback: dict | None = None, added: bool = False) -> dict:
+    incoming = worldbook_compat_to_canonical(raw)
+    merged = dict(fallback or {})
+    for key in (("id",) if added else ()) + CONVERSATION_WORLD_PATCH_FIELDS + ("enabled",):
+        if key in incoming and incoming.get(key) is not None:
+            merged[key] = incoming.get(key)
+    normalized = normalize_world_info([merged], limit=1)
+    if not normalized:
+        raise ValueError("worldbook entry content is required")
+    entry = dict(normalized[0])
+    if added:
+        entry["id"] = str(incoming.get("id") or entry.get("id") or f"conversation-{uuid.uuid4().hex[:12]}")[:80]
+    return entry
+
+
+def _conversation_worldbook_patch_diff(base: dict, effective: dict) -> dict:
+    patch: dict = {}
+    for key in CONVERSATION_WORLD_PATCH_FIELDS:
+        if effective.get(key) != base.get(key):
+            patch[key] = effective.get(key)
+    return patch
+
+
+def apply_conversation_worldbook_override_rows(app: dict, rows: list[dict]) -> dict:
+    if not isinstance(app, dict):
+        return app
+    base_entries = prepare_conversation_worldbook_entries(app)
+    row_map = {str(row.get("source_key") or ""): row for row in rows if isinstance(row, dict)}
+    effective: list[dict] = []
+    base_keys: set[str] = set()
+    for base in base_entries:
+        source_key = str(base.get("_homer_world_source_key") or "")
+        base_keys.add(source_key)
+        group = _conversation_worldbook_group(base)
+        if group == "required":
+            entry = dict(base)
+            entry["enabled"] = True
+            effective.append(entry)
+            continue
+        row = row_map.get(source_key) or {}
+        patch = row.get("patch") if isinstance(row.get("patch"), dict) else {}
+        try:
+            entry = _normalize_conversation_worldbook_entry(patch, fallback=base) if patch else dict(base)
+        except ValueError:
+            entry = dict(base)
+        if row.get("enabled") is not None:
+            entry["enabled"] = bool(row.get("enabled"))
+        for meta_key in ("_homer_world_group", "_homer_world_group_index", "_homer_world_sequence", "_homer_world_source_key", "_mod_id", "_mod_version_id"):
+            if base.get(meta_key) is not None:
+                entry[meta_key] = base.get(meta_key)
+        effective.append(entry)
+    for source_key, row in row_map.items():
+        if source_key in base_keys or not source_key.startswith("conversation:"):
+            continue
+        patch = row.get("patch") if isinstance(row.get("patch"), dict) else {}
+        if not patch or patch.get("_deleted"):
+            continue
+        try:
+            entry = _normalize_conversation_worldbook_entry(patch, added=True)
+        except ValueError:
+            continue
+        entry["enabled"] = bool(row.get("enabled")) if row.get("enabled") is not None else bool(entry.get("enabled", True))
+        entry["_homer_world_group"] = "conversation"
+        entry["_homer_world_group_index"] = 500_000
+        entry["_homer_world_sequence"] = len(effective)
+        entry["_homer_world_source_key"] = source_key
+        effective.append(entry)
+    extras = _conversation_worldbook_raw_extras(app)
+    extras["world_info"] = effective[:12000]
+    app["extra_settings"] = extras
+    return app
+
+
+def _conversation_worldbook_public_entry(entry: dict, base: dict | None, override: dict | None) -> dict:
+    source_key = str(entry.get("_homer_world_source_key") or "")
+    group = _conversation_worldbook_group(entry)
+    digest = hashlib.sha1(source_key.encode("utf-8")).hexdigest() if source_key else "0"
+    locked = group == "required"
+    return {
+        "source_key": source_key,
+        "uid": int(digest[:10], 16) % 1_000_000,
+        "id": str(entry.get("id") or ""),
+        "name": str(entry.get("name") or "未命名条目"),
+        "keys": list(entry.get("keys") or []),
+        "secondary_keys": list(entry.get("secondary_keys") or []),
+        "content": "" if locked else str(entry.get("content") or ""),
+        "content_redacted": locked,
+        "enabled": True if locked else bool(entry.get("enabled", True)),
+        "inherited_enabled": True if locked else bool((base or entry).get("enabled", True)),
+        "overridden": bool(override),
+        "locked": locked,
+        "source": group,
+        "mod_id": str(entry.get("_mod_id") or ""),
+        "constant": bool(entry.get("constant")),
+        "selective": bool(entry.get("selective")),
+        "position": str(entry.get("position") or "system"),
+        "depth": int(entry.get("depth") or 4),
+        "priority": int(entry.get("priority") or 100),
+        "order": int(entry.get("order") or 0),
+        "probability": int(entry.get("probability") if entry.get("probability") is not None else 100),
+        "recursive": bool(entry.get("recursive")),
+        "case_sensitive": bool(entry.get("case_sensitive")),
+        "match_whole_words": bool(entry.get("match_whole_words")),
+        "selective_logic": str(entry.get("selective_logic") or "and_any"),
+        "role": str(entry.get("role") or "system"),
+        "scan_depth": int(entry.get("scan_depth") or 2),
+        "sticky": int(entry.get("sticky") or 0),
+        "cooldown": int(entry.get("cooldown") or 0),
+        "delay": int(entry.get("delay") or 0),
+    }
+
+
+def _conversation_worldbook_books(entries: list[dict], app_name: str, mod_labels: dict[str, str]) -> list[dict]:
+    books: list[dict] = [{
+        "name": CONVERSATION_WORLD_CHAT_BOOK,
+        "kind": "chat",
+        "source_keys": [str(item.get("source_key") or "") for item in entries if item.get("source") == "conversation"],
+    }]
+    required_keys = [str(item.get("source_key") or "") for item in entries if item.get("source") == "required"]
+    if required_keys:
+        books.append({"name": CONVERSATION_WORLD_REQUIRED_BOOK, "kind": "required", "source_keys": required_keys})
+    character_name = f"角色卡 · {str(app_name or '当前角色')[:80]}"
+    character_keys = [str(item.get("source_key") or "") for item in entries if item.get("source") == "character"]
+    if character_keys:
+        books.append({"name": character_name, "kind": "character", "source_keys": character_keys})
+    mod_ids = []
+    for item in entries:
+        if item.get("source") == "mod" and item.get("mod_id") and item.get("mod_id") not in mod_ids:
+            mod_ids.append(item.get("mod_id"))
+    for mod_id in mod_ids:
+        label = str(mod_labels.get(str(mod_id)) or "当前 Mod")[:80]
+        keys = [str(item.get("source_key") or "") for item in entries if str(item.get("mod_id") or "") == str(mod_id)]
+        books.append({"name": f"Mod · {label} · {str(mod_id)[:8]}", "kind": "mod", "mod_id": str(mod_id), "source_keys": keys})
+    return books
+
+
+def _conversation_prompt_config(store: "Store", conv_id: str, user_id: str) -> dict:
+    preset = normalize_full_prompt_preset(store.global_prompt_preset())
+    preset_id = str(preset.get("id") or "")
+    override_map = store.conversation_preset_override_map(conv_id, user_id).get("prompt", {}).get(preset_id, {})
+    entries: list[dict] = []
+    after_history = False
+    for raw in preset.get("prompts") or []:
+        if not isinstance(raw, dict):
+            continue
+        entry_id = str(raw.get("identifier") or "")
+        if not entry_id:
+            continue
+        if entry_id == "chatHistory":
+            after_history = True
+        inherited = bool(raw.get("in_order") and raw.get("order_enabled"))
+        marker = _preset_bool(raw.get("marker"), False) or not str(raw.get("content") or "").strip()
+        enabled = bool(override_map.get(entry_id, inherited))
+        entries.append({
+            "id": entry_id,
+            "name": str(raw.get("name") or entry_id),
+            "role": str(raw.get("role") or "system"),
+            "position": "post_history" if after_history else "system_before",
+            "order": int(raw.get("order") or 0),
+            "enabled": enabled,
+            "inherited_enabled": inherited,
+            "overridden": entry_id in override_map,
+            "locked": bool(marker or not raw.get("in_order")),
+            "marker": marker,
+        })
+    return {
+        "preset_id": preset_id,
+        "name": str(preset.get("name") or "未启用 Prompt 预设"),
+        "enabled": bool(preset.get("enabled")),
+        "entries": entries,
+        "total": len(entries),
+        "enabled_count": sum(1 for item in entries if item.get("enabled") and not item.get("locked")),
+    }
+
+
+def _conversation_regex_config(store: "Store", conv_id: str, user_id: str) -> dict:
+    preset = normalize_full_regex_preset(store.global_regex_preset())
+    preset_id = str(preset.get("id") or "")
+    override_map = store.conversation_preset_override_map(conv_id, user_id).get("regex", {}).get(preset_id, {})
+    entries: list[dict] = []
+    for raw in preset.get("scripts") or []:
+        if not isinstance(raw, dict):
+            continue
+        entry_id = str(raw.get("id") or "")
+        if not entry_id:
+            continue
+        inherited = not bool(raw.get("disabled"))
+        entries.append({
+            "id": entry_id,
+            "name": str(raw.get("scriptName") or raw.get("name") or entry_id),
+            "placement": list(raw.get("placement") or []),
+            "order": int(raw.get("order") or 0),
+            "enabled": bool(override_map.get(entry_id, inherited)),
+            "inherited_enabled": inherited,
+            "overridden": entry_id in override_map,
+            "locked": not bool(str(raw.get("findRegex") or "").strip()),
+        })
+    return {
+        "preset_id": preset_id,
+        "name": str(preset.get("name") or "未启用 Regex 预设"),
+        "enabled": bool(preset.get("enabled")),
+        "entries": entries,
+        "total": len(entries),
+        "enabled_count": sum(1 for item in entries if item.get("enabled") and not item.get("locked")),
+    }
+
+
+def build_conversation_runtime_config(store: "Store", conv_id: str, user_id: str) -> dict:
+    runtime = store.conversation_runtime_card(conv_id, user_id)
+    if not runtime:
+        raise PermissionError("conversation not found")
+    conversation, app_raw = runtime
+    app = dict(app_raw)
+    apply_conversation_mods(store.conn, store.lock, app, user_id, conv_id, REQUIRED_WORLD_BOOK_ID)
+    base_entries = prepare_conversation_worldbook_entries(app)
+    base_by_key = {str(item.get("_homer_world_source_key") or ""): item for item in base_entries}
+    override_rows = store.conversation_worldbook_override_rows(conv_id, user_id)
+    override_by_key = {str(item.get("source_key") or ""): item for item in override_rows}
+    effective_app = store.apply_conversation_worldbook_overrides(dict(app), user_id, conv_id)
+    effective_entries = prepare_conversation_worldbook_entries(effective_app)
+    public_entries = [
+        _conversation_worldbook_public_entry(
+            entry,
+            base_by_key.get(str(entry.get("_homer_world_source_key") or "")),
+            override_by_key.get(str(entry.get("_homer_world_source_key") or "")),
+        )
+        for entry in effective_entries
+    ]
+    try:
+        mod_selection = ConversationModStore(store.conn, store.lock).selection(user_id, conv_id)
+    except Exception:
+        mod_selection = []
+    mod_labels = {str(item.get("id") or ""): str(item.get("name") or item.get("title") or "当前 Mod") for item in mod_selection}
+    groups: list[dict] = []
+    group_specs = [("required", "平台必需"), ("conversation", "当前会话新增")]
+    for source, label in group_specs:
+        values = [item for item in public_entries if item.get("source") == source]
+        if values:
+            groups.append({"source": source, "label": label, "entries": values})
+    for item in mod_selection:
+        mod_id = str(item.get("id") or "")
+        values = [entry for entry in public_entries if entry.get("source") == "mod" and str(entry.get("mod_id") or "") == mod_id]
+        if values:
+            groups.append({"source": "mod", "source_id": mod_id, "label": f"Mod · {mod_labels.get(mod_id) or '当前 Mod'}", "entries": values})
+    character_values = [item for item in public_entries if item.get("source") == "character"]
+    if character_values:
+        groups.append({"source": "character", "label": f"角色卡 · {str(app.get('name') or conversation.get('app_name') or '当前角色')}", "entries": character_values})
+    books = _conversation_worldbook_books(public_entries, str(app.get("name") or conversation.get("app_name") or ""), mod_labels)
+    character_book = next((item for item in books if item.get("kind") == "character"), None)
+    additional_books = [item.get("name") for item in books if item.get("kind") == "mod"]
+    return {
+        "conversation_id": conv_id,
+        "global_preset_enabled": bool(conversation.get("global_preset_enabled", 1)),
+        "preset": {
+            "prompt": _conversation_prompt_config(store, conv_id, user_id),
+            "regex": _conversation_regex_config(store, conv_id, user_id),
+        },
+        "worldbook": {
+            "total": len(public_entries),
+            "enabled": sum(1 for item in public_entries if item.get("enabled")),
+            "overridden": sum(1 for item in public_entries if item.get("overridden")),
+            "entries": public_entries,
+            "groups": groups,
+            "books": books,
+            "names": {
+                "all": [item.get("name") for item in books],
+                "global": [item.get("name") for item in books if item.get("kind") == "required"],
+                "chat": CONVERSATION_WORLD_CHAT_BOOK,
+                "character": {
+                    "primary": character_book.get("name") if character_book else None,
+                    "additional": additional_books,
+                },
+            },
+        },
+    }
+
+
+def save_conversation_worldbook_overrides_for_store(
+    store: "Store",
+    conv_id: str,
+    user_id: str,
+    items: list,
+    *,
+    reset: bool = False,
+    replace_entries: list | None = None,
+    worldbook_name: str = "",
+) -> dict:
+    runtime = store.conversation_runtime_card(conv_id, user_id)
+    if not runtime:
+        raise PermissionError("conversation not found")
+    _conversation, app_raw = runtime
+    app = dict(app_raw)
+    apply_conversation_mods(store.conn, store.lock, app, user_id, conv_id, REQUIRED_WORLD_BOOK_ID)
+    base_entries = prepare_conversation_worldbook_entries(app)
+    base_by_key = {str(entry.get("_homer_world_source_key") or ""): entry for entry in base_entries}
+    existing_rows = store.conversation_worldbook_override_rows(conv_id, user_id)
+    existing_by_key = {str(row.get("source_key") or ""): row for row in existing_rows}
+    clean_items = list(items) if isinstance(items, list) else []
+    if replace_entries is not None:
+        if not isinstance(replace_entries, list) or len(replace_entries) > WORLD_INFO_MAX_ENTRIES:
+            raise ValueError("replacement worldbook is too large")
+        config = build_conversation_runtime_config(store, conv_id, user_id)
+        books = config.get("worldbook", {}).get("books") or []
+        book = next((item for item in books if str(item.get("name") or "") == str(worldbook_name or "")), None)
+        if not book:
+            raise ValueError("worldbook is unavailable")
+        allowed_keys = {str(key or "") for key in book.get("source_keys") or [] if str(key or "")}
+        allow_add = book.get("kind") == "chat"
+        returned_keys: set[str] = set()
+        replacement_items: list[dict] = []
+        for raw in replace_entries:
+            if not isinstance(raw, dict):
+                raise ValueError("worldbook entry must be an object")
+            extra = raw.get("extra") if isinstance(raw.get("extra"), dict) else {}
+            source_key = str(raw.get("source_key") or extra.get("homer_source_key") or "").strip()[:320]
+            if source_key:
+                if source_key not in allowed_keys or source_key.startswith("required:"):
+                    raise ValueError("worldbook entry is outside the selected book")
+                returned_keys.add(source_key)
+            elif allow_add:
+                source_key = f"conversation:{uuid.uuid4().hex}"
+                returned_keys.add(source_key)
+            else:
+                raise ValueError("new entries can only be added to the current conversation worldbook")
+            canonical = worldbook_compat_to_canonical(raw)
+            replacement_items.append({"source_key": source_key, "enabled": bool(canonical.get("enabled", True)), "patch": canonical})
+        for source_key in allowed_keys - returned_keys:
+            if source_key.startswith("conversation:"):
+                replacement_items.append({"source_key": source_key, "delete": True})
+            elif not source_key.startswith("required:"):
+                replacement_items.append({"source_key": source_key, "enabled": False})
+        clean_items = replacement_items
+    if reset:
+        clean_items = []
+    if len(clean_items) > WORLD_INFO_MAX_ENTRIES:
+        raise ValueError("too many worldbook override items")
+    operations: list[tuple[str, int | None, str | None, bool]] = []
+    seen: set[str] = set()
+    for raw in clean_items:
+        if not isinstance(raw, dict):
+            raise ValueError("worldbook override item must be an object")
+        source_key = str(raw.get("source_key") or "").strip()[:320]
+        if not source_key or source_key in seen:
+            raise ValueError("worldbook source key is invalid or duplicated")
+        seen.add(source_key)
+        if source_key.startswith("required:"):
+            raise ValueError("platform required worldbook entry is locked")
+        if raw.get("delete"):
+            if not source_key.startswith("conversation:"):
+                raise ValueError("base worldbook entries cannot be deleted; disable them instead")
+            operations.append((source_key, None, None, True))
+            continue
+        base = base_by_key.get(source_key)
+        existing = existing_by_key.get(source_key) or {}
+        if base is None and not source_key.startswith("conversation:"):
+            raise ValueError("worldbook entry is unavailable")
+        incoming_patch = raw.get("patch") if isinstance(raw.get("patch"), dict) else {}
+        if base is None:
+            prior_patch = existing.get("patch") if isinstance(existing.get("patch"), dict) else {}
+            candidate = dict(prior_patch)
+            candidate.update(incoming_patch)
+            effective = _normalize_conversation_worldbook_entry(candidate, added=True)
+            patch = {"id": effective.get("id"), **{key: effective.get(key) for key in CONVERSATION_WORLD_PATCH_FIELDS}}
+            inherited_enabled = True
+        else:
+            prior_patch = existing.get("patch") if isinstance(existing.get("patch"), dict) else {}
+            candidate = dict(prior_patch)
+            candidate.update(incoming_patch)
+            effective = _normalize_conversation_worldbook_entry(candidate, fallback=base) if candidate else dict(base)
+            patch = _conversation_worldbook_patch_diff(base, effective)
+            inherited_enabled = bool(base.get("enabled", True))
+        if "enabled" in raw:
+            if not isinstance(raw.get("enabled"), bool):
+                raise ValueError("worldbook enabled must be a boolean")
+            enabled = bool(raw.get("enabled"))
+        elif existing.get("enabled") is not None:
+            enabled = bool(existing.get("enabled"))
+        else:
+            enabled = inherited_enabled
+        enabled_db = None if enabled == inherited_enabled and base is not None else (1 if enabled else 0)
+        patch_json = json.dumps(patch, ensure_ascii=False, separators=(",", ":")) if patch else None
+        if patch_json and len(patch_json.encode("utf-8")) > 64 * 1024:
+            raise ValueError("worldbook entry patch is too large")
+        operations.append((source_key, enabled_db, patch_json, False))
+    ts = now_ms()
+    with store.lock:
+        store.conn.execute("begin immediate")
+        try:
+            if reset:
+                store.conn.execute(
+                    "delete from conversation_worldbook_overrides where user_id=? and conversation_id=?",
+                    (user_id, conv_id),
+                )
+            else:
+                for source_key, enabled_db, patch_json, should_delete in operations:
+                    if should_delete or (enabled_db is None and not patch_json):
+                        store.conn.execute(
+                            "delete from conversation_worldbook_overrides where user_id=? and conversation_id=? and source_key=?",
+                            (user_id, conv_id, source_key),
+                        )
+                        continue
+                    store.conn.execute(
+                        """
+                        insert into conversation_worldbook_overrides(user_id,conversation_id,source_key,enabled,patch_json,updated_at)
+                        values(?,?,?,?,?,?)
+                        on conflict(user_id,conversation_id,source_key) do update set
+                            enabled=excluded.enabled, patch_json=excluded.patch_json, updated_at=excluded.updated_at
+                        """,
+                        (user_id, conv_id, source_key, enabled_db, patch_json, ts),
+                    )
+            store.conn.commit()
+        except Exception:
+            store.conn.rollback()
+            raise
+    return build_conversation_runtime_config(store, conv_id, user_id)
 
 
 def normalize_prompt_blocks(value: object) -> list:
@@ -11254,6 +12133,265 @@ def extract_sse_answer(raw_text: str) -> str | None:
     return last
 
 
+def _llm_admin_headers(connection: dict, *, accept: str = "application/json") -> dict:
+    protocol = normalize_llm_protocol(connection.get("protocol"), base_url=connection.get("base_url"))
+    api_key = str(connection.get("api_key") or "").strip()
+    headers = {
+        "Accept": accept,
+        "User-Agent": LLM_UPSTREAM_USER_AGENT,
+        "Origin": PUBLIC_BASE_URL,
+        "Referer": PUBLIC_BASE_URL + "/",
+    }
+    if protocol == "anthropic":
+        headers["x-api-key"] = api_key
+        headers["anthropic-version"] = "2023-06-01"
+    else:
+        headers["Authorization"] = f"Bearer {api_key}"
+    return headers
+
+
+def _safe_llm_admin_error(value: object, api_key: str = "") -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if api_key:
+        text = text.replace(api_key, "[redacted]")
+    text = re.sub(r"(?i)bearer\s+[^\s,;]+", "Bearer [redacted]", text)
+    text = re.sub(r"\bsk-[A-Za-z0-9_-]{8,}\b", "[redacted]", text)
+    return text[:300] or "unknown upstream error"
+
+
+def _http_error_summary(exc: HTTPError, api_key: str = "") -> str:
+    status = int(getattr(exc, "code", 0) or 0)
+    detail = ""
+    try:
+        raw = exc.read(4097)
+        if len(raw) > 4096:
+            raw = raw[:4096]
+        text = raw.decode("utf-8", errors="replace").strip()
+        if text:
+            try:
+                payload = json.loads(text)
+            except Exception:
+                detail = text
+            else:
+                error = payload.get("error") if isinstance(payload, dict) else None
+                if isinstance(error, dict):
+                    detail = str(error.get("message") or error.get("code") or "")
+                elif error:
+                    detail = str(error)
+                elif isinstance(payload, dict):
+                    detail = str(payload.get("message") or payload.get("msg") or payload.get("detail") or "")
+    except Exception:
+        detail = ""
+    suffix = f": {detail}" if detail else ""
+    return _safe_llm_admin_error(f"upstream HTTP {status}{suffix}", api_key)
+
+
+def extract_llm_model_ids(payload: object, *, limit: int = LLM_DISCOVERY_MAX_MODELS) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: object) -> None:
+        model = str(value or "").strip()
+        if not model or model in seen or len(model) > 320 or any(ord(ch) < 32 for ch in model):
+            return
+        seen.add(model)
+        out.append(model)
+
+    def walk(value: object, depth: int = 0) -> None:
+        if len(out) >= limit or depth > 4:
+            return
+        if isinstance(value, str):
+            add(value)
+            return
+        if isinstance(value, list):
+            for item in value:
+                if len(out) >= limit:
+                    break
+                if isinstance(item, dict):
+                    model_id = item.get("id") or item.get("model") or item.get("model_id") or item.get("name")
+                    if model_id:
+                        add(model_id)
+                    else:
+                        walk(item, depth + 1)
+                elif isinstance(item, str):
+                    add(item)
+            return
+        if isinstance(value, dict):
+            for key in ("data", "models", "items", "result", "results"):
+                nested = value.get(key)
+                if isinstance(nested, (list, dict)):
+                    walk(nested, depth + 1)
+                    if out:
+                        return
+
+    walk(payload)
+    return out[:limit]
+
+
+def discover_llm_model_catalog(connection: dict) -> dict:
+    started = time.perf_counter()
+    endpoint = llm_endpoint_url(connection.get("base_url"), "models")
+    headers = _llm_admin_headers(connection)
+    request = Request(endpoint, method="GET", headers=headers)
+    timeout = _bounded_int(connection.get("timeout"), 25, 5, 60)
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            raw = response.read(2 * 1024 * 1024 + 1)
+    except HTTPError as exc:
+        raise RuntimeError(_http_error_summary(exc, str(connection.get("api_key") or ""))) from exc
+    except Exception as exc:
+        raise RuntimeError(_safe_llm_admin_error(exc, str(connection.get("api_key") or ""))) from exc
+    if len(raw) > 2 * 1024 * 1024:
+        raise RuntimeError("model catalog response is too large")
+    try:
+        payload = json.loads(raw.decode("utf-8", errors="replace"))
+    except Exception as exc:
+        raise RuntimeError("model catalog returned non-JSON data") from exc
+    models = extract_llm_model_ids(payload)
+    if not models:
+        raise RuntimeError("model catalog did not contain model IDs")
+    return {
+        "models": models,
+        "total": len(models),
+        "elapsed_ms": int((time.perf_counter() - started) * 1000),
+        "truncated": len(models) >= LLM_DISCOVERY_MAX_MODELS,
+    }
+
+
+def _parse_llm_probe_response(raw: bytes) -> tuple[str, bool]:
+    text = raw.decode("utf-8", errors="replace").strip()
+    if not text:
+        return "", False
+    try:
+        payload = json.loads(text)
+    except Exception:
+        payload = None
+    if payload is not None:
+        answer = str(extract_upstream_chat_answer(payload) or "").strip()
+        return answer, bool(answer)
+    parts: list[str] = []
+    terminal = False
+    for line in text.splitlines():
+        value = line.strip()
+        if not value or value.startswith(":") or not value.startswith("data:"):
+            continue
+        value = value[5:].strip()
+        if value == "[DONE]":
+            terminal = True
+            continue
+        if not value:
+            continue
+        try:
+            event = json.loads(value)
+        except Exception:
+            continue
+        delta = extract_stream_delta(event)
+        if delta:
+            parts.append(delta)
+        if _stream_event_is_terminal(event):
+            terminal = True
+    return "".join(parts).strip(), terminal
+
+
+def probe_llm_model(connection: dict, model: str, *, timeout: int) -> dict:
+    started = time.perf_counter()
+    protocol = normalize_llm_protocol(connection.get("protocol"), base_url=connection.get("base_url"))
+    if protocol == "anthropic":
+        endpoint = llm_endpoint_url(connection.get("base_url"), "messages")
+        payload = {
+            "model": model,
+            "system": "You are a connectivity probe. Return only OK.",
+            "messages": [{"role": "user", "content": "只回复 OK"}],
+            "temperature": 0,
+            "max_tokens": 16,
+            "stream": True,
+        }
+    else:
+        endpoint = llm_endpoint_url(connection.get("base_url"), "chat/completions")
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "You are a connectivity probe. Return only OK."},
+                {"role": "user", "content": "只回复 OK"},
+            ],
+            "temperature": 0,
+            "stream": True,
+        }
+    headers = _llm_admin_headers(connection, accept="text/event-stream")
+    headers["Content-Type"] = "application/json"
+    request = Request(endpoint, data=json_bytes(payload), method="POST", headers=headers)
+    result = {
+        "model": model,
+        "available": False,
+        "status": "error",
+        "elapsed_ms": 0,
+        "error": "",
+    }
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            raw = response.read(2 * 1024 * 1024 + 1)
+        if len(raw) > 2 * 1024 * 1024:
+            raise RuntimeError("probe response is too large")
+        answer, terminal = _parse_llm_probe_response(raw)
+        if not answer:
+            result["status"] = "empty_response"
+            result["error"] = "模型未返回有效正文"
+        elif not terminal:
+            result["status"] = "incomplete_stream"
+            result["error"] = "模型流式响应未正常结束"
+        else:
+            result["available"] = True
+            result["status"] = "available"
+    except HTTPError as exc:
+        result["status"] = "http_error"
+        result["error"] = _http_error_summary(exc, str(connection.get("api_key") or ""))
+    except (TimeoutError, socket.timeout) as exc:
+        result["status"] = "timeout"
+        result["error"] = "模型探测超时"
+    except Exception as exc:
+        error = _safe_llm_admin_error(exc, str(connection.get("api_key") or ""))
+        result["status"] = "timeout" if "timed out" in error.lower() else "error"
+        result["error"] = "模型探测超时" if result["status"] == "timeout" else error
+    result["elapsed_ms"] = int((time.perf_counter() - started) * 1000)
+    return result
+
+
+def probe_llm_model_list(connection: dict, models: list[str], *, timeout: int) -> dict:
+    started = time.perf_counter()
+    ordered = split_model_names(models)[:LLM_PROBE_MAX_MODELS]
+    results_by_model: dict[str, dict] = {}
+    workers = min(LLM_PROBE_CONCURRENCY, len(ordered))
+    with ThreadPoolExecutor(max_workers=max(1, workers), thread_name_prefix="llm-probe") as executor:
+        futures = {
+            executor.submit(probe_llm_model, connection, model, timeout=timeout): model
+            for model in ordered
+        }
+        for future in as_completed(futures):
+            model = futures[future]
+            try:
+                results_by_model[model] = future.result()
+            except Exception as exc:
+                results_by_model[model] = {
+                    "model": model,
+                    "available": False,
+                    "status": "error",
+                    "elapsed_ms": 0,
+                    "error": _safe_llm_admin_error(exc, str(connection.get("api_key") or "")),
+                }
+    results = [results_by_model[model] for model in ordered]
+    available_models = [item["model"] for item in results if item.get("available")]
+    return {
+        "results": results,
+        "available_models": available_models,
+        "total": len(results),
+        "available": len(available_models),
+        "failed": len(results) - len(available_models),
+        "elapsed_ms": int((time.perf_counter() - started) * 1000),
+        "timeout_seconds": timeout,
+        "concurrency": workers,
+    }
+
+
 def select_world_info(entries: list, recent_text: str, *, char_name: str = "", user_name: str = "", position: str = "system", max_chars: int = 4000, return_entries: bool = False, template_context: dict | None = None, include_special: bool = False):
     """根据最近对话文本命中世界书条目，拼成注入段落。支持优先级、二级关键词、概率和递归扫描。"""
     if not isinstance(entries, list) or not entries:
@@ -11762,6 +12900,13 @@ CHINESE_INTERNAL_SECTION_MARKERS = (
     "计划",
     "内部推理",
     "创作思路",
+    "检设定",
+    "检查设定",
+    "设定检查",
+    "历史记录分析",
+    "剧情设定分析",
+    "回复规划",
+    "正文规划",
 )
 
 
@@ -11847,6 +12992,7 @@ def _extract_json_visible_reply(text: str) -> str | None:
 def _clean_internal_heading(line: str) -> str:
     value = str(line or "").strip()
     value = re.sub(r"^\s{0,3}#{1,6}\s*", "", value)
+    value = re.sub(r"^(?:[一二三四五六七八九十]+|[A-Za-z0-9]+)\s*[、.．)）]\s*", "", value)
     value = value.strip("*_`# \t")
     value = re.sub(r"\s+", " ", value)
     return value.strip()
@@ -12056,17 +13202,45 @@ def process_model_reply(app: dict, reply: object, *, char_name: str = "", user_n
 
 
 def apply_conversation_global_preset_override(settings: dict | None, context: dict | None = None) -> dict:
-    """Disable site-wide prompt/regex presets for one ordinary conversation only."""
+    """Apply one ordinary conversation's prompt/regex entry overrides without changing provider routing."""
     source = settings if isinstance(settings, dict) else {}
     conversation_settings = context.get("conversation_settings") if isinstance(context, dict) else None
-    if not isinstance(conversation_settings, dict) or bool(conversation_settings.get("global_preset_enabled", True)):
+    if not isinstance(conversation_settings, dict):
+        return source
+    master_enabled = bool(conversation_settings.get("global_preset_enabled", True))
+    raw_overrides = conversation_settings.get("preset_overrides") if isinstance(conversation_settings.get("preset_overrides"), dict) else {}
+    prompt_overrides = raw_overrides.get("prompt") if isinstance(raw_overrides.get("prompt"), dict) else {}
+    regex_overrides = raw_overrides.get("regex") if isinstance(raw_overrides.get("regex"), dict) else {}
+    if master_enabled and not prompt_overrides and not regex_overrides:
         return source
     runtime = dict(source)
-    for key in ("global_prompt_preset", "global_regex_preset"):
-        preset = runtime.get(key)
-        disabled = dict(preset) if isinstance(preset, dict) else {}
-        disabled["enabled"] = False
-        runtime[key] = disabled
+    prompt = normalize_full_prompt_preset(runtime.get("global_prompt_preset"))
+    prompt_map = prompt_overrides.get(str(prompt.get("id") or "")) if isinstance(prompt_overrides, dict) else None
+    if isinstance(prompt_map, dict) and prompt_map:
+        copied_prompts = []
+        for item in prompt.get("prompts") or []:
+            copied = dict(item)
+            entry_id = str(copied.get("identifier") or "")
+            if entry_id in prompt_map:
+                copied["order_enabled"] = bool(prompt_map[entry_id])
+            copied_prompts.append(copied)
+        prompt["prompts"] = copied_prompts
+    regex = normalize_full_regex_preset(runtime.get("global_regex_preset"))
+    regex_map = regex_overrides.get(str(regex.get("id") or "")) if isinstance(regex_overrides, dict) else None
+    if isinstance(regex_map, dict) and regex_map:
+        copied_scripts = []
+        for item in regex.get("scripts") or []:
+            copied = dict(item)
+            entry_id = str(copied.get("id") or "")
+            if entry_id in regex_map:
+                copied["disabled"] = not bool(regex_map[entry_id])
+            copied_scripts.append(copied)
+        regex["scripts"] = copied_scripts
+    if not master_enabled:
+        prompt["enabled"] = False
+        regex["enabled"] = False
+    runtime["global_prompt_preset"] = prompt
+    runtime["global_regex_preset"] = regex
     return runtime
 
 
@@ -12717,6 +13891,7 @@ def chat_reply_for_app(store: "Store", user_id: str, app_id: str, content: str, 
         app = dict(app_row)
         if conversation_id:
             apply_conversation_mods(store.conn, store.lock, app, user_id, conversation_id, REQUIRED_WORLD_BOOK_ID)
+            store.apply_conversation_worldbook_overrides(app, user_id, conversation_id)
         selected_model = store.public_model_selection(model_override)
         if selected_model:
             app["llm_model"] = selected_model
@@ -12844,6 +14019,7 @@ def regenerate_reply_for_app(store: "Store", user_id: str, app_id: str, *, histo
         app = dict(app_row)
         if conversation_id:
             apply_conversation_mods(store.conn, store.lock, app, user_id, conversation_id, REQUIRED_WORLD_BOOK_ID)
+            store.apply_conversation_worldbook_overrides(app, user_id, conversation_id)
         selected_model = store.public_model_selection(model_override)
         if selected_model:
             app["llm_model"] = selected_model
@@ -13929,6 +15105,7 @@ class Handler(BaseHTTPRequestHandler):
             app = dict(app_row) if app_row else {}
             if app:
                 apply_conversation_mods(self.store.conn, self.store.lock, app, user["id"], conv_id, REQUIRED_WORLD_BOOK_ID)
+                self.store.apply_conversation_worldbook_overrides(app, user["id"], conv_id)
             reply_parts: list[str] = []
             persona = self.store.get_persona(user["id"]) if app else {}
             context = {}
@@ -14130,6 +15307,7 @@ class Handler(BaseHTTPRequestHandler):
             self.write_sse_event("start", {"conversation_id": conv_id, "app_id": app_id, "mode": "continue"})
             app = dict(app_row)
             apply_conversation_mods(self.store.conn, self.store.lock, app, user["id"], conv_id, REQUIRED_WORLD_BOOK_ID)
+            self.store.apply_conversation_worldbook_overrides(app, user["id"], conv_id)
             model_override = self.store.public_model_selection(body.get("model_id") or body.get("llm_model"))
             if model_override:
                 app["llm_model"] = model_override
@@ -15691,7 +16869,7 @@ class Handler(BaseHTTPRequestHandler):
             fallback = go_response({"apps": [], "total": 0, "is_cache": False})
             return proxy_json(normalized, query, fallback)
 
-        if normalized.endswith("model-list") or "model" in normalized:
+        if not normalized.startswith("admin/api/") and (normalized.endswith("model-list") or "model" in normalized):
             return proxy_json(normalized, query, {"models": [], "list": [], "items": []})
 
         # ===== Conversations & Chat =====
@@ -15714,6 +16892,63 @@ class Handler(BaseHTTPRequestHandler):
                 "version_id": str(conversation.get("version_id") or ""),
                 "card": conversation_runtime_card_payload(app, conversation),
             })
+
+        if normalized.startswith("console/api/web/conversations/") and normalized.endswith("/runtime-config"):
+            parts = normalized.split("/")
+            conv_id = parts[4] if len(parts) >= 6 else ""
+            if self.command.upper() != "GET":
+                return error_response("method not allowed", 405)
+            try:
+                return ok_response(self.store.conversation_runtime_config(conv_id, user["id"]))
+            except PermissionError:
+                return error_response("conversation not found", 404)
+            except ValueError as exc:
+                return error_response(str(exc), 400)
+
+        if normalized.startswith("console/api/web/conversations/") and normalized.endswith("/preset-overrides"):
+            parts = normalized.split("/")
+            conv_id = parts[4] if len(parts) >= 6 else ""
+            if self.command.upper() != "POST":
+                return error_response("method not allowed", 405)
+            if not isinstance(body, dict):
+                return error_response("invalid body", 400)
+            try:
+                result = self.store.save_conversation_preset_overrides(
+                    conv_id,
+                    user["id"],
+                    str(body.get("preset_kind") or ""),
+                    str(body.get("preset_id") or ""),
+                    body.get("items") if isinstance(body.get("items"), list) else [],
+                    reset=bool(body.get("reset")),
+                )
+                result["runtime_config"] = self.store.conversation_runtime_config(conv_id, user["id"])
+                return ok_response(result)
+            except PermissionError:
+                return error_response("conversation not found", 404)
+            except ValueError as exc:
+                return error_response(str(exc), 400)
+
+        if normalized.startswith("console/api/web/conversations/") and normalized.endswith("/worldbook-overrides"):
+            parts = normalized.split("/")
+            conv_id = parts[4] if len(parts) >= 6 else ""
+            if self.command.upper() != "POST":
+                return error_response("method not allowed", 405)
+            if not isinstance(body, dict):
+                return error_response("invalid body", 400)
+            try:
+                result = self.store.save_conversation_worldbook_overrides(
+                    conv_id,
+                    user["id"],
+                    body.get("items") if isinstance(body.get("items"), list) else [],
+                    reset=bool(body.get("reset")),
+                    replace_entries=body.get("replace_entries") if isinstance(body.get("replace_entries"), list) else None,
+                    worldbook_name=str(body.get("worldbook_name") or ""),
+                )
+                return ok_response(result)
+            except PermissionError:
+                return error_response("conversation not found", 404)
+            except ValueError as exc:
+                return error_response(str(exc), 400)
 
         if normalized.startswith("console/api/web/conversations/") and normalized.endswith("/messages"):
             parts = normalized.split("/")
@@ -16261,6 +17496,26 @@ class Handler(BaseHTTPRequestHandler):
                         return error_response("invalid body")
                     return ok_response(self.store.update_site_settings(body))
                 return error_response("method not allowed", 405)
+
+            if normalized == "admin/api/llm-settings/discover-models":
+                if self.command.upper() != "POST" or not isinstance(body, dict):
+                    return error_response("invalid body", 400)
+                try:
+                    return ok_response(self.store.discover_admin_llm_models(body))
+                except ValueError as exc:
+                    return error_response(f"invalid model node: {exc}", 400)
+                except RuntimeError as exc:
+                    return error_response(str(exc), 502)
+
+            if normalized == "admin/api/llm-settings/probe-models":
+                if self.command.upper() != "POST" or not isinstance(body, dict):
+                    return error_response("invalid body", 400)
+                try:
+                    return ok_response(self.store.probe_admin_llm_models(body))
+                except ValueError as exc:
+                    return error_response(f"invalid model probe: {exc}", 400)
+                except RuntimeError as exc:
+                    return error_response(str(exc), 502)
 
             if normalized == "admin/api/llm-settings":
                 if self.command.upper() == "GET":

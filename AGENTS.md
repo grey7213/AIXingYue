@@ -63,6 +63,21 @@
 
 ## Reusable Pitfalls
 
+- Symptom: 后台新增“自动读取模型/检测可用模型”接口后，请求提前落入旧模型列表 fallback，管理员接口返回错误结构或根本到不了新处理器。
+  Cause: 旧路由用 `"model" in normalized` 做宽泛匹配，并且位于管理员路由之前；`admin/api/llm-settings/discover-models` 和 `probe-models` 的路径本身也包含 `model`。
+  Fix: 旧模型 fallback 明确排除 `admin/api/`，管理员发现与探测接口继续执行严格管理员鉴权、服务端 Key 复用和上游错误脱敏。
+  Verify: 2026-07-28 `output/verify_admin_model_discovery_local.py` 覆盖普通用户 403、目录发现、OpenAI/Anthropic 流式探测、空正文/HTTP 失败过滤和公开响应无秘密；后台 Chromium 桌面/390px 回归 console/page error=0。
+
+- Symptom: 卡片 iframe 调用 `worldbook.names/get/replace` 时反复重建，RPC 在等待响应期间报 `Frame was detached` 或超时。
+  Cause: iframe bridge 每次初始化都刷新世界书名称，父页收到 RPC 后又更新响应式 `runtimeConfig`；消息 `x-html` 的渲染参数直接读取该对象，配置刷新会替换正在发起请求的 iframe。
+  Fix: bridge 仅在名称缓存为空时请求 `worldbook.names`；父页以按会话的非响应式名称快照生成 srcdoc，使配置面板刷新与沙箱生命周期解耦，仍保持 opaque-origin `sandbox=allow-scripts`。
+  Verify: 2026-07-28 `output/verify_conversation_runtime_config_browser.py` 连续完成世界书读取与新增，父 DOM/localStorage 不可读、伪造来源无效；1440×960 与 390×844 无溢出，console/page error=0。
+
+- Symptom: 用任意现有重型角色卡做生产模型端到端烟测时，请求超过 90 秒未返回，健康检查和随后清理请求也暂时无响应。
+  Cause: 该存档包含大型角色 Prompt、世界书和 Regex/HTML 后处理；连接器本身的最小流式探测约 4 秒已成功，但重型角色的完整生成链路不适合作为模型节点烟测夹具。
+  Fix: 模型节点验收先走管理员最小流式 probe，再用临时账号 + 极简私有角色验证正式 `/chat` 路径；测试数据必须在 finally 中清理。若错误夹具已拖住服务，重启后端后按唯一 sentinel 精确删除临时会话并复查数据库。
+  Verify: 2026-07-28 错误夹具恢复后 `matched=1 deleted=1 remaining=0 quick_check=ok`；极简角色通过 `gemini-2.5-flash-cli` 在约 6 秒返回有效回复，临时账号/角色/会话清理为 0 残留，backend/Nginx active、内外 health OK。
+
 - Symptom: 角色卡开场后生成的 assistant 内容明明已保存，但“普通叙事正文 + 尾部完整 HTML 音乐播放器”会整块黑屏/压扁；初步恢复正文后，播放器又可能变成占满消息区的内联面板，或生产环境 BGM 被 CSP 拦截并产生 console error。
   Cause: 高级渲染器只要在消息任意位置发现 `<html>/<body>` 就把整条回复当完整文档，而尾部播放器自身设置 `html,body{width:1px;height:1px;overflow:hidden}`，从而压扁前面的正文；随后 `rewriteTavernHelperScript()` 又对整个内联脚本文本做无边界替换，把 CSS 字符串里的 `.rp-parent-float` 等类名误改成含 `window.__xySTTop` 的选择器，导致 `position:fixed` 规则失效。生产 Nginx 响应 CSP 还可能比 iframe 内的固定资源白名单更窄，两层策略取交集后继续拦截已审核的 RP Hub 资源。
   Fix: 将“正文前缀 + 尾部文档”识别为 mixed document，继续使用 fragment 兼容壳并在末尾恢复 iframe 根宽高/滚动；TavernHelper 全局访问重写要求 JavaScript 表达式前置边界，并排除单词、`$`、`.`、`-`，保留 CSS 类名。Nginx CSP 与 iframe 白名单对齐，仅增加固定的 `unpkg.com` Vue、`cdnjs.cloudflare.com` Font Awesome 和 `raw.githubusercontent.com` 音频来源；`connect-src`、`sandbox=allow-scripts` 和无 `allow-same-origin` 边界不变。
