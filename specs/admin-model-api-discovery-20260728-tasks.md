@@ -8,7 +8,7 @@
 | AMD4 | 后台新增节点、自动填充和检测结果 UI | Done | Node 检查及 `verify_admin_model_discovery_browser.py` 桌面/390px 通过，console/page error=0 |
 | AMD5 | 回归公开模型目录和用户对话 | Done | 公开接口仅包含可用模型，不含 Key/Base URL/失败详情；会话运行时联合回归通过 |
 | AMD6 | 备份、部署、健康/DB 验证 | Done | production backend/Nginx active，内外 health OK，local_only，quick_check=ok，真实目录/探测/聊天通过 |
-| AMD7 | 更新 AGENTS 错误记忆并提交推送 | In Progress | 文档已更新；待聚焦 commit + origin/main |
+| AMD7 | 更新 AGENTS 错误记忆并提交推送 | Done | `ebd9321` 已推送至 `origin/main` |
 
 ## 当前边界
 
