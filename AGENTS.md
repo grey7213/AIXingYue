@@ -63,6 +63,11 @@
 
 ## Reusable Pitfalls
 
+- Symptom: 本地把新用户注册送额度改为 `2500` 后，线上注册仍可能到账 `500`，首页/登录页也继续显示旧的“约 10 次回复”。
+  Cause: 生产 `ai-fengyue.env` 中显式的 `NEW_USER_INITIAL_POINTS=500` 会覆盖代码默认值；公开站点配置和静态 HTML 还各有注册送额度兜底文案，仅改常量不会同步生效。
+  Fix: 同步更新代码默认值、生产 env、公开 `site_settings` 强制文案和首页/登录页静态兜底；部署脚本只把历史值 `500` 定向迁移为 `2500`，保留其他人工自定义值。
+  Verify: 2026-07-30 本地临时 Store 新用户 `points/free_points=2500`；线上 env 为 `2500`，公开站点配置包含 `2500 惑梦币/约 50 次` 且无精确旧 `500/约 10 次`，backend/Nginx active、内外 health OK。
+
 - Symptom: 后台新增“自动读取模型/检测可用模型”接口后，请求提前落入旧模型列表 fallback，管理员接口返回错误结构或根本到不了新处理器。
   Cause: 旧路由用 `"model" in normalized` 做宽泛匹配，并且位于管理员路由之前；`admin/api/llm-settings/discover-models` 和 `probe-models` 的路径本身也包含 `model`。
   Fix: 旧模型 fallback 明确排除 `admin/api/`，管理员发现与探测接口继续执行严格管理员鉴权、服务端 Key 复用和上游错误脱敏。

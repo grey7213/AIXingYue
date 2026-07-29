@@ -107,7 +107,7 @@ TTS_VOICES = [
     {"id":"zh-TW-HsiaoChenNeural","name":"晓臻","gender":"台湾女声","style":"自然"},
     {"id":"zh-TW-YunJheNeural","name":"云哲","gender":"台湾男声","style":"自然"},
 ]
-NEW_USER_INITIAL_POINTS = int(os.environ.get("NEW_USER_INITIAL_POINTS", str(CHAT_MESSAGE_COST * 10)) or str(CHAT_MESSAGE_COST * 10))
+NEW_USER_INITIAL_POINTS = int(os.environ.get("NEW_USER_INITIAL_POINTS", "2500") or "2500")
 NEW_USER_INITIAL_CHAT_TIMES = max(0, NEW_USER_INITIAL_POINTS // max(1, CHAT_MESSAGE_COST))
 REGISTER_CODE_EMAIL_HOURLY_LIMIT = int(os.environ.get("REGISTER_CODE_EMAIL_HOURLY_LIMIT", "3") or "3")
 REGISTER_CODE_IP_HOURLY_LIMIT = int(os.environ.get("REGISTER_CODE_IP_HOURLY_LIMIT", "8") or "8")
@@ -1009,7 +1009,7 @@ def site_settings_defaults() -> dict:
             "primary_cta_href": "/app/login.html?next=%2Fapp%2F",
             "secondary_cta_text": "先看看 App",
             "secondary_cta_href": "/app/login.html?next=%2Fapp%2F",
-            "trust_text": "30 秒注册 · 500 惑梦币体验 · 约 10 次回复 · 邮箱验证",
+            "trust_text": f"30 秒注册 · {NEW_USER_INITIAL_POINTS} 惑梦币体验 · 约 {NEW_USER_INITIAL_CHAT_TIMES} 次回复 · 邮箱验证",
             "preview_title": "不只是聊天，而是一段真实的相遇",
             "preview_subtitle": "每一个角色都有独立的世界观、记忆和情感反应",
             "download_title": "网页端暂时开放",
@@ -1019,7 +1019,7 @@ def site_settings_defaults() -> dict:
             "features_subtitle": "为每一位创作者打造的 AI 角色扮演体验",
             "feature_cards": [
                 {"title": "多角色对话", "description": "海量预设角色，覆盖动漫、游戏、原创人设。可自定义性格、背景、说话风格。"},
-                {"title": "惑梦农场", "description": "注册即赠 500 惑梦币，约 10 次角色回复；农场每日首次有效收获可获得额外额度，网页与客户端余额共用。"},
+                {"title": "惑梦农场", "description": f"注册即赠 {NEW_USER_INITIAL_POINTS} 惑梦币，约 {NEW_USER_INITIAL_CHAT_TIMES} 次角色回复；农场每日首次有效收获可获得额外额度，网页与客户端余额共用。"},
                 {"title": "安全可靠", "description": "邮箱验证码注册，账号安全有保障。本地化数据存储，隐私不外泄。"},
                 {"title": "高速响应", "description": "专属服务器节点，低延迟流式输出，沉浸式体验毫无卡顿。"},
                 {"title": "智能创作", "description": "长上下文记忆，故事连贯发展。剧情自由分支，每次对话都是独一无二的体验。"},
@@ -1034,7 +1034,7 @@ def site_settings_defaults() -> dict:
             "download_note": "首次安装可能需要在系统设置中允许\"未知来源\"应用。如下载未自动开始，请在浏览器中使用复制链接到下载工具。",
             "faq_title": "常见问题",
             "faq_items": [
-                {"q": "如何注册账号？", "a": "打开 Web App 后选择「注册」，输入邮箱获取验证码，填写昵称和密码即可完成注册。注册成功后会自动登录并赠送 500 惑梦币，约 10 次角色回复。"},
+                {"q": "如何注册账号？", "a": f"打开 Web App 后选择「注册」，输入邮箱获取验证码，填写昵称和密码即可完成注册。注册成功后会自动登录并赠送 {NEW_USER_INITIAL_POINTS} 惑梦币，约 {NEW_USER_INITIAL_CHAT_TIMES} 次角色回复。"},
                 {"q": "积分是做什么用的？", "a": "积分用于消耗调用 AI 模型生成内容。不同模型每次对话消耗不同积分。农场每日首次有效收获可获得额外积分，也可通过充值获取更多积分。"},
                 {"q": "安装时提示风险怎么办？", "a": "由于本应用为定制版本未上架应用商店，部分系统会提示来源未知。请在系统「安全设置」中允许浏览器或文件管理器安装应用，并按提示安装即可。"},
                 {"q": "忘记密码怎么办？", "a": "在登录页点击「忘记密码」，输入注册邮箱获取验证码后即可设置新密码。验证码 10 分钟内有效。"},
@@ -1156,7 +1156,7 @@ def site_settings_defaults() -> dict:
             "dashboard_login_hint": "还没有账号？",
             "dashboard_register_link_text": "立即注册",
             "register_hint_email": "验证码将通过邮件发送至上述邮箱",
-            "register_hint_points": "注册后将自动获得 500 惑梦币，约 10 次角色回复",
+            "register_hint_points": f"注册后将自动获得 {NEW_USER_INITIAL_POINTS} 惑梦币，约 {NEW_USER_INITIAL_CHAT_TIMES} 次角色回复",
             "email_label": "邮箱",
             "email_placeholder": "you@example.com",
             "password_label": "密码",
@@ -14464,8 +14464,8 @@ def public_site_settings_json(settings: dict) -> dict:
     app = public.setdefault("app", {})
     dashboard = public.setdefault("dashboard", {})
     auth = public.setdefault("auth", {})
-    home["trust_text"] = "30 秒注册 · 500 惑梦币体验 · 约 10 次回复 · 邮箱验证"
-    auth["register_hint_points"] = "注册后将自动获得 500 惑梦币，约 10 次角色回复"
+    home["trust_text"] = f"30 秒注册 · {NEW_USER_INITIAL_POINTS} 惑梦币体验 · 约 {NEW_USER_INITIAL_CHAT_TIMES} 次回复 · 邮箱验证"
+    auth["register_hint_points"] = f"注册后将自动获得 {NEW_USER_INITIAL_POINTS} 惑梦币，约 {NEW_USER_INITIAL_CHAT_TIMES} 次角色回复"
     auth["register_password_placeholder"] = "至少 8 位"
     auth["reset_password_placeholder"] = "输入新密码，至少 8 位"
     feature_cards = home.get("feature_cards")
@@ -14473,12 +14473,12 @@ def public_site_settings_json(settings: dict) -> dict:
         for item in feature_cards:
             if isinstance(item, dict) and ("注册即赠" in str(item.get("description") or "") or str(item.get("title") or "") == "每日奖励"):
                 item["title"] = "惑梦农场"
-                item["description"] = "注册即赠 500 惑梦币，约 10 次角色回复；农场每日首次有效收获可获得额外额度，网页与客户端余额共用。"
+                item["description"] = f"注册即赠 {NEW_USER_INITIAL_POINTS} 惑梦币，约 {NEW_USER_INITIAL_CHAT_TIMES} 次角色回复；农场每日首次有效收获可获得额外额度，网页与客户端余额共用。"
     faq_items = home.get("faq_items")
     if isinstance(faq_items, list):
         for item in faq_items:
             if isinstance(item, dict) and "如何注册" in str(item.get("q") or ""):
-                item["a"] = "打开 Web App 后选择「注册」，输入邮箱获取验证码，填写昵称和至少 8 位密码即可完成注册。注册成功后会自动登录并赠送 500 惑梦币，约 10 次角色回复。"
+                item["a"] = f"打开 Web App 后选择「注册」，输入邮箱获取验证码，填写昵称和至少 8 位密码即可完成注册。注册成功后会自动登录并赠送 {NEW_USER_INITIAL_POINTS} 惑梦币，约 {NEW_USER_INITIAL_CHAT_TIMES} 次角色回复。"
     if not APK_DOWNLOAD_ENABLED:
         home["primary_cta_href"] = "/app/login.html?next=%2Fapp%2F"
         home["download_title"] = "网页端暂时开放"
@@ -14515,7 +14515,7 @@ def public_site_settings_json(settings: dict) -> dict:
                 description = str(item.get("description") or "")
                 if "积分" in title or "充值" in description:
                     item["title"] = "惑梦农场"
-                    item["description"] = "注册即赠 500 惑梦币，约 10 次角色回复；农场每日首次有效收获可获得额外额度，网页与客户端余额共用。"
+                    item["description"] = f"注册即赠 {NEW_USER_INITIAL_POINTS} 惑梦币，约 {NEW_USER_INITIAL_CHAT_TIMES} 次角色回复；农场每日首次有效收获可获得额外额度，网页与客户端余额共用。"
         deposit = public.setdefault("deposit", {})
         deposit.update({
             "aifadian_url": "",

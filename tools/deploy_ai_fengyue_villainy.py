@@ -351,7 +351,7 @@ SENDMAIL_PATH=/usr/sbin/sendmail
 ADMIN_EMAILS=local@ctf.test
 AUTH_TOKEN_SECRET={secrets.token_urlsafe(48)}
 AUTH_TOKEN_TTL_SECONDS=2592000
-NEW_USER_INITIAL_POINTS=500
+NEW_USER_INITIAL_POINTS=2500
 BETA_MAX_REGISTERED_USERS=0
 ALLOWED_CORS_ORIGINS=https://patcher.villainy.top
 MAX_REQUEST_BODY_BYTES=33554432
@@ -473,10 +473,20 @@ def main() -> int:
                 lines.append(f"ADMIN_EMAILS={args.admin_emails}")
                 changed_env = True
                 log(f"updated ADMIN_EMAILS in {env_path}")
+            migrated_lines = []
+            for line in lines:
+                if line.lstrip().startswith("NEW_USER_INITIAL_POINTS="):
+                    current_value = line.split("=", 1)[1].strip()
+                    if current_value == "500":
+                        line = "NEW_USER_INITIAL_POINTS=2500"
+                        changed_env = True
+                        log(f"updated NEW_USER_INITIAL_POINTS from 500 to 2500 in {env_path}")
+                migrated_lines.append(line)
+            lines = migrated_lines
             defaults = {
                 "AUTH_TOKEN_SECRET": secrets.token_urlsafe(48),
                 "AUTH_TOKEN_TTL_SECONDS": "2592000",
-                "NEW_USER_INITIAL_POINTS": "500",
+                "NEW_USER_INITIAL_POINTS": "2500",
                 "BETA_MAX_REGISTERED_USERS": "0",
                 "ALLOWED_CORS_ORIGINS": "https://patcher.villainy.top",
                 "MAX_REQUEST_BODY_BYTES": "33554432",
