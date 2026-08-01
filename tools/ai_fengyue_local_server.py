@@ -25,6 +25,7 @@ import time
 import uuid
 import zipfile
 import zlib
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -39,8 +40,10 @@ from card_experience_extension import (
     CardMediaError,
     CardMediaService,
     LocalObjectStorage,
+    merge_card_experience_fields,
     migrate_card_media,
     normalize_card_experience,
+    normalize_structured_component_payload,
     normalize_world_media_bindings,
 )
 from card_version_workshop import (
@@ -120,7 +123,17 @@ APP_BRAND = os.environ.get("APP_BRAND", "惑梦（Homer）")
 ADMIN_EMAILS = set(filter(None, os.environ.get("ADMIN_EMAILS", "local@ctf.test").split(",")))
 UPSTREAM_CONTENT_BASE = os.environ.get("UPSTREAM_CONTENT_BASE", "https://aifun.wiki/").rstrip("/") + "/"
 CONTENT_MODE = os.environ.get("CONTENT_MODE", "cache_first").strip().lower()
-PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://patcher.villainy.top").rstrip("/")
+OFFLINE_DEV_MODE = env_bool("OFFLINE_DEV_MODE", env_bool("HOMER_OFFLINE_DEV", False))
+PUBLIC_BASE_URL = os.environ.get(
+    "PUBLIC_BASE_URL",
+    "http://127.0.0.1:8080" if OFFLINE_DEV_MODE else "https://patcher.villainy.top",
+).rstrip("/")
+SILLYTAVERN_PUBLIC_URL = os.environ.get(
+    "SILLYTAVERN_PUBLIC_URL",
+    "/module/dialogue/",
+).strip() or "/module/dialogue/"
+if not SILLYTAVERN_PUBLIC_URL.endswith("/"):
+    SILLYTAVERN_PUBLIC_URL += "/"
 AUTH_TOKEN_SECRET = os.environ.get("AUTH_TOKEN_SECRET", "").strip()
 AUTH_TOKEN_TTL_SECONDS = env_int("AUTH_TOKEN_TTL_SECONDS", 30 * 24 * 60 * 60, 300, 365 * 24 * 60 * 60)
 # 方案A改造1：登录凭证从 localStorage 迁到 HttpOnly Cookie
@@ -196,6 +209,138 @@ TPG_MAX_PACKAGE_BYTES = int(os.environ.get("TPG_MAX_PACKAGE_BYTES", str(32 * 102
 TPG_MAX_UNCOMPRESSED_BYTES = int(os.environ.get("TPG_MAX_UNCOMPRESSED_BYTES", str(64 * 1024 * 1024)) or str(64 * 1024 * 1024))
 TPG_MAX_FILES = int(os.environ.get("TPG_MAX_FILES", "300") or "300")
 TPG_MAX_FRAGMENT_BYTES = int(os.environ.get("TPG_MAX_FRAGMENT_BYTES", str(128 * 1024)) or str(128 * 1024))
+ST_EXTENSION_MAX_PACKAGE_BYTES = env_int("ST_EXTENSION_MAX_PACKAGE_BYTES", 64 * 1024 * 1024, 1024, 512 * 1024 * 1024)
+ST_EXTENSION_MAX_UNCOMPRESSED_BYTES = env_int("ST_EXTENSION_MAX_UNCOMPRESSED_BYTES", 256 * 1024 * 1024, 1024, 1024 * 1024 * 1024)
+ST_EXTENSION_MAX_FILES = env_int("ST_EXTENSION_MAX_FILES", 2000, 1, 10000)
+ST_RUNTIME_JSON_LIMITS = {
+    "extension_settings": 512_000,
+    "worldbook_overrides": 2_000_000,
+    "regex_overrides": 256_000,
+    "script_trees": 512_000,
+    "mvu_state": 2_000_000,
+    "variables": 512_000,
+}
+DIALOGUE_EVENT_TYPES = {
+    "message_send": "发送消息",
+    "continue": "续写回复",
+    "regenerate": "重写回复",
+    "continue_next": "下回续写",
+    "message_edit": "编辑消息",
+    "message_delete": "删除消息",
+    "rewind": "回溯对话",
+    "swipe": "切换回复",
+    "keyword_inject": "关键词注入",
+}
+ROLE_CARD_WORLD_INFO_MAX_ENTRIES = 2000
+ROLE_CARD_REGEX_MAX_ENTRIES = 500
+CONVERSATION_DATABASE_TEMPLATE_VERSION = "huimeng-v6.7.3-cleanroom-1"
+CONVERSATION_DATABASE_MAX_TABLES = 32
+CONVERSATION_DATABASE_MAX_ROWS_PER_TABLE = 500
+CONVERSATION_DATABASE_MAX_PROMPT_CHARS = 16000
+CONVERSATION_DATABASE_TABLE_TEMPLATES = (
+    {
+        "key": "global_state",
+        "name": "全局数据表",
+        "columns": (
+            ("row_id", "行号", "integer"),
+            ("current_location", "主角当前所在地点", "text"),
+            ("cur_time", "当前时间", "text"),
+            ("prev_scene_time", "上轮场景时间", "text"),
+            ("elapsed_time", "经过的时间", "text"),
+        ),
+        "single_row": True,
+    },
+    {
+        "key": "protagonist_info",
+        "name": "主角信息表",
+        "columns": (
+            ("row_id", "行号", "integer"),
+            ("char_name", "人物名称", "text"),
+            ("gender_age", "性别/年龄", "text"),
+            ("appearance", "外貌特征", "text"),
+            ("occupation", "职业/身份", "text"),
+            ("past_experience", "过往经历", "text"),
+            ("personality", "性格特点", "text"),
+        ),
+        "single_row": True,
+    },
+    {
+        "key": "important_characters",
+        "name": "重要角色表",
+        "columns": (
+            ("row_id", "行号", "integer"),
+            ("name", "姓名", "text"),
+            ("gender_age", "性别/年龄", "text"),
+            ("brief_intro", "一句话介绍", "text"),
+            ("appearance", "外貌特征", "text"),
+            ("key_items", "持有的重要物品", "text"),
+            ("is_absent", "是否离场", "text"),
+            ("past_experience", "过往经历", "text"),
+        ),
+    },
+    {
+        "key": "protagonist_skills",
+        "name": "主角技能表",
+        "columns": (
+            ("row_id", "行号", "integer"),
+            ("skill_name", "技能名称", "text"),
+            ("skill_type", "技能类型", "text"),
+            ("skill_level", "等级/阶段", "text"),
+            ("effect_desc", "效果描述", "text"),
+        ),
+    },
+    {
+        "key": "inventory",
+        "name": "背包物品表",
+        "columns": (
+            ("row_id", "行号", "integer"),
+            ("item_name", "物品名称", "text"),
+            ("quantity", "数量", "integer"),
+            ("description", "描述/效果", "text"),
+            ("category", "类别", "text"),
+        ),
+    },
+    {
+        "key": "quests_events",
+        "name": "任务与事件表",
+        "columns": (
+            ("row_id", "行号", "integer"),
+            ("quest_name", "任务名称", "text"),
+            ("quest_type", "任务类型", "text"),
+            ("issuer", "发布者", "text"),
+            ("detail_desc", "详细描述", "text"),
+            ("current_progress", "当前进度", "text"),
+            ("time_limit", "任务时限", "text"),
+            ("reward", "奖励", "text"),
+            ("penalty", "惩罚", "text"),
+        ),
+    },
+    {
+        "key": "chronicle",
+        "name": "纪要表",
+        "columns": (
+            ("row_id", "行号", "integer"),
+            ("time_span", "时间跨度", "text"),
+            ("location", "地点", "text"),
+            ("chronicle_text", "纪要", "text"),
+            ("summary", "概览", "text"),
+            ("code_index", "编码索引", "text"),
+        ),
+    },
+    {
+        "key": "options",
+        "name": "选项表",
+        "columns": (
+            ("row_id", "行号", "integer"),
+            ("option_1", "选项一", "text"),
+            ("option_2", "选项二", "text"),
+            ("option_3", "选项三", "text"),
+            ("option_4", "选项四", "text"),
+        ),
+        "single_row": True,
+    },
+)
+
 
 
 def now_ms() -> int:
@@ -664,6 +809,77 @@ def token_for(user_id: str) -> str:
     return f"local.{encoded}.{encoded_signature}"
 
 
+SILLYTAVERN_BRIDGE_TOKEN_TTL_SECONDS = 15 * 60
+
+
+def sillytavern_bridge_token_for(user_id: str, app_id: str, conversation_id: str = "") -> str:
+    """Issue a short-lived token scoped to one Homer user/card/conversation."""
+    if len(AUTH_TOKEN_SECRET.encode("utf-8")) < 32:
+        raise RuntimeError("AUTH_TOKEN_SECRET must be at least 32 bytes")
+    issued_at = int(time.time())
+    payload = json.dumps(
+        {
+            "sub": str(user_id),
+            "app": str(app_id),
+            "conv": str(conversation_id or ""),
+            "iat": issued_at,
+            "exp": issued_at + SILLYTAVERN_BRIDGE_TOKEN_TTL_SECONDS,
+            "scope": "sillytavern-chat",
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+    encoded = base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+    signature = hmac.new(AUTH_TOKEN_SECRET.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256).digest()
+    encoded_signature = base64.urlsafe_b64encode(signature).decode("ascii").rstrip("=")
+    return f"stb.{encoded}.{encoded_signature}"
+
+
+def sillytavern_bridge_claims(value: str | None) -> dict | None:
+    """Validate a short-lived Homer→SillyTavern model bridge token."""
+    token = (value or "").strip()
+    if token.lower().startswith("bearer "):
+        token = token[7:].strip()
+    if not token.startswith("stb.") or len(AUTH_TOKEN_SECRET.encode("utf-8")) < 32:
+        return None
+    parts = token.split(".")
+    if len(parts) != 3:
+        return None
+    encoded = parts[1]
+    expected = hmac.new(AUTH_TOKEN_SECRET.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256).digest()
+    try:
+        provided = base64.urlsafe_b64decode((parts[2] + "=" * (-len(parts[2]) % 4)).encode("ascii"))
+    except Exception:
+        return None
+    if not hmac.compare_digest(expected, provided):
+        return None
+    try:
+        decoded = encoded + "=" * (-len(encoded) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(decoded.encode("ascii")).decode("utf-8"))
+    except Exception:
+        return None
+    now = int(time.time())
+    if (
+        claims.get("scope") != "sillytavern-chat"
+        or int(claims.get("iat") or 0) > now + 60
+        or int(claims.get("exp") or 0) < now
+        or not claims.get("sub")
+        or not claims.get("app")
+    ):
+        return None
+    return {
+        "user_id": str(claims["sub"]),
+        "app_id": str(claims["app"]),
+        "conversation_id": str(claims.get("conv") or ""),
+        "expires_at": int(claims["exp"]),
+    }
+
+
+def homer_sillytavern_handle(user_id: str) -> str:
+    """Map a Homer user id to a stable, opaque SillyTavern directory handle."""
+    digest = hashlib.sha256(f"homer:{user_id}".encode("utf-8")).hexdigest()[:24]
+    return f"homer-{digest}"
+
+
 def business_date() -> str:
     """Use China business day for user-facing daily rewards."""
     return time.strftime("%Y-%m-%d", time.gmtime(time.time() + 8 * 3600))
@@ -835,6 +1051,24 @@ def sanitize_request_log(headers: dict, body: str) -> tuple[dict, str]:
         if re.search(r"(?i)(password|token|api[_-]?key|secret|code)=", safe_body):
             safe_body = "[redacted form body]"
     return safe_headers, safe_body
+
+
+def dialogue_event_request_log_body(body: object) -> str:
+    """Keep dialogue action request logs metadata-only even for hostile extras."""
+    if not isinstance(body, dict):
+        return "{}"
+    limits = {
+        "event_id": 160,
+        "event_type": 80,
+        "app_id": 160,
+        "conversation_id": 160,
+        "message_id": 160,
+    }
+    safe = {
+        key: str(body.get(key) or "").strip()[:limit]
+        for key, limit in limits.items()
+    }
+    return json.dumps(safe, ensure_ascii=False, separators=(",", ":"))
 
 
 def normalize_email(value: str | None) -> str:
@@ -2802,6 +3036,104 @@ class Store:
                     on tavo_plugins(package_id);
                 create index if not exists idx_tavo_plugins_enabled
                     on tavo_plugins(enabled, updated_at desc);
+                create table if not exists sillytavern_extensions (
+                    id text primary key,
+                    display_name text not null,
+                    version text not null,
+                    description text,
+                    author text not null,
+                    home_page text,
+                    file_name text,
+                    file_sha256 text not null,
+                    package_path text not null,
+                    root_prefix text,
+                    manifest_json text not null,
+                    files_json text,
+                    enabled integer not null default 0,
+                    created_at integer not null,
+                    updated_at integer not null
+                );
+                create index if not exists idx_sillytavern_extensions_enabled
+                    on sillytavern_extensions(enabled, updated_at desc);
+                create table if not exists sillytavern_runtime_states (
+                    user_id text not null,
+                    app_id text not null default '',
+                    conversation_id text not null default '',
+                    extension_settings_json text,
+                    worldbook_overrides_json text,
+                    regex_overrides_json text,
+                    script_trees_json text,
+                    mvu_state_json text,
+                    variables_json text,
+                    updated_at integer not null,
+                    primary key(user_id, app_id, conversation_id)
+                );
+                create index if not exists idx_sillytavern_runtime_states_scope
+                    on sillytavern_runtime_states(user_id, app_id, conversation_id, updated_at desc);
+                create table if not exists conversation_runtime_profiles (
+                    conversation_id text primary key,
+                    user_id text not null,
+                    app_id text not null default '',
+                    database_enabled integer not null default 0,
+                    prompt_enabled integer not null default 1,
+                    prompt_preset_id text not null default '',
+                    regex_enabled integer not null default 1,
+                    regex_preset_id text not null default '',
+                    status_mode text not null default 'auto',
+                    strict_output integer not null default 0,
+                    update_frequency integer not null default 1,
+                    template_version text not null,
+                    revision integer not null default 1,
+                    created_at integer not null,
+                    updated_at integer not null
+                );
+                create index if not exists idx_conversation_runtime_profiles_user
+                    on conversation_runtime_profiles(user_id, updated_at desc);
+                create table if not exists conversation_database_tables (
+                    id text primary key,
+                    conversation_id text not null,
+                    user_id text not null,
+                    table_key text not null,
+                    name text not null,
+                    columns_json text not null,
+                    single_row integer not null default 0,
+                    enabled integer not null default 1,
+                    sort_order integer not null default 0,
+                    revision integer not null default 1,
+                    created_at integer not null,
+                    updated_at integer not null,
+                    unique(conversation_id, table_key)
+                );
+                create index if not exists idx_conversation_database_tables_scope
+                    on conversation_database_tables(user_id, conversation_id, sort_order);
+                create table if not exists conversation_database_rows (
+                    id text primary key,
+                    table_id text not null,
+                    conversation_id text not null,
+                    user_id text not null,
+                    row_key text not null,
+                    row_index integer not null default 0,
+                    data_json text not null,
+                    source_message_id text,
+                    updated_by text not null default 'user',
+                    created_at integer not null,
+                    updated_at integer not null,
+                    unique(table_id, row_key)
+                );
+                create index if not exists idx_conversation_database_rows_scope
+                    on conversation_database_rows(user_id, conversation_id, table_id, row_index);
+                create table if not exists dialogue_event_receipts (
+                    user_id text not null,
+                    event_id text not null,
+                    conversation_id text not null,
+                    app_id text not null,
+                    event_type text not null,
+                    message_id text,
+                    created_at integer not null,
+                    primary key(user_id, event_id)
+                );
+                create index if not exists idx_dialogue_event_receipts_conversation
+                    on dialogue_event_receipts(user_id, conversation_id, created_at desc);
                 create table if not exists user_model_presets (
                     user_id text not null,
                     preset_id text not null,
@@ -4715,6 +5047,141 @@ class Store:
             item["global_preset_enabled"] = bool(item.get("global_preset_enabled", 1))
             return item
 
+    def repair_conversation_app(self, conv_id: str, user_id: str) -> dict | None:
+        """Rebind a conversation whose character record was replaced.
+
+        Card re-imports create a new local app id.  Historical conversations
+        must keep working after the old row is removed, but a private card must
+        never be rebound across accounts.  Prefer an exact-name card owned by
+        the conversation owner, then a currently published public card.
+        """
+        clean_conv = str(conv_id or "").strip()
+        clean_user = str(user_id or "").strip()
+        if not clean_conv or not clean_user:
+            return None
+
+        def can_access(row: sqlite3.Row | dict | None) -> bool:
+            return user_can_play_app(row, clean_user)
+
+        with self.lock:
+            conversation_row = self.conn.execute(
+                "select * from conversations where id=? and user_id=?",
+                (clean_conv, clean_user),
+            ).fetchone()
+            if not conversation_row:
+                return None
+
+            current_app = self.conn.execute(
+                "select * from local_apps where id=?",
+                (str(conversation_row["app_id"] or ""),),
+            ).fetchone()
+            if can_access(current_app):
+                current_version = str(
+                    conversation_row["version_id"]
+                    if "version_id" in conversation_row.keys()
+                    else ""
+                ).strip()
+                if not current_version:
+                    current_version = self.resolve_character_version_id(str(current_app["id"] or ""))
+                    self.conn.execute(
+                        "update conversations set version_id=? where id=? and user_id=?",
+                        (current_version, clean_conv, clean_user),
+                    )
+                    self.conn.commit()
+                    conversation_row = self.conn.execute(
+                        "select * from conversations where id=? and user_id=?",
+                        (clean_conv, clean_user),
+                    ).fetchone()
+                result = dict(conversation_row)
+                result["available"] = True
+                result["rebound"] = False
+                result["galgame_enabled"] = bool(result.get("galgame_enabled"))
+                result["global_preset_enabled"] = bool(result.get("global_preset_enabled", 1))
+                return result
+
+            expected_name = str(
+                conversation_row["app_name"]
+                or conversation_row["title"]
+                or ""
+            ).strip()
+            if not expected_name:
+                result = dict(conversation_row)
+                result["available"] = False
+                result["rebound"] = False
+                return result
+
+            candidates = self.conn.execute(
+                """
+                select * from local_apps
+                where trim(name)=trim(?)
+                order by updated_at desc
+                """,
+                (expected_name,),
+            ).fetchall()
+            accessible = [row for row in candidates if can_access(row)]
+            accessible.sort(
+                key=lambda row: (
+                    0
+                    if (
+                        str(row["source"] or "") == "user"
+                        and str(row["owner_user_id"] or "") == clean_user
+                    )
+                    else 1,
+                    -int(row["updated_at"] or 0),
+                )
+            )
+            if not accessible:
+                result = dict(conversation_row)
+                result["available"] = False
+                result["rebound"] = False
+                return result
+
+            replacement = accessible[0]
+            old_app_id = str(conversation_row["app_id"] or "")
+            new_app_id = str(replacement["id"] or "")
+            new_version_id = self.resolve_character_version_id(new_app_id)
+            new_name = str(replacement["name"] or expected_name)
+            new_icon = str(replacement["cover_url"] or conversation_row["app_icon"] or "")
+            try:
+                self.conn.execute("begin")
+                self.conn.execute(
+                    """
+                    update conversations
+                    set app_id=?,app_name=?,app_icon=?,version_id=?
+                    where id=? and user_id=?
+                    """,
+                    (new_app_id, new_name, new_icon, new_version_id, clean_conv, clean_user),
+                )
+                for table in (
+                    "conversation_runtime_profiles",
+                    "conversation_summaries",
+                    "chat_memories",
+                    "sillytavern_runtime_states",
+                ):
+                    self.conn.execute(
+                        f"""
+                        update {table}
+                        set app_id=?
+                        where conversation_id=? and user_id=? and app_id=?
+                        """,
+                        (new_app_id, clean_conv, clean_user, old_app_id),
+                    )
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
+
+            repaired = self.conn.execute(
+                "select * from conversations where id=? and user_id=?",
+                (clean_conv, clean_user),
+            ).fetchone()
+            result = dict(repaired)
+            result["available"] = True
+            result["rebound"] = True
+            result["previous_app_id"] = old_app_id
+            result["galgame_enabled"] = bool(result.get("galgame_enabled"))
+            result["global_preset_enabled"] = bool(result.get("global_preset_enabled", 1))
+            return result
     def set_conversation_galgame(self, conv_id: str, user_id: str, enabled: bool) -> dict | None:
         with self.lock:
             row = self.conn.execute(
@@ -4757,6 +5224,590 @@ class Store:
             updated["global_preset_enabled"] = bool(updated.get("global_preset_enabled", 1))
             return updated
 
+    def _ensure_conversation_runtime_profile_locked(
+        self,
+        conv_id: str,
+        user_id: str,
+        *,
+        database_enabled: bool = False,
+    ) -> sqlite3.Row | None:
+        conversation = self.conn.execute(
+            "select id,app_id from conversations where id=? and user_id=?",
+            (conv_id, user_id),
+        ).fetchone()
+        if not conversation:
+            return None
+        row = self.conn.execute(
+            "select * from conversation_runtime_profiles where conversation_id=? and user_id=?",
+            (conv_id, user_id),
+        ).fetchone()
+        if not row:
+            ts = now_ms()
+            self.conn.execute(
+                """
+                insert into conversation_runtime_profiles(
+                    conversation_id,user_id,app_id,database_enabled,prompt_enabled,prompt_preset_id,
+                    regex_enabled,regex_preset_id,status_mode,strict_output,update_frequency,
+                    template_version,revision,created_at,updated_at
+                ) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    conv_id,
+                    user_id,
+                    str(conversation["app_id"] or ""),
+                    1 if database_enabled else 0,
+                    1,
+                    "",
+                    1,
+                    "",
+                    "auto",
+                    0,
+                    1,
+                    CONVERSATION_DATABASE_TEMPLATE_VERSION,
+                    1,
+                    ts,
+                    ts,
+                ),
+            )
+        existing_tables = {
+            str(item["table_key"] or "")
+            for item in self.conn.execute(
+                "select table_key from conversation_database_tables where conversation_id=? and user_id=?",
+                (conv_id, user_id),
+            ).fetchall()
+        }
+        ts = now_ms()
+        for sort_order, template in enumerate(CONVERSATION_DATABASE_TABLE_TEMPLATES):
+            table_key = str(template["key"])
+            if table_key in existing_tables:
+                continue
+            columns = [
+                {"key": key, "label": label, "type": value_type}
+                for key, label, value_type in template["columns"]
+            ]
+            self.conn.execute(
+                """
+                insert into conversation_database_tables(
+                    id,conversation_id,user_id,table_key,name,columns_json,single_row,
+                    enabled,sort_order,revision,created_at,updated_at
+                ) values(?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    conv_id,
+                    user_id,
+                    table_key,
+                    str(template["name"]),
+                    json.dumps(columns, ensure_ascii=False, separators=(",", ":")),
+                    1 if template.get("single_row") else 0,
+                    1,
+                    sort_order,
+                    1,
+                    ts,
+                    ts,
+                ),
+            )
+        return self.conn.execute(
+            "select * from conversation_runtime_profiles where conversation_id=? and user_id=?",
+            (conv_id, user_id),
+        ).fetchone()
+
+    def ensure_conversation_runtime_profile(
+        self,
+        conv_id: str,
+        user_id: str,
+        *,
+        database_enabled: bool = False,
+    ) -> dict | None:
+        with self.lock:
+            row = self._ensure_conversation_runtime_profile_locked(
+                conv_id,
+                user_id,
+                database_enabled=database_enabled,
+            )
+            self.conn.commit()
+            return self._conversation_runtime_profile_to_dict(row) if row else None
+
+    @staticmethod
+    def _conversation_runtime_profile_to_dict(row: sqlite3.Row | dict | None) -> dict:
+        item = dict(row) if row else {}
+        item["database_enabled"] = bool(item.get("database_enabled"))
+        item["prompt_enabled"] = bool(item.get("prompt_enabled", 1))
+        item["regex_enabled"] = bool(item.get("regex_enabled", 1))
+        item["strict_output"] = bool(item.get("strict_output"))
+        item["prompt_preset_id"] = str(item.get("prompt_preset_id") or "")
+        item["regex_preset_id"] = str(item.get("regex_preset_id") or "")
+        item["status_mode"] = str(item.get("status_mode") or "auto")
+        item["update_frequency"] = max(1, min(20, int(item.get("update_frequency") or 1)))
+        item["revision"] = max(1, int(item.get("revision") or 1))
+        return item
+    def conversation_preset_choices(self) -> dict:
+        prompt_collection = self.global_prompt_presets()
+        regex_collection = self.global_regex_presets()
+        prompt_items = []
+        for item in prompt_collection.get("items") or []:
+            prompt_items.append({
+                "id": str(item.get("id") or ""),
+                "name": str(item.get("name") or "未命名提示词预设"),
+                "entry_count": len(item.get("prompts") or []),
+                "site_active": str(item.get("id") or "") == str(prompt_collection.get("active_id") or ""),
+            })
+        regex_items = []
+        for item in regex_collection.get("items") or []:
+            regex_items.append({
+                "id": str(item.get("id") or ""),
+                "name": str(item.get("name") or "未命名 Regex 预设"),
+                "entry_count": len(item.get("scripts") or []),
+                "site_active": str(item.get("id") or "") == str(regex_collection.get("active_id") or ""),
+            })
+        return {
+            "prompt": {
+                "active_id": str(prompt_collection.get("active_id") or ""),
+                "items": prompt_items,
+            },
+            "regex": {
+                "active_id": str(regex_collection.get("active_id") or ""),
+                "items": regex_items,
+            },
+        }
+
+    def selected_conversation_presets(self, profile: dict | None) -> dict:
+        runtime = profile if isinstance(profile, dict) else {}
+        prompt_collection = self.global_prompt_presets()
+        regex_collection = self.global_regex_presets()
+        prompt_id = str(runtime.get("prompt_preset_id") or prompt_collection.get("active_id") or "")
+        regex_id = str(runtime.get("regex_preset_id") or regex_collection.get("active_id") or "")
+        prompt = next(
+            (dict(item) for item in prompt_collection.get("items") or [] if str(item.get("id") or "") == prompt_id),
+            normalize_global_prompt_preset(""),
+        )
+        regex = next(
+            (dict(item) for item in regex_collection.get("items") or [] if str(item.get("id") or "") == regex_id),
+            {"enabled": False, "scripts": []},
+        )
+        prompt["enabled"] = bool(runtime.get("prompt_enabled", True) and prompt_id)
+        regex["enabled"] = bool(runtime.get("regex_enabled", True) and regex_id)
+        return {"prompt": prompt, "regex": regex}
+
+    def get_conversation_runtime_profile(
+        self,
+        conv_id: str,
+        user_id: str,
+        *,
+        include_choices: bool = False,
+        include_database_rows: bool = False,
+    ) -> dict | None:
+        with self.lock:
+            row = self._ensure_conversation_runtime_profile_locked(conv_id, user_id)
+            if not row:
+                return None
+            self.conn.commit()
+            profile = self._conversation_runtime_profile_to_dict(row)
+            snapshot = self._conversation_database_snapshot_locked(
+                conv_id,
+                user_id,
+                include_rows=include_database_rows,
+            )
+        profile["database"] = snapshot
+        if include_choices:
+            profile["choices"] = self.conversation_preset_choices()
+        selected = self.selected_conversation_presets(profile)
+        profile["effective"] = {
+            "prompt_preset_id": str(selected["prompt"].get("id") or ""),
+            "prompt_preset_name": str(selected["prompt"].get("name") or ""),
+            "prompt_enabled": bool(selected["prompt"].get("enabled")),
+            "regex_preset_id": str(selected["regex"].get("id") or ""),
+            "regex_preset_name": str(selected["regex"].get("name") or ""),
+            "regex_enabled": bool(selected["regex"].get("enabled")),
+        }
+        return profile
+
+    def save_conversation_runtime_profile(self, conv_id: str, user_id: str, payload: dict) -> dict | None:
+        if not isinstance(payload, dict):
+            raise ValueError("invalid runtime profile")
+        with self.lock:
+            row = self._ensure_conversation_runtime_profile_locked(conv_id, user_id)
+            if not row:
+                return None
+            current = self._conversation_runtime_profile_to_dict(row)
+            choices = self.conversation_preset_choices()
+            allowed_prompt_ids = {str(item.get("id") or "") for item in choices["prompt"]["items"]}
+            allowed_regex_ids = {str(item.get("id") or "") for item in choices["regex"]["items"]}
+            prompt_id = str(payload.get("prompt_preset_id", current["prompt_preset_id"]) or "").strip()
+            regex_id = str(payload.get("regex_preset_id", current["regex_preset_id"]) or "").strip()
+            if prompt_id and prompt_id not in allowed_prompt_ids:
+                raise ValueError("prompt preset not found")
+            if regex_id and regex_id not in allowed_regex_ids:
+                raise ValueError("regex preset not found")
+            status_mode = str(payload.get("status_mode", current["status_mode"]) or "auto").strip().lower()
+            if status_mode not in {"auto", "mvu", "xml", "off"}:
+                raise ValueError("invalid status mode")
+            update_frequency = _bounded_int(
+                payload.get("update_frequency", current["update_frequency"]),
+                current["update_frequency"],
+                1,
+                20,
+            )
+            next_values = {
+                "database_enabled": bool(payload.get("database_enabled", current["database_enabled"])),
+                "prompt_enabled": bool(payload.get("prompt_enabled", current["prompt_enabled"])),
+                "prompt_preset_id": prompt_id,
+                "regex_enabled": bool(payload.get("regex_enabled", current["regex_enabled"])),
+                "regex_preset_id": regex_id,
+                "status_mode": status_mode,
+                "strict_output": bool(payload.get("strict_output", current["strict_output"])),
+                "update_frequency": update_frequency,
+            }
+            self.conn.execute(
+                """
+                update conversation_runtime_profiles
+                set database_enabled=?,prompt_enabled=?,prompt_preset_id=?,regex_enabled=?,
+                    regex_preset_id=?,status_mode=?,strict_output=?,update_frequency=?,
+                    revision=revision+1,updated_at=?
+                where conversation_id=? and user_id=?
+                """,
+                (
+                    1 if next_values["database_enabled"] else 0,
+                    1 if next_values["prompt_enabled"] else 0,
+                    next_values["prompt_preset_id"],
+                    1 if next_values["regex_enabled"] else 0,
+                    next_values["regex_preset_id"],
+                    next_values["status_mode"],
+                    1 if next_values["strict_output"] else 0,
+                    next_values["update_frequency"],
+                    now_ms(),
+                    conv_id,
+                    user_id,
+                ),
+            )
+            self.conn.commit()
+        return self.get_conversation_runtime_profile(conv_id, user_id, include_choices=True)
+    def _conversation_database_snapshot_locked(
+        self,
+        conv_id: str,
+        user_id: str,
+        *,
+        include_rows: bool,
+    ) -> dict:
+        tables = self.conn.execute(
+            """
+            select t.*,
+                   (select count(*) from conversation_database_rows r
+                    where r.table_id=t.id and r.user_id=t.user_id) as row_count
+            from conversation_database_tables t
+            where t.conversation_id=? and t.user_id=?
+            order by t.sort_order asc,t.name asc
+            """,
+            (conv_id, user_id),
+        ).fetchall()
+        result = []
+        total_rows = 0
+        for table_row in tables:
+            table = dict(table_row)
+            try:
+                columns = json.loads(str(table.get("columns_json") or "[]"))
+            except Exception:
+                columns = []
+            item = {
+                "id": str(table.get("id") or ""),
+                "key": str(table.get("table_key") or ""),
+                "name": str(table.get("name") or ""),
+                "columns": columns if isinstance(columns, list) else [],
+                "single_row": bool(table.get("single_row")),
+                "enabled": bool(table.get("enabled", 1)),
+                "sort_order": int(table.get("sort_order") or 0),
+                "revision": int(table.get("revision") or 1),
+                "row_count": int(table.get("row_count") or 0),
+            }
+            total_rows += item["row_count"]
+            if include_rows:
+                rows = self.conn.execute(
+                    """
+                    select id,row_key,row_index,data_json,source_message_id,updated_by,created_at,updated_at
+                    from conversation_database_rows
+                    where table_id=? and user_id=?
+                    order by row_index asc,created_at asc
+                    limit ?
+                    """,
+                    (item["id"], user_id, CONVERSATION_DATABASE_MAX_ROWS_PER_TABLE),
+                ).fetchall()
+                item["rows"] = []
+                for raw_row in rows:
+                    raw = dict(raw_row)
+                    try:
+                        data = json.loads(str(raw.get("data_json") or "{}"))
+                    except Exception:
+                        data = {}
+                    item["rows"].append({
+                        "id": str(raw.get("id") or ""),
+                        "row_key": str(raw.get("row_key") or ""),
+                        "row_index": int(raw.get("row_index") or 0),
+                        "data": data if isinstance(data, dict) else {},
+                        "source_message_id": str(raw.get("source_message_id") or ""),
+                        "updated_by": str(raw.get("updated_by") or ""),
+                        "created_at": int(raw.get("created_at") or 0),
+                        "updated_at": int(raw.get("updated_at") or 0),
+                    })
+            result.append(item)
+        return {
+            "template_version": CONVERSATION_DATABASE_TEMPLATE_VERSION,
+            "table_count": len(result),
+            "row_count": total_rows,
+            "tables": result,
+        }
+
+    def get_conversation_database(self, conv_id: str, user_id: str, *, include_rows: bool = True) -> dict | None:
+        with self.lock:
+            profile = self._ensure_conversation_runtime_profile_locked(conv_id, user_id)
+            if not profile:
+                return None
+            snapshot = self._conversation_database_snapshot_locked(conv_id, user_id, include_rows=include_rows)
+            self.conn.commit()
+        snapshot["enabled"] = bool(profile["database_enabled"])
+        snapshot["revision"] = int(profile["revision"] or 1)
+        return snapshot
+    def apply_conversation_database_updates(
+        self,
+        conv_id: str,
+        user_id: str,
+        operations: object,
+        *,
+        updated_by: str = "assistant",
+        source_message_id: str = "",
+        require_enabled: bool = True,
+    ) -> dict:
+        if not isinstance(operations, list):
+            raise ValueError("database operations must be a list")
+        if len(operations) > 50:
+            raise ValueError("too many database operations")
+        encoded = json.dumps(operations, ensure_ascii=False, separators=(",", ":"))
+        if len(encoded.encode("utf-8")) > 256_000:
+            raise ValueError("database operations are too large")
+        applied = 0
+        skipped = 0
+        with self.lock:
+            profile = self._ensure_conversation_runtime_profile_locked(conv_id, user_id)
+            if not profile:
+                raise ValueError("conversation not found")
+            if require_enabled and not bool(profile["database_enabled"]):
+                return {"applied": 0, "skipped": len(operations), "disabled": True}
+            table_rows = self.conn.execute(
+                """
+                select * from conversation_database_tables
+                where conversation_id=? and user_id=? and enabled=1
+                """,
+                (conv_id, user_id),
+            ).fetchall()
+            table_map = {str(row["table_key"] or ""): dict(row) for row in table_rows}
+            touched: set[str] = set()
+            for operation in operations:
+                if not isinstance(operation, dict):
+                    skipped += 1
+                    continue
+                table_key = re.sub(r"[^a-z0-9_]+", "", str(operation.get("table") or "").strip().lower())
+                table = table_map.get(table_key)
+                if not table:
+                    skipped += 1
+                    continue
+                action = str(operation.get("action") or "upsert").strip().lower()
+                row_data = operation.get("row") if isinstance(operation.get("row"), dict) else {}
+                try:
+                    columns = json.loads(str(table.get("columns_json") or "[]"))
+                except Exception:
+                    columns = []
+                column_map = {
+                    str(item.get("key") or ""): str(item.get("type") or "text")
+                    for item in columns
+                    if isinstance(item, dict) and item.get("key")
+                }
+                row_key = str(
+                    operation.get("row_key")
+                    or row_data.get("row_id")
+                    or row_data.get("name")
+                    or row_data.get("item_name")
+                    or row_data.get("skill_name")
+                    or row_data.get("quest_name")
+                    or row_data.get("code_index")
+                    or ""
+                ).strip()
+                if bool(table.get("single_row")):
+                    row_key = "1"
+                if action == "delete":
+                    if not row_key:
+                        skipped += 1
+                        continue
+                    cur = self.conn.execute(
+                        "delete from conversation_database_rows where table_id=? and user_id=? and row_key=?",
+                        (str(table["id"]), user_id, row_key[:160]),
+                    )
+                    if cur.rowcount:
+                        applied += 1
+                        touched.add(str(table["id"]))
+                    else:
+                        skipped += 1
+                    continue
+                if action not in {"insert", "upsert", "replace"} or not row_data:
+                    skipped += 1
+                    continue
+                existing_count = int(self.conn.execute(
+                    "select count(*) from conversation_database_rows where table_id=? and user_id=?",
+                    (str(table["id"]), user_id),
+                ).fetchone()[0])
+                existing = None
+                if row_key:
+                    existing = self.conn.execute(
+                        "select * from conversation_database_rows where table_id=? and user_id=? and row_key=?",
+                        (str(table["id"]), user_id, row_key[:160]),
+                    ).fetchone()
+                if not existing and existing_count >= CONVERSATION_DATABASE_MAX_ROWS_PER_TABLE:
+                    skipped += 1
+                    continue
+                row_index = int(existing["row_index"] or 0) if existing else int(self.conn.execute(
+                    "select coalesce(max(row_index),0)+1 from conversation_database_rows where table_id=? and user_id=?",
+                    (str(table["id"]), user_id),
+                ).fetchone()[0])
+                if not row_key:
+                    row_key = str(row_index)
+                cleaned: dict = {}
+                for key, value in row_data.items():
+                    column_key = str(key or "")
+                    if column_key not in column_map:
+                        continue
+                    if column_map[column_key] == "integer":
+                        try:
+                            value = int(value)
+                        except (TypeError, ValueError):
+                            value = 0
+                    elif value is not None:
+                        value = str(value)[:8000]
+                    cleaned[column_key] = value
+                if "row_id" in column_map:
+                    try:
+                        cleaned["row_id"] = int(cleaned.get("row_id") or row_index)
+                    except (TypeError, ValueError):
+                        cleaned["row_id"] = row_index
+                if not cleaned:
+                    skipped += 1
+                    continue
+                ts = now_ms()
+                if existing:
+                    self.conn.execute(
+                        """
+                        update conversation_database_rows
+                        set data_json=?,source_message_id=?,updated_by=?,updated_at=?
+                        where id=? and user_id=?
+                        """,
+                        (
+                            json.dumps(cleaned, ensure_ascii=False, separators=(",", ":")),
+                            str(source_message_id or "")[:160],
+                            str(updated_by or "assistant")[:40],
+                            ts,
+                            str(existing["id"]),
+                            user_id,
+                        ),
+                    )
+                else:
+                    self.conn.execute(
+                        """
+                        insert into conversation_database_rows(
+                            id,table_id,conversation_id,user_id,row_key,row_index,data_json,
+                            source_message_id,updated_by,created_at,updated_at
+                        ) values(?,?,?,?,?,?,?,?,?,?,?)
+                        """,
+                        (
+                            str(uuid.uuid4()),
+                            str(table["id"]),
+                            conv_id,
+                            user_id,
+                            row_key[:160],
+                            row_index,
+                            json.dumps(cleaned, ensure_ascii=False, separators=(",", ":")),
+                            str(source_message_id or "")[:160],
+                            str(updated_by or "assistant")[:40],
+                            ts,
+                            ts,
+                        ),
+                    )
+                applied += 1
+                touched.add(str(table["id"]))
+            ts = now_ms()
+            for table_id in touched:
+                self.conn.execute(
+                    "update conversation_database_tables set revision=revision+1,updated_at=? where id=? and user_id=?",
+                    (ts, table_id, user_id),
+                )
+            if touched:
+                self.conn.execute(
+                    "update conversation_runtime_profiles set revision=revision+1,updated_at=? where conversation_id=? and user_id=?",
+                    (ts, conv_id, user_id),
+                )
+            self.conn.commit()
+            snapshot = self._conversation_database_snapshot_locked(conv_id, user_id, include_rows=False)
+        return {"applied": applied, "skipped": skipped, "disabled": False, "database": snapshot}
+    def conversation_database_prompt(
+        self,
+        conv_id: str,
+        user_id: str,
+        *,
+        history: list[dict] | None = None,
+    ) -> str:
+        profile = self.get_conversation_runtime_profile(conv_id, user_id, include_database_rows=True)
+        if not profile or not profile.get("database_enabled"):
+            return ""
+        database = profile.get("database") if isinstance(profile.get("database"), dict) else {}
+        assistant_turns = sum(1 for item in (history or []) if str(item.get("role") or "") == "assistant")
+        frequency = max(1, int(profile.get("update_frequency") or 1))
+        should_update = (assistant_turns + 1) % frequency == 0
+        tables_payload = []
+        for table in database.get("tables") or []:
+            if not isinstance(table, dict) or not table.get("enabled"):
+                continue
+            tables_payload.append({
+                "key": table.get("key"),
+                "name": table.get("name"),
+                "columns": [
+                    {"key": col.get("key"), "label": col.get("label"), "type": col.get("type")}
+                    for col in (table.get("columns") or [])
+                    if isinstance(col, dict)
+                ],
+                "rows": [
+                    row.get("data")
+                    for row in (table.get("rows") or [])
+                    if isinstance(row, dict) and isinstance(row.get("data"), dict)
+                ],
+            })
+        compact = json.dumps(tables_payload, ensure_ascii=False, separators=(",", ":"))
+        while len(compact) > CONVERSATION_DATABASE_MAX_PROMPT_CHARS and tables_payload:
+            table_with_rows = next(
+                (item for item in reversed(tables_payload) if item.get("rows")),
+                None,
+            )
+            if table_with_rows:
+                table_with_rows["rows"].pop()
+            else:
+                tables_payload.pop()
+            compact = json.dumps(tables_payload, ensure_ascii=False, separators=(",", ":"))
+        mode_hint = {
+            "mvu": "状态栏输出使用 MVU 兼容字段。",
+            "xml": "状态栏输出使用 XML 标签。",
+            "off": "不要输出状态栏。",
+            "auto": "状态栏格式跟随角色卡。",
+        }.get(str(profile.get("status_mode") or "auto"), "状态栏格式跟随角色卡。")
+        update_instruction = (
+            "本回合如剧情事实发生变化，必须在可见回复末尾附加一个 "
+            "<homer_database_update>{\"operations\":[...]}</homer_database_update> 块；"
+            "operation 仅允许 action=upsert/delete、table=上列 key、row 为列字段对象。"
+            if should_update
+            else "本回合不需要输出数据库更新块。"
+        )
+        strict_hint = "严格遵守数据库更新 JSON 格式。" if profile.get("strict_output") else "没有变化时不要虚构数据。"
+        return (
+            "【结构化剧情数据库】\n"
+            f"版本：{CONVERSATION_DATABASE_TEMPLATE_VERSION}\n"
+            f"{mode_hint}\n{strict_hint}\n{update_instruction}\n"
+            "当前表数据（JSON）：\n"
+            f"{compact}"
+        )
     def conversation_preset_override_map(self, conv_id: str, user_id: str) -> dict:
         with self.lock:
             rows = self.conn.execute(
@@ -4937,15 +5988,201 @@ class Store:
             self.conn.commit()
             return self.conn.execute("select * from messages where id=?", (mid,)).fetchone()
 
-    def list_conversations(self, user_id: str, limit: int = 50) -> list:
+    def sync_sillytavern_chat(
+        self,
+        conv_id: str,
+        user_id: str,
+        app_id: str,
+        messages: list,
+        *,
+        title: str = "",
+    ) -> dict:
+        """Replace a Homer cloud chat with a validated SillyTavern snapshot."""
+        clean_conv = str(conv_id or "").strip()
+        clean_user = str(user_id or "").strip()
+        clean_app = self.resolve_local_app_id(str(app_id or "").strip())
+        if not clean_conv or not clean_user or not clean_app:
+            raise ValueError("conversation_id, user_id and app_id are required")
+        if not isinstance(messages, list):
+            raise ValueError("messages must be a list")
+        if len(messages) > 1000:
+            raise ValueError("too many messages")
+        if len(json.dumps(messages, ensure_ascii=False, separators=(",", ":"))) > 10_000_000:
+            raise ValueError("chat snapshot is too large")
+
+        base_created_at = now_ms() - max(0, len(messages) - 1)
+        normalized: list[dict] = []
+        seen_ids: set[str] = set()
+        for index, raw in enumerate(messages):
+            if not isinstance(raw, dict):
+                continue
+            if raw.get("is_system") is True:
+                role = "system"
+            elif raw.get("is_user") is True:
+                role = "user"
+            else:
+                role = str(raw.get("role") or "assistant").strip().lower()
+                if role not in {"user", "assistant", "system"}:
+                    role = "assistant"
+            content = str(raw.get("mes") if "mes" in raw else raw.get("content") or "")
+            if len(content) > 500_000:
+                raise ValueError("message is too large")
+            extra = raw.get("extra") if isinstance(raw.get("extra"), dict) else {}
+            sync_id = str(
+                raw.get("homer_message_id")
+                or extra.get("homer_message_id")
+                or extra.get("homer_sync_id")
+                or ""
+            ).strip()
+            try:
+                message_id = str(uuid.UUID(sync_id)) if sync_id else ""
+            except (ValueError, AttributeError):
+                message_id = ""
+            if not message_id or message_id in seen_ids:
+                stable_part = str(
+                    extra.get("homer_sync_id")
+                    or raw.get("send_date")
+                    or raw.get("sendDate")
+                    or index
+                )
+                message_id = str(uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"homer-sillytavern:{clean_user}:{clean_conv}:{stable_part}:{index}",
+                ))
+                while message_id in seen_ids:
+                    message_id = str(uuid.uuid4())
+            seen_ids.add(message_id)
+
+            raw_swipes = raw.get("swipes") if isinstance(raw.get("swipes"), list) else []
+            swipes = [str(item)[:500_000] for item in raw_swipes[:100]]
+            try:
+                swipe_index = int(raw.get("swipe_id", raw.get("swipe_index", 0)) or 0)
+            except (TypeError, ValueError):
+                swipe_index = 0
+            if swipes:
+                swipe_index = max(0, min(swipe_index, len(swipes) - 1))
+                content = swipes[swipe_index]
+            else:
+                swipe_index = 0
+            try:
+                created_at = int(
+                    extra.get("homer_created_at")
+                    or raw.get("created_at")
+                    or base_created_at + index
+                )
+            except (TypeError, ValueError):
+                created_at = base_created_at + index
+            normalized.append({
+                "id": message_id,
+                "role": role,
+                "content": content,
+                "created_at": max(1, created_at),
+                "swipes": swipes,
+                "swipe_index": swipe_index,
+            })
+
         with self.lock:
-            rows = self.conn.execute(
+            conversation = self.conn.execute(
+                "select * from conversations where id=? and user_id=?",
+                (clean_conv, clean_user),
+            ).fetchone()
+            if (
+                conversation
+                and self.resolve_local_app_id(str(conversation["app_id"] or "")) != clean_app
+            ):
+                raise ValueError("conversation role mismatch")
+            try:
+                self.conn.execute("begin immediate")
+                ts = now_ms()
+                if not conversation:
+                    self.conn.execute(
+                        """
+                        insert into conversations(
+                            id,user_id,app_id,app_name,app_icon,title,last_message,
+                            created_at,updated_at
+                        ) values(?,?,?,?,?,?,?,?,?)
+                        """,
+                        (
+                            clean_conv,
+                            clean_user,
+                            clean_app,
+                            "",
+                            "",
+                            str(title or "")[:120],
+                            "",
+                            ts,
+                            ts,
+                        ),
+                    )
+                self.conn.execute(
+                    "delete from messages where conversation_id=? and user_id=?",
+                    (clean_conv, clean_user),
+                )
+                for item in normalized:
+                    self.conn.execute(
+                        """
+                        insert into messages(
+                            id,conversation_id,user_id,role,content,created_at,swipes,swipe_index
+                        ) values(?,?,?,?,?,?,?,?)
+                        """,
+                        (
+                            item["id"],
+                            clean_conv,
+                            clean_user,
+                            item["role"],
+                            item["content"],
+                            item["created_at"],
+                            json.dumps(item["swipes"], ensure_ascii=False) if item["swipes"] else None,
+                            item["swipe_index"],
+                        ),
+                    )
+                last_message = normalized[-1]["content"][:120] if normalized else ""
+                self.conn.execute(
+                    """
+                    update conversations
+                    set app_id=?,
+                        title=case when ?<>'' then ? else title end,
+                        last_message=?,updated_at=?
+                    where id=? and user_id=?
+                    """,
+                    (
+                        clean_app,
+                        str(title or "")[:120],
+                        str(title or "")[:120],
+                        last_message,
+                        ts,
+                        clean_conv,
+                        clean_user,
+                    ),
+                )
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
+        return {
+            "conversation_id": clean_conv,
+            "app_id": clean_app,
+            "message_count": len(normalized),
+            "messages": self.list_messages(clean_conv, clean_user, limit=1000),
+        }
+
+    def list_conversations(self, user_id: str, limit: int = 50) -> list:
+        safe_limit = max(1, min(int(limit or 50), 200))
+
+        def fetch_rows() -> list:
+            with self.lock:
+                return self.conn.execute(
                 """
                 select c.*,
+                       a.id as current_app_id,
                        a.name as current_app_name,
                        a.cover_url as current_app_icon,
                        a.summary as current_app_summary,
                        a.like_count as app_like_count,
+                       a.source as current_app_source,
+                       a.owner_user_id as current_app_owner,
+                       a.is_public as current_app_public,
+                       a.status as current_app_status,
                        case when f.app_id is not null then 1 else 0 end as favorited,
                        case when l.app_id is not null then 1 else 0 end as liked
                 from conversations c
@@ -4955,8 +6192,48 @@ class Store:
                 where c.user_id=?
                 order by c.updated_at desc limit ?
                 """,
-                (user_id, limit),
-            ).fetchall()
+                    (user_id, safe_limit),
+                ).fetchall()
+
+        def current_app_available(row: sqlite3.Row | dict) -> bool:
+            item = dict(row)
+            if not item.get("current_app_id"):
+                return False
+            if (
+                str(item.get("current_app_source") or "upstream") == "user"
+                and str(item.get("current_app_owner") or "") == str(user_id)
+            ):
+                return True
+            return (
+                bool(item.get("current_app_public", 1))
+                and str(item.get("current_app_status") or "published") == "published"
+            )
+
+        # The normal path is a single joined query. Only genuinely stale or
+        # inaccessible card references enter the slower name-based repair path.
+        # This avoids two repair queries for every history row on every drawer
+        # open while preserving safe same-owner/public-card rebinding.
+        rows = fetch_rows()
+        stale_ids = [str(row["id"]) for row in rows if not current_app_available(row)]
+        for conversation_id in stale_ids:
+            self.repair_conversation_app(conversation_id, user_id)
+        if stale_ids:
+            rows = fetch_rows()
+
+        app_ids = sorted({str(row["app_id"] or "") for row in rows if str(row["app_id"] or "")})
+        tags_by_app: dict[str, list[str]] = {app_id: [] for app_id in app_ids}
+        if app_ids:
+            placeholders = ",".join("?" for _ in app_ids)
+            with self.lock:
+                tag_rows = self.conn.execute(
+                    f"select app_id,tag from user_app_tags where user_id=? and app_id in ({placeholders}) order by created_at asc",
+                    (user_id, *app_ids),
+                ).fetchall()
+            for tag_row in tag_rows:
+                tag = str(tag_row["tag"] or "").strip()
+                if tag:
+                    tags_by_app.setdefault(str(tag_row["app_id"] or ""), []).append(tag)
+
         out = []
         for row in rows:
             item = dict(row)
@@ -4970,11 +6247,17 @@ class Store:
             item["liked"] = bool(item.get("liked"))
             item["galgame_enabled"] = bool(item.get("galgame_enabled"))
             item["global_preset_enabled"] = bool(item.get("global_preset_enabled", 1))
-            item["user_tags"] = self.list_user_app_tags(user_id, str(item.get("app_id") or ""))
+            item["available"] = current_app_available(item)
+            item["user_tags"] = tags_by_app.get(str(item.get("app_id") or ""), [])
+            item.pop("current_app_id", None)
             item.pop("current_app_name", None)
             item.pop("current_app_icon", None)
             item.pop("current_app_summary", None)
             item.pop("app_like_count", None)
+            item.pop("current_app_source", None)
+            item.pop("current_app_owner", None)
+            item.pop("current_app_public", None)
+            item.pop("current_app_status", None)
             out.append(item)
         return out
 
@@ -5010,7 +6293,7 @@ class Store:
             return int(row["c"] if row else 0)
 
     def list_messages(self, conv_id: str, user_id: str, limit: int = 200, before_created_at: int | None = None) -> list:
-        safe_limit = max(1, min(int(limit or 200), 500))
+        safe_limit = max(1, min(int(limit or 200), 1000))
         with self.lock:
             if before_created_at:
                 rows = self.conn.execute(
@@ -5194,6 +6477,9 @@ class Store:
             ).fetchone()
             if not row:
                 return False
+            self.conn.execute("delete from conversation_database_rows where conversation_id=? and user_id=?", (conv_id, user_id))
+            self.conn.execute("delete from conversation_database_tables where conversation_id=? and user_id=?", (conv_id, user_id))
+            self.conn.execute("delete from conversation_runtime_profiles where conversation_id=? and user_id=?", (conv_id, user_id))
             self.conn.execute("delete from messages where conversation_id=? and user_id=?", (conv_id, user_id))
             self.conn.execute("delete from conversation_summaries where conversation_id=? and user_id=?", (conv_id, user_id))
             self.conn.execute("delete from conversation_mods_v2 where conversation_id=? and user_id=?", (conv_id, user_id))
@@ -5205,6 +6491,30 @@ class Store:
 
     def delete_empty_conversation(self, conv_id: str, user_id: str) -> bool:
         with self.lock:
+            empty = self.conn.execute(
+                """
+                select id from conversations
+                where id=? and user_id=?
+                  and not exists (
+                    select 1 from messages where conversation_id=? and user_id=?
+                  )
+                """,
+                (conv_id, user_id, conv_id, user_id),
+            ).fetchone()
+            if not empty:
+                return False
+            self.conn.execute(
+                "delete from conversation_database_rows where conversation_id=? and user_id=?",
+                (conv_id, user_id),
+            )
+            self.conn.execute(
+                "delete from conversation_database_tables where conversation_id=? and user_id=?",
+                (conv_id, user_id),
+            )
+            self.conn.execute(
+                "delete from conversation_runtime_profiles where conversation_id=? and user_id=?",
+                (conv_id, user_id),
+            )
             cur = self.conn.execute(
                 """
                 delete from conversations
@@ -5363,6 +6673,99 @@ class Store:
                     """,
                     (user_id, "conversation", new_id, v.get("name") or "", v.get("value_json") or "null", ts),
                 )
+            source_profile = self._ensure_conversation_runtime_profile_locked(conv_id, user_id)
+            if source_profile:
+                profile = dict(source_profile)
+                self.conn.execute(
+                    """
+                    insert into conversation_runtime_profiles(
+                        conversation_id,user_id,app_id,database_enabled,prompt_enabled,prompt_preset_id,
+                        regex_enabled,regex_preset_id,status_mode,strict_output,update_frequency,
+                        template_version,revision,created_at,updated_at
+                    ) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        new_id,
+                        user_id,
+                        source.get("app_id") or "",
+                        int(profile.get("database_enabled") or 0),
+                        int(profile.get("prompt_enabled") if profile.get("prompt_enabled") is not None else 1),
+                        profile.get("prompt_preset_id") or "",
+                        int(profile.get("regex_enabled") if profile.get("regex_enabled") is not None else 1),
+                        profile.get("regex_preset_id") or "",
+                        profile.get("status_mode") or "auto",
+                        int(profile.get("strict_output") or 0),
+                        int(profile.get("update_frequency") or 1),
+                        profile.get("template_version") or CONVERSATION_DATABASE_TEMPLATE_VERSION,
+                        int(profile.get("revision") or 1),
+                        ts,
+                        ts,
+                    ),
+                )
+                source_tables = self.conn.execute(
+                    """
+                    select * from conversation_database_tables
+                    where conversation_id=? and user_id=?
+                    order by sort_order asc,created_at asc
+                    """,
+                    (conv_id, user_id),
+                ).fetchall()
+                for table_row in source_tables:
+                    table = dict(table_row)
+                    new_table_id = str(uuid.uuid4())
+                    self.conn.execute(
+                        """
+                        insert into conversation_database_tables(
+                            id,conversation_id,user_id,table_key,name,columns_json,single_row,
+                            enabled,sort_order,revision,created_at,updated_at
+                        ) values(?,?,?,?,?,?,?,?,?,?,?,?)
+                        """,
+                        (
+                            new_table_id,
+                            new_id,
+                            user_id,
+                            table.get("table_key") or "",
+                            table.get("name") or "",
+                            table.get("columns_json") or "[]",
+                            int(table.get("single_row") or 0),
+                            int(table.get("enabled") if table.get("enabled") is not None else 1),
+                            int(table.get("sort_order") or 0),
+                            int(table.get("revision") or 1),
+                            ts,
+                            ts,
+                        ),
+                    )
+                    database_rows = self.conn.execute(
+                        """
+                        select * from conversation_database_rows
+                        where table_id=? and conversation_id=? and user_id=?
+                        order by row_index asc,created_at asc
+                        """,
+                        (str(table.get("id") or ""), conv_id, user_id),
+                    ).fetchall()
+                    for db_index, database_row in enumerate(database_rows):
+                        db_row = dict(database_row)
+                        self.conn.execute(
+                            """
+                            insert into conversation_database_rows(
+                                id,table_id,conversation_id,user_id,row_key,row_index,data_json,
+                                source_message_id,updated_by,created_at,updated_at
+                            ) values(?,?,?,?,?,?,?,?,?,?,?)
+                            """,
+                            (
+                                str(uuid.uuid4()),
+                                new_table_id,
+                                new_id,
+                                user_id,
+                                db_row.get("row_key") or str(db_index + 1),
+                                int(db_row.get("row_index") or db_index + 1),
+                                db_row.get("data_json") or "{}",
+                                "",
+                                "copy",
+                                ts + db_index,
+                                ts,
+                            ),
+                        )
             mod_rows = self.conn.execute(
                 "select position,work_id,version_id from conversation_mods_v2 where user_id=? and conversation_id=? order by position",
                 (user_id, conv_id),
@@ -5755,13 +7158,23 @@ class Store:
         }
         conversation = self.get_conversation(conv_id, user_id) if conv_id else None
         if conversation:
+            runtime_profile = self.get_conversation_runtime_profile(conv_id, user_id)
+            selected_presets = self.selected_conversation_presets(runtime_profile)
             conversation_settings = {
                 "global_preset_enabled": bool(conversation.get("global_preset_enabled", 1)),
                 "preset_overrides": self.conversation_preset_override_map(conv_id, user_id),
+                "runtime_profile": runtime_profile or {},
+                "prompt_preset": selected_presets.get("prompt") or {},
+                "regex_preset": selected_presets.get("regex") or {},
             }
             if bool(conversation.get("galgame_enabled")):
                 conversation_settings["galgame_enabled"] = True
             base_context["conversation_settings"] = conversation_settings
+            base_context["conversation_database_prompt"] = self.conversation_database_prompt(
+                conv_id,
+                user_id,
+                history=history,
+            )
         out = dict(base_context)
         out.update(self.template_context(user_id, app_id, conv_id, base_context))
         return out
@@ -6312,7 +7725,9 @@ class Store:
                         if world_mode == "replace":
                             new_world = world_entries
                         elif world_mode == "append":
-                            new_world = normalize_world_info((existing_world + world_entries)[:WORLD_INFO_MAX_ENTRIES])
+                            new_world = normalize_world_info(
+                                (existing_world + world_entries)[:ROLE_CARD_WORLD_INFO_MAX_ENTRIES]
+                            )
                         else:
                             new_world = merge_world_info_entries(existing_world, world_entries)
                         extra["world_info"] = strip_required_world_info(new_world)
@@ -6374,6 +7789,11 @@ class Store:
                     for field in ("media_assets", "world_info", "card_experience"):
                         if field not in media_payload:
                             media_payload[field] = existing_extra.get(field, [] if field != "card_experience" else {})
+                    if isinstance(data.get("card_experience"), dict):
+                        media_payload["card_experience"] = merge_card_experience_fields(
+                            existing_extra.get("card_experience"),
+                            data.get("card_experience"),
+                        )
                     prepared["_trusted_card_media"] = self.card_media.bind_payload(
                         owner_user_id,
                         app_id,
@@ -6987,6 +8407,79 @@ class Store:
             )
             self.conn.commit()
 
+    def record_dialogue_event(
+        self,
+        user_id: str,
+        event_id: str,
+        event_type: str,
+        app_id: str,
+        conversation_id: str,
+        message_id: str = "",
+    ) -> dict:
+        clean_user = str(user_id or "").strip()
+        clean_event_id = str(event_id or "").strip()
+        clean_type = str(event_type or "").strip()
+        clean_app = self.resolve_local_app_id(str(app_id or "").strip())
+        clean_conv = str(conversation_id or "").strip()
+        clean_message = str(message_id or "").strip()[:160]
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]{8,160}", clean_event_id):
+            raise ValueError("invalid event_id")
+        if clean_type not in DIALOGUE_EVENT_TYPES:
+            raise ValueError("unsupported dialogue event")
+        if not clean_user or not clean_app or not clean_conv:
+            raise ValueError("dialogue event scope is required")
+        ts = now_ms()
+        payload = {
+            "app_id": clean_app,
+            "conversation_id": clean_conv,
+            "message_id": clean_message,
+            "action": clean_type,
+        }
+        with self.lock:
+            try:
+                self.conn.execute("begin immediate")
+                conversation = self.conn.execute(
+                    "select app_id from conversations where id=? and user_id=?",
+                    (clean_conv, clean_user),
+                ).fetchone()
+                if not conversation:
+                    raise ValueError("conversation not found")
+                if self.resolve_local_app_id(str(conversation["app_id"] or "")) != clean_app:
+                    raise ValueError("conversation role mismatch")
+                existing = self.conn.execute(
+                    "select event_type,app_id,conversation_id,message_id,created_at "
+                    "from dialogue_event_receipts where user_id=? and event_id=?",
+                    (clean_user, clean_event_id),
+                ).fetchone()
+                if existing:
+                    self.conn.rollback()
+                    return {
+                        "accepted": True,
+                        "duplicate": True,
+                        "event_id": clean_event_id,
+                        "created_at": int(existing["created_at"] or 0),
+                    }
+                self.conn.execute(
+                    "insert into dialogue_event_receipts(user_id,event_id,conversation_id,app_id,event_type,message_id,created_at) "
+                    "values(?,?,?,?,?,?,?)",
+                    (clean_user, clean_event_id, clean_conv, clean_app, clean_type, clean_message, ts),
+                )
+                self.conn.execute(
+                    "insert into user_events(user_id,event_type,summary,payload_json,created_at) values(?,?,?,?,?)",
+                    (
+                        clean_user,
+                        f"dialogue_{clean_type}",
+                        DIALOGUE_EVENT_TYPES[clean_type],
+                        json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                        ts,
+                    ),
+                )
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
+        return {"accepted": True, "duplicate": False, "event_id": clean_event_id, "created_at": ts}
+
     def list_events(self, user_id: str, *, page: int = 1, page_size: int = 30) -> tuple[list[dict], int]:
         offset = (max(1, page) - 1) * page_size
         with self.lock:
@@ -7233,6 +8726,342 @@ class Store:
             }
             plugins.append(item)
         return {"list": plugins, "total": len(plugins)}
+
+    # ===== Canonical SillyTavern-compatible UI extensions =====
+    def _sillytavern_extension_package_dir(self) -> Path:
+        base_dir = MEDIA_DIR or (DEFAULT_STATE_DIR / "media")
+        path = base_dir / "sillytavern-extensions" / "packages"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def import_sillytavern_extension(self, raw: str, filename: str = "") -> dict:
+        parsed = parse_sillytavern_extension_package(raw, filename)
+        extension_id = parsed["id"]
+        dest_name = safe_filename(
+            f"{extension_id}-{parsed['file_sha256'][:12]}.zip",
+            "extension.zip",
+        )
+        dest = self._sillytavern_extension_package_dir() / dest_name
+        dest.write_bytes(parsed["package_bytes"])
+        ts = now_ms()
+        manifest_json = json.dumps(parsed["manifest"], ensure_ascii=False, separators=(",", ":"))
+        files_json = json.dumps(parsed["package_paths"], ensure_ascii=False, separators=(",", ":"))
+        old_path: Path | None = None
+        with self.lock:
+            existing = self.conn.execute(
+                "select * from sillytavern_extensions where id=?",
+                (extension_id,),
+            ).fetchone()
+            if existing:
+                old_path = Path(str(existing["package_path"] or ""))
+            enabled = int(existing["enabled"]) if existing else 0
+            self.conn.execute(
+                """
+                insert into sillytavern_extensions(
+                    id,display_name,version,description,author,home_page,file_name,file_sha256,
+                    package_path,root_prefix,manifest_json,files_json,enabled,created_at,updated_at
+                ) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                on conflict(id) do update set
+                    display_name=excluded.display_name,
+                    version=excluded.version,
+                    description=excluded.description,
+                    author=excluded.author,
+                    home_page=excluded.home_page,
+                    file_name=excluded.file_name,
+                    file_sha256=excluded.file_sha256,
+                    package_path=excluded.package_path,
+                    root_prefix=excluded.root_prefix,
+                    manifest_json=excluded.manifest_json,
+                    files_json=excluded.files_json,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    extension_id,
+                    parsed["display_name"],
+                    parsed["version"],
+                    parsed["description"],
+                    parsed["author"],
+                    parsed["home_page"],
+                    parsed["file_name"],
+                    parsed["file_sha256"],
+                    str(dest),
+                    parsed["root_prefix"],
+                    manifest_json,
+                    files_json,
+                    enabled,
+                    ts if not existing else int(existing["created_at"] or ts),
+                    ts,
+                ),
+            )
+            self.conn.commit()
+            row = self.conn.execute(
+                "select * from sillytavern_extensions where id=?",
+                (extension_id,),
+            ).fetchone()
+        if old_path and old_path != dest:
+            try:
+                if old_path.exists() and old_path.is_file():
+                    old_path.unlink()
+            except Exception:
+                pass
+        return sillytavern_extension_row_json(row, include_manifest=True)
+
+    def list_sillytavern_extensions(self, include_manifest: bool = False) -> list[dict]:
+        with self.lock:
+            rows = self.conn.execute(
+                "select * from sillytavern_extensions order by enabled desc, updated_at desc, display_name asc"
+            ).fetchall()
+        return [
+            sillytavern_extension_row_json(row, include_manifest=include_manifest)
+            for row in rows
+        ]
+
+    def get_sillytavern_extension(self, extension_id: str) -> sqlite3.Row | None:
+        clean = str(extension_id or "").strip()
+        if not clean:
+            return None
+        with self.lock:
+            return self.conn.execute(
+                "select * from sillytavern_extensions where id=?",
+                (clean,),
+            ).fetchone()
+
+    def set_sillytavern_extension_enabled(self, extension_id: str, enabled: bool) -> dict | None:
+        with self.lock:
+            row = self.get_sillytavern_extension(extension_id)
+            if not row:
+                return None
+            self.conn.execute(
+                "update sillytavern_extensions set enabled=?, updated_at=? where id=?",
+                (1 if enabled else 0, now_ms(), row["id"]),
+            )
+            self.conn.commit()
+            updated = self.conn.execute(
+                "select * from sillytavern_extensions where id=?",
+                (row["id"],),
+            ).fetchone()
+        return sillytavern_extension_row_json(updated, include_manifest=True)
+
+    def delete_sillytavern_extension(self, extension_id: str) -> bool:
+        with self.lock:
+            row = self.get_sillytavern_extension(extension_id)
+            if not row:
+                return False
+            self.conn.execute(
+                "delete from sillytavern_extensions where id=?",
+                (row["id"],),
+            )
+            self.conn.commit()
+        path = Path(str(row["package_path"] or ""))
+        try:
+            if path.exists() and path.is_file():
+                path.unlink()
+        except Exception:
+            pass
+        return True
+
+    def read_sillytavern_extension_file(self, extension_id: str, rel_path: str) -> tuple[bytes, str] | None:
+        row = self.get_sillytavern_extension(extension_id)
+        if not row or not int(row["enabled"] or 0):
+            return None
+        try:
+            clean_path = safe_tpg_path(rel_path)
+            declared = json.loads(row["files_json"] or "[]")
+            declared = declared if isinstance(declared, list) else []
+            if clean_path not in declared:
+                return None
+            root_prefix = str(row["root_prefix"] or "")
+            archive_path = root_prefix + clean_path
+        except Exception:
+            return None
+        package_path = Path(str(row["package_path"] or ""))
+        if not package_path.exists():
+            return None
+        try:
+            with zipfile.ZipFile(package_path) as zf:
+                info = zf.getinfo(archive_path)
+                if int(info.file_size or 0) > ST_EXTENSION_MAX_UNCOMPRESSED_BYTES:
+                    return None
+                data = zf.read(info)
+        except Exception:
+            return None
+        ext = Path(clean_path).suffix.lower()
+        content_type = {
+            ".html": "text/html; charset=utf-8",
+            ".htm": "text/html; charset=utf-8",
+            ".js": "text/javascript; charset=utf-8",
+            ".mjs": "text/javascript; charset=utf-8",
+            ".css": "text/css; charset=utf-8",
+            ".json": "application/json; charset=utf-8",
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".webp": "image/webp",
+            ".gif": "image/gif",
+            ".svg": "image/svg+xml",
+            ".avif": "image/avif",
+            ".mp3": "audio/mpeg",
+            ".ogg": "audio/ogg",
+            ".wav": "audio/wav",
+            ".woff": "font/woff",
+            ".woff2": "font/woff2",
+            ".ttf": "font/ttf",
+        }.get(ext, "application/octet-stream")
+        return data, content_type
+
+    def enabled_sillytavern_extensions(self) -> dict:
+        with self.lock:
+            rows = self.conn.execute(
+                "select * from sillytavern_extensions where enabled=1 "
+                "order by updated_at asc, display_name asc"
+            ).fetchall()
+        items = [sillytavern_extension_row_json(row, include_manifest=True) for row in rows]
+        items.sort(key=lambda item: (int(item.get("loading_order") or 0), str(item.get("id") or "")))
+        return {
+            "list": items,
+            "total": len(items),
+            "protocol": "dialogue-extension-v1",
+            "host_version": 1,
+        }
+
+    # ===== Per-user/card SillyTavern runtime state =====
+    @staticmethod
+    def _runtime_json(field: str, value: object) -> tuple[object, str]:
+        if field == "script_trees":
+            normalized = value if isinstance(value, (dict, list)) else {}
+        else:
+            normalized = value if isinstance(value, dict) else {}
+        blob = json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
+        limit = ST_RUNTIME_JSON_LIMITS[field]
+        if len(blob.encode("utf-8")) > limit:
+            raise ValueError(f"{field} 过大，最大 {limit} bytes")
+        return normalized, blob
+
+    def get_sillytavern_runtime_state(
+        self,
+        user_id: str,
+        app_id: str = "",
+        conversation_id: str = "",
+    ) -> dict:
+        clean_user = str(user_id or "").strip()
+        clean_app = str(app_id or "").strip()
+        clean_conv = str(conversation_id or "").strip()
+        scopes = [("", "")]
+        if clean_app:
+            scopes.append((clean_app, ""))
+        if clean_app and clean_conv:
+            scopes.append((clean_app, clean_conv))
+        fields = {
+            "extension_settings": "extension_settings_json",
+            "worldbook_overrides": "worldbook_overrides_json",
+            "regex_overrides": "regex_overrides_json",
+            "script_trees": "script_trees_json",
+            "mvu_state": "mvu_state_json",
+            "variables": "variables_json",
+        }
+        merged: dict[str, object] = {
+            "extension_settings": {},
+            "worldbook_overrides": {},
+            "regex_overrides": {},
+            "script_trees": {},
+            "mvu_state": {},
+            "variables": {},
+        }
+        updated_at = 0
+        with self.lock:
+            for scope_app, scope_conv in scopes:
+                row = self.conn.execute(
+                    "select * from sillytavern_runtime_states "
+                    "where user_id=? and app_id=? and conversation_id=?",
+                    (clean_user, scope_app, scope_conv),
+                ).fetchone()
+                if not row:
+                    continue
+                updated_at = max(updated_at, int(row["updated_at"] or 0))
+                for field, column in fields.items():
+                    try:
+                        value = json.loads(row[column] or "{}")
+                    except Exception:
+                        value = {}
+                    if isinstance(merged[field], dict) and isinstance(value, dict):
+                        merged[field] = {**merged[field], **value}
+                    elif value:
+                        merged[field] = value
+        return {
+            **merged,
+            "app_id": clean_app,
+            "conversation_id": clean_conv,
+            "updated_at": updated_at,
+            "version": 1,
+        }
+
+    def save_sillytavern_runtime_state(
+        self,
+        user_id: str,
+        app_id: str,
+        conversation_id: str,
+        data: dict,
+    ) -> dict:
+        clean_user = str(user_id or "").strip()
+        clean_app = str(app_id or "").strip()
+        clean_conv = str(conversation_id or "").strip()
+        if not clean_user:
+            raise ValueError("user_id is required")
+        if not isinstance(data, dict):
+            raise ValueError("invalid runtime state")
+        field_columns = {
+            "extension_settings": "extension_settings_json",
+            "worldbook_overrides": "worldbook_overrides_json",
+            "regex_overrides": "regex_overrides_json",
+            "script_trees": "script_trees_json",
+            "mvu_state": "mvu_state_json",
+            "variables": "variables_json",
+        }
+        with self.lock:
+            existing = self.conn.execute(
+                "select * from sillytavern_runtime_states "
+                "where user_id=? and app_id=? and conversation_id=?",
+                (clean_user, clean_app, clean_conv),
+            ).fetchone()
+            values: dict[str, str] = {}
+            for field, column in field_columns.items():
+                if field in data:
+                    _normalized, blob = self._runtime_json(field, data.get(field))
+                    values[column] = blob
+                else:
+                    values[column] = str(existing[column] or "{}") if existing else "{}"
+            ts = now_ms()
+            self.conn.execute(
+                """
+                insert into sillytavern_runtime_states(
+                    user_id,app_id,conversation_id,extension_settings_json,
+                    worldbook_overrides_json,regex_overrides_json,script_trees_json,
+                    mvu_state_json,variables_json,updated_at
+                ) values(?,?,?,?,?,?,?,?,?,?)
+                on conflict(user_id,app_id,conversation_id) do update set
+                    extension_settings_json=excluded.extension_settings_json,
+                    worldbook_overrides_json=excluded.worldbook_overrides_json,
+                    regex_overrides_json=excluded.regex_overrides_json,
+                    script_trees_json=excluded.script_trees_json,
+                    mvu_state_json=excluded.mvu_state_json,
+                    variables_json=excluded.variables_json,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    clean_user,
+                    clean_app,
+                    clean_conv,
+                    values["extension_settings_json"],
+                    values["worldbook_overrides_json"],
+                    values["regex_overrides_json"],
+                    values["script_trees_json"],
+                    values["mvu_state_json"],
+                    values["variables_json"],
+                    ts,
+                ),
+            )
+            self.conn.commit()
+        return self.get_sillytavern_runtime_state(clean_user, clean_app, clean_conv)
 
     def _legacy_llm_preset(self, saved: dict | None = None, include_secrets: bool = True) -> dict:
         saved = saved or self.get_api_settings_raw()
@@ -8177,11 +10006,11 @@ def merge_world_info_entries(existing: list, incoming: list) -> list:
         key = world_merge_key(entry)
         if key and key in index_by_key:
             merged[index_by_key[key]] = entry
-        elif len(merged) < WORLD_INFO_MAX_ENTRIES:
+        elif len(merged) < ROLE_CARD_WORLD_INFO_MAX_ENTRIES:
             merged.append(entry)
             if key:
                 index_by_key[key] = len(merged) - 1
-    return merged[:WORLD_INFO_MAX_ENTRIES]
+    return merged[:ROLE_CARD_WORLD_INFO_MAX_ENTRIES]
 
 
 def apply_macros(text: object, char_name: str = "", user_name: str = "") -> str:
@@ -9985,6 +11814,30 @@ def _safe_int(value, lo=None, hi=None):
     return n
 
 
+# Real RoleplayHub cards can carry multi-megabyte UI templates in otherwise
+# opaque extension fields.  Keep the complete native card when it still fits
+# comfortably below the default 32 MiB request-body boundary, so workshop
+# edits and exports do not silently flatten those fields.
+SILLYTAVERN_CARD_SNAPSHOT_MAX_BYTES = 16 * 1024 * 1024
+
+
+def _clone_sillytavern_card_snapshot(value: object) -> dict | None:
+    """Return a bounded JSON clone used to preserve opaque card fields on edits."""
+    if not isinstance(value, dict):
+        return None
+    try:
+        raw = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    except (TypeError, ValueError):
+        return None
+    if len(raw) > SILLYTAVERN_CARD_SNAPSHOT_MAX_BYTES:
+        return None
+    try:
+        cloned = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return cloned if isinstance(cloned, dict) else None
+
+
 def silly_card_to_app(card: dict) -> dict:
     """SillyTavern Character Card (V1/V2) → 本站 create_user_app 期望的 payload。"""
     if not isinstance(card, dict):
@@ -10027,6 +11880,14 @@ def silly_card_to_app(card: dict) -> dict:
         for entry_index, e in enumerate(book["entries"]):
             if not isinstance(e, dict):
                 continue
+            entry_extensions = {}
+            if isinstance(e.get("extensions"), dict):
+                try:
+                    entry_extensions = json.loads(
+                        json.dumps(e.get("extensions"), ensure_ascii=False)
+                    )
+                except (TypeError, ValueError):
+                    entry_extensions = {}
             world.append({
                 "id": e.get("id") or e.get("uid") or f"world-{entry_index + 1}",
                 "name": e.get("name") or e.get("title") or e.get("comment") or f"世界书条目 {entry_index + 1}",
@@ -10043,6 +11904,7 @@ def silly_card_to_app(card: dict) -> dict:
                 "probability": e.get("probability", 100),
                 "recursive": bool(e.get("recursive", e.get("case_sensitive", False))),
                 "media_bindings": [],
+                "extensions": entry_extensions,
             })
     raw_extensions = data.get("extensions") if isinstance(data.get("extensions"), dict) else {}
     extensions = sanitize_card_extensions(raw_extensions)
@@ -10052,6 +11914,14 @@ def silly_card_to_app(card: dict) -> dict:
         bgm = imported_experience.get("bgm") if isinstance(imported_experience.get("bgm"), dict) else {}
         bgm["default_asset_id"] = ""
         imported_experience["bgm"] = bgm
+        stage = imported_experience.get("stage") if isinstance(imported_experience.get("stage"), dict) else {}
+        stage["background_asset_id"] = ""
+        stage["portrait_asset_id"] = ""
+        imported_experience["stage"] = stage
+        galgame = imported_experience.get("galgame") if isinstance(imported_experience.get("galgame"), dict) else {}
+        galgame["default_portrait_id"] = ""
+        galgame["default_background_id"] = ""
+        imported_experience["galgame"] = galgame
         imported_experience["ui_rules"] = [
             item for item in (imported_experience.get("ui_rules") or [])
             if isinstance(item, dict) and str(item.get("action") or "") != "switch_bgm"
@@ -10083,7 +11953,8 @@ def silly_card_to_app(card: dict) -> dict:
         imported_preset["enabled"] = False
         payload["card_prompt_preset"] = imported_preset
     # 兼容风月/DZMM/roleplay hub 等平台：正则脚本可能位于顶层 regex_scripts，而非 extensions 内。
-    # 做到「正则全网适配」：合并 extensions 与顶层来源，并按 (find, flags) 去重。
+    # 做到「正则全网适配」：合并 extensions 与顶层来源。只删除规范化后
+    # 完全相同的重复对象；同一 find/flags 可以合法用于不同替换、位置和阶段。
     top_level_regex_raw: list = []
     for src in (data, card):
         if isinstance(src, dict) and isinstance(src.get("regex_scripts"), list):
@@ -10093,15 +11964,15 @@ def silly_card_to_app(card: dict) -> dict:
     promoted_regex = regex_scripts_from_extensions(payload.get("extensions"))
     top_level_regex = normalize_regex_scripts(top_level_regex_raw)
     combined_regex: list = []
-    seen_regex_keys: set = set()
+    seen_regex_keys: set[str] = set()
     for script in list(promoted_regex) + list(top_level_regex):
-        key = (script.get("find"), script.get("flags"))
+        key = json.dumps(script, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         if key in seen_regex_keys:
             continue
         seen_regex_keys.add(key)
         combined_regex.append(script)
     if combined_regex:
-        payload["regex_scripts"] = combined_regex[:40]
+        payload["regex_scripts"] = combined_regex[:ROLE_CARD_REGEX_MAX_ENTRIES]
     # roleplay hub BGM 播放列表：extensions 与顶层 regex_scripts 均可能承载
     legacy_rp_hub = legacy_rp_hub_from_extensions(raw_extensions)
     if not legacy_rp_hub and top_level_regex_raw:
@@ -10126,6 +11997,12 @@ def silly_card_to_app(card: dict) -> dict:
     avatar = _s("avatar", "image", "cover_url")
     if avatar and avatar.lower() not in ("none",) and (avatar.startswith("http") or avatar.startswith("/")):
         payload["cover_url"] = avatar
+    snapshot = _clone_sillytavern_card_snapshot(card)
+    if snapshot is not None:
+        # Keep opaque/future Character Card and RoleplayHub fields server-side so
+        # workshop edits can replace Homer-owned fields without flattening the
+        # original card into the currently-known schema.
+        payload["sillytavern_card"] = snapshot
     return payload
 
 
@@ -10152,12 +12029,43 @@ def app_to_silly_card(card: dict) -> dict:
             "insertion_order": int(e.get("order") or e.get("priority") or 100),
             "probability": int(e.get("probability") if e.get("probability") is not None else 100),
             "recursive": bool(e.get("recursive", False)),
+            "case_sensitive": bool(e.get("case_sensitive", False)),
+            "match_whole_words": bool(e.get("match_whole_words", False)),
+            "selective_logic": str(e.get("selective_logic") or "and_any"),
+            "role": str(e.get("role") or "system"),
+            "scan_depth": int(e.get("scan_depth") or 2),
+            "sticky": int(e.get("sticky") or 0),
+            "cooldown": int(e.get("cooldown") or 0),
+            "delay": int(e.get("delay") or 0),
         }
+        entry_extensions = {}
+        if isinstance(e.get("extensions"), dict):
+            try:
+                entry_extensions = json.loads(
+                    json.dumps(e.get("extensions"), ensure_ascii=False)
+                )
+            except (TypeError, ValueError):
+                entry_extensions = {}
         bindings = e.get("media_bindings") if isinstance(e.get("media_bindings"), list) else []
         if bindings:
-            entry["extensions"] = {"homer_media_bindings": bindings}
+            entry_extensions["homer_media_bindings"] = json.loads(
+                json.dumps(bindings, ensure_ascii=False)
+            )
+        else:
+            entry_extensions.pop("homer_media_bindings", None)
+        if entry_extensions:
+            entry["extensions"] = entry_extensions
         entries.append(entry)
     extensions = sanitize_card_extensions(card.get("extensions"))
+    regex_scripts = card.get("regex_scripts") if isinstance(card.get("regex_scripts"), list) else []
+    if regex_scripts:
+        extensions["regex_scripts"] = [
+            regex_script_to_sillytavern(script, index)
+            for index, script in enumerate(regex_scripts[:ROLE_CARD_REGEX_MAX_ENTRIES])
+            if isinstance(script, dict)
+        ]
+    else:
+        extensions.pop("regex_scripts", None)
     card_prompt_preset = normalize_card_prompt_preset(card.get("card_prompt_preset"))
     if card_prompt_preset.get("name") or card_prompt_preset.get("prompts") or card_prompt_preset.get("blocks"):
         extensions["homer_card_prompt_preset"] = card_prompt_preset
@@ -10165,6 +12073,13 @@ def app_to_silly_card(card: dict) -> dict:
         extensions["homer_card_experience"] = card.get("card_experience")
     if isinstance(card.get("media_assets"), list) and card.get("media_assets"):
         extensions["homer_media_assets"] = card.get("media_assets")
+    roleplayhub_profile = roleplayhub_card_profile(
+        extensions,
+        card.get("legacy_rp_hub"),
+        card.get("opening_statement"),
+    )
+    if roleplayhub_profile:
+        extensions["homer_roleplayhub"] = roleplayhub_profile
     data = {
         "name": card.get("name") or "",
         "description": card.get("description") or "",
@@ -10187,10 +12102,283 @@ def app_to_silly_card(card: dict) -> dict:
     return {"spec": "chara_card_v2", "spec_version": "2.0", "data": data}
 
 
+def local_app_to_silly_card(row: dict, fallback_card: dict | None = None) -> dict:
+    """Merge workshop edits into the complete imported card, or rebuild V2.
+
+    Imported cards can contain future card-spec fields and arbitrary extension
+    payloads.  Those values stay opaque and lossless, while fields exposed by
+    the Homer workshop are projected back into the native SillyTavern shape.
+    """
+    raw_extra = row.get("extra_settings") if isinstance(row, dict) else None
+    if isinstance(raw_extra, dict):
+        extra = raw_extra
+    else:
+        try:
+            extra = json.loads(raw_extra) if raw_extra else {}
+        except (TypeError, ValueError):
+            extra = {}
+    original = extra.get("sillytavern_card") if isinstance(extra, dict) else None
+    card = fallback_card if isinstance(fallback_card, dict) else local_app_to_card(row)
+    rebuilt = app_to_silly_card(card)
+    if isinstance(original, dict):
+        try:
+            copy = json.loads(json.dumps(original, ensure_ascii=False))
+        except (TypeError, ValueError):
+            copy = None
+        if isinstance(copy, dict):
+            rebuilt_data = rebuilt.get("data") if isinstance(rebuilt.get("data"), dict) else {}
+            target_data = copy.get("data") if isinstance(copy.get("data"), dict) else copy
+            controlled_fields = (
+                "name",
+                "description",
+                "personality",
+                "scenario",
+                "first_mes",
+                "mes_example",
+                "system_prompt",
+                "post_history_instructions",
+                "alternate_greetings",
+                "tags",
+                "creator_notes",
+                "creator",
+                "character_version",
+                "avatar",
+            )
+            for key in controlled_fields:
+                target_data[key] = json.loads(
+                    json.dumps(rebuilt_data.get(key), ensure_ascii=False)
+                )
+
+            original_extensions = target_data.get("extensions")
+            if not isinstance(original_extensions, dict):
+                original_extensions = {}
+            else:
+                original_extensions = json.loads(
+                    json.dumps(original_extensions, ensure_ascii=False)
+                )
+            rebuilt_extensions = rebuilt_data.get("extensions")
+            if not isinstance(rebuilt_extensions, dict):
+                rebuilt_extensions = {}
+
+            original_experience = original_extensions.get("homer_card_experience")
+            rebuilt_experience = rebuilt_extensions.get("homer_card_experience")
+            if isinstance(rebuilt_experience, dict):
+                merged_experience = merge_card_experience_fields(
+                    original_experience,
+                    rebuilt_experience,
+                )
+                allowed_assets = {
+                    str(item.get("id") or ""): str(item.get("kind") or "")
+                    for item in (card.get("media_assets") if isinstance(card.get("media_assets"), list) else [])
+                    if isinstance(item, dict) and item.get("id")
+                }
+                world_ids = {
+                    str(item.get("id") or "")
+                    for item in (card.get("world_info") if isinstance(card.get("world_info"), list) else [])
+                    if isinstance(item, dict) and item.get("id")
+                }
+                rebuilt_extensions["homer_card_experience"] = normalize_card_experience(
+                    merged_experience,
+                    allowed_assets,
+                    world_ids,
+                )
+
+            # These namespaces are owned by explicit workshop fields. Remove
+            # stale imported copies first so disabling/deleting a field sticks.
+            for key in (
+                "regex_scripts",
+                "homer_card_prompt_preset",
+                "homer_card_experience",
+                "homer_media_assets",
+                "homer_roleplayhub",
+            ):
+                original_extensions.pop(key, None)
+            original_extensions.update(
+                json.loads(json.dumps(rebuilt_extensions, ensure_ascii=False))
+            )
+            target_data["extensions"] = original_extensions
+
+            if isinstance(rebuilt_data.get("character_book"), dict):
+                rebuilt_book = rebuilt_data["character_book"]
+                original_book = target_data.get("character_book")
+                if isinstance(original_book, dict):
+                    merged_book = json.loads(
+                        json.dumps(original_book, ensure_ascii=False)
+                    )
+                else:
+                    merged_book = {}
+
+                for key, value in rebuilt_book.items():
+                    if key == "entries":
+                        continue
+                    if key not in merged_book:
+                        merged_book[key] = json.loads(
+                            json.dumps(value, ensure_ascii=False)
+                        )
+
+                original_entries = (
+                    original_book.get("entries")
+                    if isinstance(original_book, dict)
+                    and isinstance(original_book.get("entries"), list)
+                    else []
+                )
+                rebuilt_entries = (
+                    rebuilt_book.get("entries")
+                    if isinstance(rebuilt_book.get("entries"), list)
+                    else []
+                )
+                original_entry_indexes: dict[str, list[int]] = {}
+                for index, entry in enumerate(original_entries):
+                    if not isinstance(entry, dict):
+                        continue
+                    for identity_key in ("id", "uid"):
+                        identity = str(entry.get(identity_key) or "").strip()
+                        if identity:
+                            original_entry_indexes.setdefault(identity, []).append(index)
+
+                used_original_indexes: set[int] = set()
+                merged_entries: list[dict] = []
+                for rebuilt_index, rebuilt_entry in enumerate(rebuilt_entries):
+                    if not isinstance(rebuilt_entry, dict):
+                        continue
+                    matched_index = None
+                    for identity_key in ("id", "uid"):
+                        identity = str(rebuilt_entry.get(identity_key) or "").strip()
+                        if not identity:
+                            continue
+                        for candidate in original_entry_indexes.get(identity, []):
+                            if candidate not in used_original_indexes:
+                                matched_index = candidate
+                                break
+                        if matched_index is not None:
+                            break
+
+                    # Old cards may omit both id and uid. The importer gives
+                    # those entries a deterministic world-N id, so preserve
+                    # opaque fields by matching the unchanged source position.
+                    if (
+                        matched_index is None
+                        and rebuilt_index < len(original_entries)
+                        and isinstance(original_entries[rebuilt_index], dict)
+                        and not str(original_entries[rebuilt_index].get("id") or "").strip()
+                        and not str(original_entries[rebuilt_index].get("uid") or "").strip()
+                        and str(rebuilt_entry.get("id") or "") == f"world-{rebuilt_index + 1}"
+                    ):
+                        matched_index = rebuilt_index
+
+                    if matched_index is not None:
+                        used_original_indexes.add(matched_index)
+                        merged_entry = json.loads(
+                            json.dumps(original_entries[matched_index], ensure_ascii=False)
+                        )
+                    else:
+                        merged_entry = {}
+
+                    for key, value in rebuilt_entry.items():
+                        if key == "extensions":
+                            continue
+                        merged_entry[key] = json.loads(
+                            json.dumps(value, ensure_ascii=False)
+                        )
+
+                    original_entry_extensions = merged_entry.get("extensions")
+                    if isinstance(original_entry_extensions, dict):
+                        merged_extensions = json.loads(
+                            json.dumps(original_entry_extensions, ensure_ascii=False)
+                        )
+                    else:
+                        merged_extensions = {}
+                    rebuilt_entry_extensions = rebuilt_entry.get("extensions")
+                    if not isinstance(rebuilt_entry_extensions, dict):
+                        rebuilt_entry_extensions = {}
+
+                    # Media bindings are an editable Homer field. All other
+                    # extension namespaces remain opaque and are merged rather
+                    # than replaced, so future Character Card fields survive.
+                    merged_extensions.pop("homer_media_bindings", None)
+                    for key, value in rebuilt_entry_extensions.items():
+                        merged_extensions[key] = json.loads(
+                            json.dumps(value, ensure_ascii=False)
+                        )
+                    if merged_extensions:
+                        merged_entry["extensions"] = merged_extensions
+                    else:
+                        merged_entry.pop("extensions", None)
+                    merged_entries.append(merged_entry)
+
+                merged_book["entries"] = merged_entries
+                target_data["character_book"] = merged_book
+            else:
+                target_data.pop("character_book", None)
+            return copy
+    return rebuilt
+
+
+_LOCAL_APP_SILLY_CARD_CACHE_MAX = 32
+_local_app_silly_card_cache: OrderedDict[tuple[str, str, str], dict] = OrderedDict()
+_local_app_silly_card_cache_lock = threading.Lock()
+
+
+def _local_app_silly_card_cache_key(row: dict, version_id: str = "") -> tuple[str, str, str] | None:
+    if not isinstance(row, dict):
+        return None
+    app_id = str(row.get("id") or "").strip()
+    updated_at = str(row.get("updated_at") or "").strip()
+    if not app_id or not updated_at:
+        return None
+    return app_id, updated_at, str(version_id or "").strip()
+
+
+def clear_local_app_silly_card_cache() -> None:
+    with _local_app_silly_card_cache_lock:
+        _local_app_silly_card_cache.clear()
+
+
+def cached_local_app_to_silly_card(row: dict, version_id: str = "") -> dict:
+    """Return a shared read-only-by-contract conversion for one card version."""
+    key = _local_app_silly_card_cache_key(row, version_id)
+    if key is None:
+        return local_app_to_silly_card(row)
+
+    with _local_app_silly_card_cache_lock:
+        cached = _local_app_silly_card_cache.get(key)
+        if cached is not None:
+            _local_app_silly_card_cache.move_to_end(key)
+            return cached
+
+    converted = local_app_to_silly_card(row)
+    with _local_app_silly_card_cache_lock:
+        cached = _local_app_silly_card_cache.get(key)
+        if cached is not None:
+            _local_app_silly_card_cache.move_to_end(key)
+            return cached
+        _local_app_silly_card_cache[key] = converted
+        while len(_local_app_silly_card_cache) > _LOCAL_APP_SILLY_CARD_CACHE_MAX:
+            _local_app_silly_card_cache.popitem(last=False)
+    return converted
+
+
+def silly_card_with_homer_cover(silly_card: dict, cover_url: str) -> dict:
+    """Add the response-only cover hint without mutating a cached card."""
+    response_card = dict(silly_card)
+    source_data = silly_card.get("data") if isinstance(silly_card.get("data"), dict) else {}
+    response_data = dict(source_data)
+    source_extensions = (
+        source_data.get("extensions")
+        if isinstance(source_data.get("extensions"), dict)
+        else {}
+    )
+    response_extensions = dict(source_extensions)
+    response_extensions["homer_cover_url"] = str(cover_url or "")
+    response_data["extensions"] = response_extensions
+    response_card["data"] = response_data
+    return response_card
+
+
 WORLD_INFO_MAX_ENTRIES = 800
 
 
-def normalize_world_info(value: object, limit: int = WORLD_INFO_MAX_ENTRIES) -> list:
+def normalize_world_info(value: object, limit: int = ROLE_CARD_WORLD_INFO_MAX_ENTRIES) -> list:
     """规整世界书条目列表，兼容基础条目和 SillyTavern Character Book 常用字段。"""
     if not isinstance(value, list):
         return []
@@ -10222,8 +12410,8 @@ def normalize_world_info(value: object, limit: int = WORLD_INFO_MAX_ENTRIES) -> 
         return max(lo, min(hi, n))
 
     out = []
-    requested_limit = int(limit or WORLD_INFO_MAX_ENTRIES)
-    if requested_limit == WORLD_INFO_MAX_ENTRIES and any(isinstance(item, dict) and item.get("_homer_world_group") for item in value):
+    requested_limit = int(limit or ROLE_CARD_WORLD_INFO_MAX_ENTRIES)
+    if requested_limit == ROLE_CARD_WORLD_INFO_MAX_ENTRIES and any(isinstance(item, dict) and item.get("_homer_world_group") for item in value):
         requested_limit = 12000
     safe_limit = max(1, min(requested_limit, 12000))
     for idx, raw in enumerate(value[:safe_limit]):
@@ -10233,12 +12421,29 @@ def normalize_world_info(value: object, limit: int = WORLD_INFO_MAX_ENTRIES) -> 
         secondary_in = raw.get("secondary_keys", raw.get("keys_secondary", raw.get("keysecondary", raw.get("secondary", []))))
         position = str(raw.get("position") or raw.get("insertion_position") or "system").strip()
         position = allowed_positions.get(position, "system")
-        content = str(raw.get("content") or raw.get("entry") or "").strip()[:8000]
+        content = str(raw.get("content") or raw.get("entry") or "").strip()[:20000]
+        raw_extensions = raw.get("extensions") if isinstance(raw.get("extensions"), dict) else {}
+        try:
+            extensions = json.loads(json.dumps(raw_extensions, ensure_ascii=False))
+        except (TypeError, ValueError):
+            extensions = {}
         media_bindings = raw.get("media_bindings")
         if not isinstance(media_bindings, list):
-            extensions = raw.get("extensions") if isinstance(raw.get("extensions"), dict) else {}
             media_bindings = extensions.get("homer_media_bindings") if isinstance(extensions.get("homer_media_bindings"), list) else []
-        if not content and not media_bindings:
+        normalized_media_bindings = [
+            dict(item) for item in media_bindings[:30] if isinstance(item, dict)
+        ]
+        if normalized_media_bindings:
+            extensions["homer_media_bindings"] = json.loads(
+                json.dumps(normalized_media_bindings, ensure_ascii=False)
+            )
+        else:
+            extensions.pop("homer_media_bindings", None)
+        has_source_identity = any(
+            str(raw.get(key) or "").strip()
+            for key in ("id", "uid", "name", "title", "comment")
+        )
+        if not content and not normalized_media_bindings and not extensions and not has_source_identity:
             continue
         priority_value = raw.get("priority", raw.get("insertion_order", raw.get("order", 100)))
         item = {
@@ -10264,7 +12469,8 @@ def normalize_world_info(value: object, limit: int = WORLD_INFO_MAX_ENTRIES) -> 
             "sticky": _int(raw.get("sticky"), 0, 0, 9999),
             "cooldown": _int(raw.get("cooldown"), 0, 0, 9999),
             "delay": _int(raw.get("delay"), 0, 0, 9999),
-            "media_bindings": [dict(item) for item in media_bindings[:30] if isinstance(item, dict)],
+            "media_bindings": normalized_media_bindings,
+            "extensions": extensions,
         }
         if raw.get("_homer_world_group") in {"required", "mod", "conversation", "character"}:
             item["_homer_world_group"] = str(raw.get("_homer_world_group"))
@@ -10345,7 +12551,7 @@ def strip_required_world_info(entries: object) -> list:
         entry for entry in normalize_world_info(entries if isinstance(entries, list) else [])
         if str(entry.get("id") or "") != REQUIRED_WORLD_BOOK_ID
         and not (required_content and _world_content_signature(entry.get("content")) == required_content)
-    ][: WORLD_INFO_MAX_ENTRIES - 1]
+    ][:ROLE_CARD_WORLD_INFO_MAX_ENTRIES]
 
 
 CONVERSATION_WORLD_CHAT_BOOK = "当前会话世界书"
@@ -11461,7 +13667,7 @@ def normalize_regex_scripts(value: object) -> list:
     if not isinstance(value, list):
         return []
     out = []
-    for idx, raw in enumerate(value[:40]):
+    for idx, raw in enumerate(value[:ROLE_CARD_REGEX_MAX_ENTRIES]):
         if not isinstance(raw, dict):
             continue
         find, inline_flags = split_silly_regex_pattern(raw.get("find") or raw.get("pattern") or raw.get("findRegex") or raw.get("regex") or "")
@@ -11482,7 +13688,9 @@ def normalize_regex_scripts(value: object) -> list:
             "name": str(raw.get("name") or raw.get("scriptName") or f"Regex {idx + 1}")[:80],
             "find": find[:1000],
             "replace": replace[:REGEX_REPLACE_MAX_CHARS],
-            "flags": "".join(ch for ch in flags if ch in "ims")[:3],
+            # Preserve JavaScript flags for the native SillyTavern projection.
+            # The Python renderer still consumes only i/m/s where applicable.
+            "flags": "".join(dict.fromkeys(ch for ch in flags if ch in "gimsuy"))[:6],
             "enabled": enabled,
             "order": max(0, min(order, 9999)),
             "placement": list(raw.get("placement") or []) if isinstance(raw.get("placement"), list) else [],
@@ -11507,6 +13715,78 @@ def regex_scripts_from_extensions(extensions: object) -> list:
         if isinstance(value, list):
             raw_items.extend(value)
     return normalize_regex_scripts(raw_items)
+
+
+def regex_script_to_sillytavern(value: object, index: int = 0) -> dict:
+    """Project a normalized/RoleplayHub Regex entry into SillyTavern's schema."""
+    raw = value if isinstance(value, dict) else {}
+    pattern, inline_flags = split_silly_regex_pattern(
+        raw.get("find")
+        or raw.get("pattern")
+        or raw.get("findRegex")
+        or raw.get("regex")
+        or ""
+    )
+    flags = str(raw.get("flags") or inline_flags or "").lower()
+    flags = "".join(dict.fromkeys(ch for ch in flags if ch in "gimsuy"))
+    escaped_pattern = re.sub(r"(?<!\\)/", r"\/", str(pattern or ""))
+    find_regex = f"/{escaped_pattern}/{flags}" if flags else str(pattern or "")
+    enabled = bool(raw.get("enabled", True))
+    if "disabled" in raw:
+        enabled = not bool(raw.get("disabled"))
+    placement = raw.get("placement") if isinstance(raw.get("placement"), list) else [1, 2]
+    placement = [
+        int(item) for item in placement
+        if str(item).lstrip("-").isdigit() and int(item) in (0, 1, 2, 3, 4, 5, 6)
+    ]
+    return {
+        "id": str(raw.get("id") or f"regex-{index + 1}")[:80],
+        "scriptName": str(raw.get("name") or raw.get("scriptName") or f"Regex {index + 1}")[:80],
+        "findRegex": find_regex[:1100],
+        "replaceString": str(
+            raw.get("replace")
+            if raw.get("replace") is not None
+            else raw.get("replacement")
+            if raw.get("replacement") is not None
+            else raw.get("replaceString")
+            or ""
+        )[:REGEX_REPLACE_MAX_CHARS],
+        "trimStrings": list(raw.get("trimStrings") or []) if isinstance(raw.get("trimStrings"), list) else [],
+        "placement": placement or [1, 2],
+        "disabled": not enabled,
+        "markdownOnly": bool(raw.get("markdownOnly", False)),
+        "promptOnly": bool(raw.get("promptOnly", False)),
+        "runOnEdit": bool(raw.get("runOnEdit", False)),
+        "substituteRegex": raw.get("substituteRegex", 0),
+        "minDepth": raw.get("minDepth"),
+        "maxDepth": raw.get("maxDepth"),
+    }
+
+
+def roleplayhub_card_profile(extensions: object, legacy: object, opening: object = "") -> dict:
+    """Build a code-free runtime capability descriptor for RoleplayHub cards."""
+    ext = extensions if isinstance(extensions, dict) else {}
+    legacy_profile = normalize_legacy_rp_hub(legacy)
+    templates = ext.get("rp_hub_ui_templates")
+    if not isinstance(templates, list):
+        templates = ext.get("ui_templates") if isinstance(ext.get("ui_templates"), list) else []
+    regex_items = ext.get("regex_scripts") if isinstance(ext.get("regex_scripts"), list) else []
+    opening_text = str(opening or "")
+    interactive_html = bool(re.search(r"<!doctype\s+html|<html[\s>]", opening_text, re.I))
+    legacy_detected = bool(legacy_profile) and interactive_html
+    detected = bool(ext.get("rp_hub_watermark")) or bool(templates) or legacy_detected
+    if not detected:
+        return {}
+    return {
+        "version": 1,
+        "source": "roleplayhub",
+        "format": "rp_hub_character_card",
+        "interactive_html": interactive_html,
+        "regex_count": min(len(regex_items), ROLE_CARD_REGEX_MAX_ENTRIES),
+        "ui_template_count": min(len(templates), 20),
+        "media_playlist": legacy_profile.get("bgm_playlist") or [],
+        "sandbox": "opaque-origin-v1",
+    }
 
 
 def normalize_legacy_rp_hub(value: object) -> dict:
@@ -11552,7 +13832,7 @@ def legacy_rp_hub_from_extensions(extensions: object) -> dict:
     raw_items = extensions.get("regex_scripts") if isinstance(extensions.get("regex_scripts"), list) else []
     playlist: list[dict] = []
     vue_ui = False
-    for raw in raw_items[:40]:
+    for raw in raw_items[:ROLE_CARD_REGEX_MAX_ENTRIES]:
         if not isinstance(raw, dict):
             continue
         replacement = str(raw.get("replace") or raw.get("replacement") or raw.get("replaceString") or "")
@@ -11577,7 +13857,7 @@ def sanitize_card_extensions(value: object) -> dict:
         return {}
     if not isinstance(clean, dict):
         return {}
-    for key in ("homer_card_prompt_preset", "homer_card_experience", "homer_media_assets"):
+    for key in ("homer_card_prompt_preset", "homer_card_experience", "homer_media_assets", "homer_roleplayhub"):
         clean.pop(key, None)
     return clean
 
@@ -11587,6 +13867,9 @@ def normalize_user_app_extras(data: dict) -> dict:
     if not isinstance(data, dict):
         return {}
     extras: dict = {}
+    snapshot = _clone_sillytavern_card_snapshot(data.get("sillytavern_card"))
+    if snapshot is not None:
+        extras["sillytavern_card"] = snapshot
     if "bg_url" in data:
         extras["bg_url"] = normalize_background_input(data.get("bg_url"))
     if "tts_voice_id" in data:
@@ -11837,6 +14120,29 @@ def parse_uploaded_card_file(raw: str, filename: str = "") -> dict:
     return card
 
 
+def store_imported_card_png_cover(
+    blob: bytes,
+    filename: str = "character.png",
+) -> tuple[str, Path]:
+    """Persist an imported PNG card's visible artwork in the managed cover store."""
+    if not blob.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("角色卡封面不是有效的 PNG")
+    if len(blob) > 50 * 1024 * 1024:
+        raise ValueError("PNG 角色卡超过 50MB")
+    if MEDIA_DIR is None:
+        raise ValueError("media dir not ready")
+    cover_dir = MEDIA_DIR / "cover"
+    cover_dir.mkdir(parents=True, exist_ok=True)
+    stem = Path(safe_filename(filename, "character.png")).stem
+    dest = cover_dir / safe_filename(
+        f"{uuid.uuid4().hex[:16]}-{stem}.png",
+        "character.png",
+    )
+    dest.write_bytes(blob)
+    rel = f"/media-cache/cover/{dest.name}"
+    return public_url(rel), dest
+
+
 def safe_tpg_path(path: object) -> str:
     text = str(path or "").strip().replace("\\", "/")
     if not text:
@@ -12044,18 +14350,246 @@ def tpg_plugin_row_json(row: sqlite3.Row | dict, include_manifest: bool = False)
     return out
 
 
+def _string_list(value: object, *, limit: int = 100) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in value[:limit]:
+        text = str(item or "").strip()
+        key = text.casefold()
+        if not text or key in seen:
+            continue
+        seen.add(key)
+        out.append(text[:240])
+    return out
+
+
+def _sillytavern_extension_id(manifest: dict, filename: str, fallback_hash: str = "") -> str:
+    explicit = manifest.get("id") or manifest.get("name")
+    home_page = str(manifest.get("homePage") or manifest.get("homepage") or "").strip()
+    home_slug = ""
+    if home_page:
+        try:
+            parsed = urlparse(home_page)
+            home_slug = Path(parsed.path.rstrip("/")).name
+        except Exception:
+            home_slug = ""
+    file_slug = Path(str(filename or "")).stem
+    display_slug = str(manifest.get("display_name") or "").strip()
+    clean = clean_tpg_plugin_id(explicit or home_slug or file_slug or display_slug, "")
+    if clean:
+        return clean
+    return f"extension-{str(fallback_hash or uuid.uuid4().hex)[:12]}"
+
+
+def validate_sillytavern_extension_manifest(
+    manifest: object,
+    package_paths: set[str],
+    *,
+    filename: str = "",
+    fallback_hash: str = "",
+) -> dict:
+    """Validate the documented browser-facing SillyTavern extension manifest."""
+    if not isinstance(manifest, dict):
+        raise ValueError("manifest.json 必须是 JSON 对象")
+    display_name = str(manifest.get("display_name") or "").strip()
+    if not display_name:
+        raise ValueError('SillyTavern 扩展 manifest 缺少必填字段 "display_name"')
+    author = str(manifest.get("author") or "").strip()
+    if not author:
+        raise ValueError('SillyTavern 扩展 manifest 缺少必填字段 "author"')
+    js_path = str(manifest.get("js") or "").strip()
+    css_path = str(manifest.get("css") or "").strip()
+    if not js_path and not css_path:
+        raise ValueError('SillyTavern 扩展 manifest 至少需要 "js" 或 "css" 入口')
+    normalized_js = safe_tpg_path(js_path) if js_path else ""
+    normalized_css = safe_tpg_path(css_path) if css_path else ""
+    for label, entry in (("js", normalized_js), ("css", normalized_css)):
+        if entry and entry not in package_paths:
+            raise ValueError(f'manifest "{label}" 指向的文件不存在：{entry}')
+    hooks_raw = manifest.get("hooks") if isinstance(manifest.get("hooks"), dict) else {}
+    hooks: dict[str, str] = {}
+    for key in ("install", "update", "delete", "enable", "disable", "activate"):
+        export_name = str(hooks_raw.get(key) or "").strip()
+        if export_name:
+            hooks[key] = export_name[:160]
+    i18n_raw = manifest.get("i18n") if isinstance(manifest.get("i18n"), dict) else {}
+    i18n: dict[str, str] = {}
+    for locale, rel in list(i18n_raw.items())[:100]:
+        rel_path = safe_tpg_path(rel)
+        if rel_path not in package_paths:
+            raise ValueError(f"manifest i18n 文件不存在：{rel_path}")
+        i18n[str(locale or "").strip()[:40]] = rel_path
+    try:
+        loading_order = int(manifest.get("loading_order") or 0)
+    except Exception:
+        loading_order = 0
+    extension_id = _sillytavern_extension_id(manifest, filename, fallback_hash)
+    return {
+        "id": extension_id,
+        "display_name": display_name[:180],
+        "version": str(manifest.get("version") or "0.0.0").strip()[:80] or "0.0.0",
+        "description": str(manifest.get("description") or "").strip()[:4000],
+        "author": author[:180],
+        "home_page": str(manifest.get("homePage") or manifest.get("homepage") or "").strip()[:1000],
+        "loading_order": max(-100000, min(100000, loading_order)),
+        "js": normalized_js,
+        "css": normalized_css,
+        "requires": _string_list(manifest.get("requires")),
+        "optional": _string_list(manifest.get("optional")),
+        "dependencies": _string_list(manifest.get("dependencies")),
+        "minimum_client_version": str(manifest.get("minimum_client_version") or "").strip()[:80],
+        "auto_update": bool(manifest.get("auto_update")),
+        "hooks": hooks,
+        "i18n": i18n,
+    }
+
+
+def parse_sillytavern_extension_package(raw: str, filename: str = "") -> dict:
+    blob, _mime = decode_data_url(raw)
+    if not blob:
+        raise ValueError("扩展包为空")
+    if len(blob) > ST_EXTENSION_MAX_PACKAGE_BYTES:
+        raise ValueError(f"扩展包过大，最大 {ST_EXTENSION_MAX_PACKAGE_BYTES // 1024 // 1024}MB")
+    lower_name = str(filename or "").lower()
+    if lower_name and not lower_name.endswith(".zip"):
+        raise ValueError("SillyTavern 扩展包必须是 .zip")
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(blob))
+    except Exception as exc:
+        raise ValueError("扩展包必须是有效 zip 文件") from exc
+    with zf:
+        infos = [info for info in zf.infolist() if not info.is_dir()]
+        if len(infos) > ST_EXTENSION_MAX_FILES:
+            raise ValueError(f"扩展包文件过多，最多 {ST_EXTENSION_MAX_FILES} 个文件")
+        total_uncompressed = 0
+        raw_paths: list[str] = []
+        info_by_path: dict[str, zipfile.ZipInfo] = {}
+        for info in infos:
+            path = safe_tpg_path(info.filename)
+            if path.startswith("__MACOSX/"):
+                continue
+            total_uncompressed += int(info.file_size or 0)
+            if total_uncompressed > ST_EXTENSION_MAX_UNCOMPRESSED_BYTES:
+                raise ValueError(
+                    f"扩展包展开体积过大，最大 {ST_EXTENSION_MAX_UNCOMPRESSED_BYTES // 1024 // 1024}MB"
+                )
+            raw_paths.append(path)
+            info_by_path[path] = info
+        manifest_candidates = [
+            path for path in raw_paths
+            if path == "manifest.json" or path.endswith("/manifest.json")
+        ]
+        if not manifest_candidates:
+            raise ValueError("扩展包缺少 manifest.json")
+        if "manifest.json" in manifest_candidates:
+            manifest_path = "manifest.json"
+        else:
+            manifest_candidates.sort(key=lambda item: (item.count("/"), len(item)))
+            shallow_depth = manifest_candidates[0].count("/")
+            shallow = [item for item in manifest_candidates if item.count("/") == shallow_depth]
+            if len(shallow) != 1:
+                raise ValueError("扩展包包含多个候选 manifest.json，无法确定扩展根目录")
+            manifest_path = shallow[0]
+        root_prefix = manifest_path[:-len("manifest.json")]
+        normalized_paths = {
+            path[len(root_prefix):]
+            for path in raw_paths
+            if path.startswith(root_prefix) and path[len(root_prefix):]
+        }
+        try:
+            manifest = json.loads(zf.read(info_by_path[manifest_path]).decode("utf-8-sig", errors="replace"))
+        except Exception as exc:
+            raise ValueError("manifest.json 不是有效 JSON") from exc
+        file_hash = hashlib.sha256(blob).hexdigest()
+        meta = validate_sillytavern_extension_manifest(
+            manifest,
+            normalized_paths,
+            filename=filename,
+            fallback_hash=file_hash,
+        )
+    return {
+        **meta,
+        "manifest": manifest,
+        "package_bytes": blob,
+        "file_name": safe_filename(filename or f"{meta['id']}.zip", "extension.zip"),
+        "file_sha256": file_hash,
+        "file_count": len(normalized_paths),
+        "package_size": len(blob),
+        "uncompressed_size": total_uncompressed,
+        "package_paths": sorted(normalized_paths),
+        "root_prefix": root_prefix,
+    }
+
+
+def sillytavern_extension_row_json(row: sqlite3.Row | dict, include_manifest: bool = False) -> dict:
+    data = dict(row)
+    try:
+        manifest = json.loads(data.get("manifest_json") or "{}")
+    except Exception:
+        manifest = {}
+    try:
+        files = json.loads(data.get("files_json") or "[]")
+    except Exception:
+        files = []
+    files = files if isinstance(files, list) else []
+    meta = validate_sillytavern_extension_manifest(
+        manifest if isinstance(manifest, dict) else {},
+        set(files),
+        filename=str(data.get("file_name") or ""),
+        fallback_hash=str(data.get("file_sha256") or ""),
+    )
+    extension_id = str(data.get("id") or meta["id"])
+    asset_base = f"/console/api/web/dialogue/extensions/{quote(extension_id, safe='')}/assets/"
+    out = {
+        "id": extension_id,
+        "display_name": data.get("display_name") or meta["display_name"],
+        "name": data.get("display_name") or meta["display_name"],
+        "version": data.get("version") or meta["version"],
+        "description": data.get("description") or "",
+        "author": data.get("author") or meta["author"],
+        "home_page": data.get("home_page") or meta["home_page"],
+        "file_name": data.get("file_name") or "",
+        "file_sha256": data.get("file_sha256") or "",
+        "enabled": bool(int(data.get("enabled") or 0)),
+        "created_at": int(data.get("created_at") or 0),
+        "updated_at": int(data.get("updated_at") or 0),
+        "loading_order": meta["loading_order"],
+        "requires": meta["requires"],
+        "optional": meta["optional"],
+        "dependencies": meta["dependencies"],
+        "minimum_client_version": meta["minimum_client_version"],
+        "auto_update": meta["auto_update"],
+        "hooks": meta["hooks"],
+        "js": meta["js"],
+        "css": meta["css"],
+        "js_url": asset_base + quote(meta["js"], safe="/") if meta["js"] else "",
+        "css_url": asset_base + quote(meta["css"], safe="/") if meta["css"] else "",
+        "protocol": "dialogue-extension-v1",
+    }
+    if include_manifest:
+        out["manifest"] = manifest
+        out["files"] = files
+    return out
+
+
 def png_chunk(chunk_type: bytes, data: bytes) -> bytes:
     return len(data).to_bytes(4, "big") + chunk_type + data + zlib.crc32(chunk_type + data).to_bytes(4, "big")
 
 
-def app_to_silly_card_png_data_url(card: dict) -> str:
+def app_to_silly_card_png_data_url(
+    card: dict,
+    silly_card: dict | None = None,
+) -> str:
     base_png = base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/l0CXNwAAAABJRU5ErkJggg=="
     )
     iend = base_png.rfind(b"IEND") - 4
     if iend < 8:
         raise ValueError("invalid png template")
-    card_json = json.dumps(app_to_silly_card(card), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    payload = silly_card if isinstance(silly_card, dict) else app_to_silly_card(card)
+    card_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     encoded = base64.b64encode(card_json)
     text_chunk = png_chunk(b"tEXt", b"chara\x00" + encoded)
     png = base_png[:iend] + text_chunk + base_png[iend:]
@@ -12680,6 +15214,104 @@ def app_extras(app: dict) -> dict:
     return extras
 
 
+def apply_sillytavern_runtime_state(app: dict, state: dict | None) -> dict:
+    """Apply persisted extension worldbook/Regex switches to a request-local card."""
+    result = dict(app or {})
+    if not isinstance(state, dict):
+        return result
+    extras = app_extras(result)
+    world = [
+        dict(entry)
+        for entry in (extras.get("world_info") or [])
+        if isinstance(entry, dict)
+    ]
+    overrides = state.get("worldbook_overrides")
+    overrides = overrides if isinstance(overrides, dict) else {}
+    index: dict[str, int] = {}
+    for idx, entry in enumerate(world):
+        for candidate in (
+            entry.get("uid"),
+            entry.get("id"),
+            entry.get("comment"),
+            entry.get("name"),
+            f"entry-{idx}",
+        ):
+            key = str(candidate or "").strip()
+            if key and key not in index:
+                index[key] = idx
+    allowed = {
+        "enabled",
+        "content",
+        "keys",
+        "secondary_keys",
+        "order",
+        "position",
+        "depth",
+        "constant",
+        "comment",
+        "name",
+        "selective",
+        "selective_logic",
+        "role",
+        "scan_depth",
+        "sticky",
+        "cooldown",
+        "delay",
+        "probability",
+        "recursive",
+        "case_sensitive",
+        "match_whole_words",
+    }
+    for raw_uid, raw_patch in list(overrides.items())[:400]:
+        uid = str(raw_uid or "").strip()[:160]
+        if not uid or not isinstance(raw_patch, dict):
+            continue
+        patch = {key: raw_patch[key] for key in allowed if key in raw_patch}
+        if uid in index:
+            target = world[index[uid]]
+            if target.get("id") == REQUIRED_WORLD_BOOK_ID:
+                continue
+            target.update(patch)
+            if "comment" in patch and "name" not in patch:
+                target["name"] = str(patch.get("comment") or "")
+            continue
+        if not raw_patch.get("__new") or not str(raw_patch.get("content") or "").strip():
+            continue
+        created = {
+            "id": uid,
+            "name": str(raw_patch.get("name") or raw_patch.get("comment") or uid)[:160],
+            "content": str(raw_patch.get("content") or "")[:200000],
+            "keys": raw_patch.get("keys") if isinstance(raw_patch.get("keys"), list) else [],
+            "secondary_keys": raw_patch.get("secondary_keys") if isinstance(raw_patch.get("secondary_keys"), list) else [],
+            "enabled": raw_patch.get("enabled") is not False,
+            "constant": bool(raw_patch.get("constant")),
+            "selective": bool(raw_patch.get("selective")),
+            "position": str(raw_patch.get("position") or "system"),
+            "depth": raw_patch.get("depth", 4),
+            "priority": raw_patch.get("priority", 100),
+            "order": raw_patch.get("order", len(world) + 1),
+            "probability": raw_patch.get("probability", 100),
+        }
+        world.append(created)
+        index[uid] = len(world) - 1
+    extras["world_info"] = ensure_required_world_info(world)
+
+    regex_overrides = state.get("regex_overrides")
+    regex_overrides = regex_overrides if isinstance(regex_overrides, dict) else {}
+    regexes = normalize_regex_scripts(extras.get("regex_scripts") or [])
+    for regex in regexes:
+        patch = regex_overrides.get(str(regex.get("id") or ""))
+        if not isinstance(patch, dict):
+            continue
+        if isinstance(patch.get("disabled"), bool):
+            regex["enabled"] = not patch["disabled"]
+        elif isinstance(patch.get("enabled"), bool):
+            regex["enabled"] = patch["enabled"]
+    extras["regex_scripts"] = regexes
+    result["extra_settings"] = extras
+    return result
+
+
 def enabled_regex_scripts(app: dict) -> list[dict]:
     candidates: list[object] = []
     if isinstance(app, dict):
@@ -12776,6 +15408,19 @@ def expand_silly_regex_replacement(template: str, match: re.Match) -> str:
 def apply_regex_scripts(text: str, app: dict) -> str:
     value = str(text or "")
     for script in enabled_regex_scripts(app):
+        replacement = str(script.get("replace") or "")
+        appends_document = bool(
+            re.search(r"<!doctype\s+html|<html[\s>]", replacement, flags=re.IGNORECASE)
+        )
+        # A full HTML card is executable application source. Plain-text styling
+        # Regex must not rewrite names or phrases inside its <script>/<style>
+        # blocks. RoleplayHub document appenders remain eligible because their
+        # replacement deliberately carries a complete HTML document.
+        if (
+            re.search(r"<!doctype\s+html|<html[\s>]", value, flags=re.IGNORECASE)
+            and not appends_document
+        ):
+            continue
         flags = 0
         raw_flags = str(script.get("flags") or "")
         if "i" in raw_flags:
@@ -12786,7 +15431,6 @@ def apply_regex_scripts(text: str, app: dict) -> str:
             flags |= re.DOTALL
         try:
             pattern = re.compile(str(script.get("find") or ""), flags=flags)
-            replacement = str(script.get("replace") or "")
             value = pattern.sub(lambda match: expand_silly_regex_replacement(replacement, match), value)
         except re.error as exc:
             log(f"regex script skipped for {app.get('id')}: {exc}")
@@ -13171,6 +15815,34 @@ def normalize_visible_chat_reply(text: object) -> str:
     return value or ("" if changed_any else original)
 
 
+_CONVERSATION_DATABASE_UPDATE_RE = re.compile(
+    r"<homer_database_update\b[^>]*>([\s\S]*?)</homer_database_update\s*>",
+    re.IGNORECASE,
+)
+
+
+def extract_conversation_database_updates(text: object) -> tuple[str, list[dict]]:
+    value = str(text or "")
+    operations: list[dict] = []
+    for match in _CONVERSATION_DATABASE_UPDATE_RE.finditer(value):
+        payload = str(match.group(1) or "").strip()
+        fenced = re.fullmatch(r"```(?:json)?\s*([\s\S]*?)\s*```", payload, re.IGNORECASE)
+        if fenced:
+            payload = str(fenced.group(1) or "").strip()
+        try:
+            parsed = json.loads(payload)
+        except Exception:
+            continue
+        candidates = parsed.get("operations") if isinstance(parsed, dict) else parsed
+        if not isinstance(candidates, list):
+            continue
+        for item in candidates[:50]:
+            if isinstance(item, dict):
+                operations.append(dict(item))
+    visible = _CONVERSATION_DATABASE_UPDATE_RE.sub("", value)
+    return re.sub(r"\n{3,}", "\n\n", visible).strip(), operations[:50]
+
+
 def process_model_reply(app: dict, reply: object, *, char_name: str = "", user_name: str = "", template_context: dict | None = None, global_regex_preset: object = None) -> str:
     ctx = dict(template_context) if isinstance(template_context, dict) else {}
     if isinstance(app, dict):
@@ -13196,8 +15868,24 @@ def process_model_reply(app: dict, reply: object, *, char_name: str = "", user_n
         template_context=ctx,
     )
     rendered = apply_tavern_render_injections(rendered, render_injections)
+    rendered, database_operations = extract_conversation_database_updates(rendered)
     rendered = apply_regex_scripts(rendered, app or {})
     rendered = apply_global_regex_scripts(rendered, global_regex_preset, placement=2, stage="render", depth=0)
+    if database_operations:
+        store = ctx.get("store")
+        user_id = str(ctx.get("user_id") or "")
+        conv_id = str(ctx.get("conversation_id") or "")
+        if isinstance(store, Store) and user_id and conv_id:
+            try:
+                store.apply_conversation_database_updates(
+                    conv_id,
+                    user_id,
+                    database_operations,
+                    updated_by="assistant",
+                    require_enabled=True,
+                )
+            except Exception as exc:
+                log(f"conversation database update skipped: {type(exc).__name__}: {exc}")
     return normalize_visible_chat_reply(rendered)
 
 
@@ -13207,13 +15895,19 @@ def apply_conversation_global_preset_override(settings: dict | None, context: di
     conversation_settings = context.get("conversation_settings") if isinstance(context, dict) else None
     if not isinstance(conversation_settings, dict):
         return source
+    runtime = dict(source)
+    selected_prompt = conversation_settings.get("prompt_preset")
+    selected_regex = conversation_settings.get("regex_preset")
+    if isinstance(selected_prompt, dict) and selected_prompt:
+        runtime["global_prompt_preset"] = dict(selected_prompt)
+    if isinstance(selected_regex, dict) and selected_regex:
+        runtime["global_regex_preset"] = dict(selected_regex)
     master_enabled = bool(conversation_settings.get("global_preset_enabled", True))
     raw_overrides = conversation_settings.get("preset_overrides") if isinstance(conversation_settings.get("preset_overrides"), dict) else {}
     prompt_overrides = raw_overrides.get("prompt") if isinstance(raw_overrides.get("prompt"), dict) else {}
     regex_overrides = raw_overrides.get("regex") if isinstance(raw_overrides.get("regex"), dict) else {}
     if master_enabled and not prompt_overrides and not regex_overrides:
-        return source
-    runtime = dict(source)
+        return runtime
     prompt = normalize_full_prompt_preset(runtime.get("global_prompt_preset"))
     prompt_map = prompt_overrides.get(str(prompt.get("id") or "")) if isinstance(prompt_overrides, dict) else None
     if isinstance(prompt_map, dict) and prompt_map:
@@ -13244,8 +15938,19 @@ def apply_conversation_global_preset_override(settings: dict | None, context: di
     return runtime
 
 
-def stream_reply_requires_buffering(app: dict, global_regex_preset: object = None) -> bool:
+def stream_reply_requires_buffering(
+    app: dict,
+    global_regex_preset: object = None,
+    conversation_settings: object = None,
+) -> bool:
     """Keep full-reply transforms off the wire until their final output is ready."""
+    runtime_profile = (
+        conversation_settings.get("runtime_profile")
+        if isinstance(conversation_settings, dict)
+        else None
+    )
+    if isinstance(runtime_profile, dict) and runtime_profile.get("database_enabled"):
+        return True
     if enabled_regex_scripts(app or {}):
         return True
     if isinstance(global_regex_preset, dict) and global_regex_preset.get("enabled"):
@@ -13377,6 +16082,9 @@ def build_user_llm_request(app: dict, content: str, messages: list[dict] | None 
         )
     chat_messages = [{"role": "system", "content": system_prompt}]
     chat_messages.extend(memory_context_messages(context, char_name=char_name, user_name=user_name, template_context=template_context))
+    database_prompt = str(context.get("conversation_database_prompt") or "").strip() if isinstance(context, dict) else ""
+    if database_prompt:
+        chat_messages.append({"role": "system", "content": database_prompt})
     for message_index, msg in enumerate(trimmed_history):
         role = str(msg.get("role") or "").strip()
         raw_message_content = str(msg.get("content") or "").strip()
@@ -13875,6 +16583,233 @@ def stream_user_llm_chunks(app: dict, content: str, messages: list[dict] | None 
     raise RuntimeError("模型服务暂时不可用，请稍后重试") from last_error
 
 
+def normalize_sillytavern_openai_messages(value: object) -> list[dict]:
+    """Accept SillyTavern's assembled prompt while rejecting unsupported fields."""
+    if not isinstance(value, list):
+        raise ValueError("messages must be a list")
+    if len(value) > 500:
+        raise ValueError("too many prompt messages")
+    normalized: list[dict] = []
+    total_chars = 0
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip().lower()
+        if role not in {"system", "user", "assistant"}:
+            continue
+        raw_content = item.get("content")
+        if isinstance(raw_content, str):
+            content = raw_content
+        elif isinstance(raw_content, list):
+            parts: list[str] = []
+            for block in raw_content[:100]:
+                if isinstance(block, str):
+                    parts.append(block)
+                elif isinstance(block, dict) and str(block.get("type") or "text") in {"text", "input_text", "output_text"}:
+                    parts.append(str(block.get("text") or block.get("content") or ""))
+            content = "\n".join(part for part in parts if part)
+        else:
+            content = str(raw_content or "")
+        if not content:
+            continue
+        total_chars += len(content)
+        if total_chars > 8_000_000:
+            raise ValueError("prompt is too large")
+        normalized.append({"role": role, "content": content})
+    if not normalized:
+        raise ValueError("prompt contains no usable messages")
+    return normalized
+
+
+def prepare_sillytavern_bridge_generation(store: "Store", claims: dict, body: dict) -> dict:
+    """Build a provider request from an authenticated, conversation-scoped ST prompt."""
+    user_id = str(claims.get("user_id") or "")
+    app_id = store.resolve_local_app_id(str(claims.get("app_id") or ""))
+    conversation_id = str(claims.get("conversation_id") or "")
+    user = store.get_user_by_id(user_id)
+    if not user:
+        raise ValueError("user not found")
+    app_row = (
+        store.versioned_app_for_conversation(app_id, conversation_id, user_id)
+        if conversation_id
+        else store.versioned_app_for_new_conversation(app_id, user_id)[0]
+    )
+    if not user_can_play_app(app_row, user_id):
+        raise ValueError("character not found or unavailable")
+    conversation = store.get_conversation(conversation_id, user_id) if conversation_id else None
+    if conversation_id and not conversation:
+        raise ValueError("conversation not found")
+    if conversation and store.resolve_local_app_id(str(conversation.get("app_id") or "")) != app_id:
+        raise ValueError("conversation role mismatch")
+
+    app = dict(app_row)
+    if conversation_id:
+        apply_conversation_mods(store.conn, store.lock, app, user_id, conversation_id, REQUIRED_WORLD_BOOK_ID)
+        store.apply_conversation_worldbook_overrides(app, user_id, conversation_id)
+    app = apply_sillytavern_runtime_state(
+        app,
+        store.get_sillytavern_runtime_state(user_id, app_id, conversation_id),
+    )
+    selected_model = store.public_model_selection(body.get("model"))
+    if selected_model:
+        app["llm_model"] = selected_model
+
+    messages = normalize_sillytavern_openai_messages(body.get("messages"))
+    last_user = next(
+        (str(item.get("content") or "") for item in reversed(messages) if item.get("role") == "user"),
+        "",
+    )
+    history = store.list_messages(conversation_id, user_id, limit=100) if conversation_id else []
+    context = store.chat_context(user_id, app_id, conversation_id, last_user, history) if conversation_id else {}
+    database_prompt = str(context.get("conversation_database_prompt") or "").strip()
+    if database_prompt:
+        messages.insert(0, {"role": "system", "content": database_prompt})
+
+    settings = store.effective_llm_settings(app, user_id=user_id)
+    request_info = build_user_llm_request(
+        app,
+        last_user,
+        [],
+        settings,
+        store.get_persona(user_id),
+        context,
+    )
+    if not request_info.get("enabled"):
+        raise RuntimeError("模型服务配置不可用")
+    protocol = str(request_info.get("protocol") or "openai")
+    payload = dict(request_info.get("payload") if isinstance(request_info.get("payload"), dict) else {})
+    if protocol == "anthropic":
+        system_parts = [
+            str(item.get("content") or "")
+            for item in messages
+            if item.get("role") == "system" and str(item.get("content") or "")
+        ]
+        provider_messages: list[dict] = []
+        for item in messages:
+            role = str(item.get("role") or "")
+            content = str(item.get("content") or "")
+            if role not in {"user", "assistant"} or not content:
+                continue
+            if provider_messages and provider_messages[-1]["role"] == role:
+                provider_messages[-1]["content"] += "\n\n" + content
+            else:
+                provider_messages.append({"role": role, "content": content})
+        if not provider_messages or provider_messages[-1]["role"] != "user":
+            provider_messages.append({"role": "user", "content": last_user or "请继续。"})
+        payload["system"] = "\n\n".join(system_parts)
+        payload["messages"] = provider_messages
+    else:
+        payload["messages"] = messages
+
+    def _float_param(name: str, minimum: float, maximum: float) -> None:
+        if name not in body:
+            return
+        try:
+            payload[name] = max(minimum, min(maximum, float(body.get(name))))
+        except (TypeError, ValueError):
+            pass
+
+    _float_param("temperature", 0.0, 1.0 if protocol == "anthropic" else 2.0)
+    _float_param("top_p", 0.0, 1.0)
+    if protocol != "anthropic":
+        _float_param("presence_penalty", -2.0, 2.0)
+        _float_param("frequency_penalty", -2.0, 2.0)
+    try:
+        payload["max_tokens"] = max(1, min(8192, int(body.get("max_tokens") or payload.get("max_tokens") or 1024)))
+    except (TypeError, ValueError):
+        payload["max_tokens"] = 1024
+    stop = body.get("stop")
+    if isinstance(stop, str):
+        stops = [stop[:500]]
+    elif isinstance(stop, list):
+        stops = [str(item)[:500] for item in stop[:10]]
+    else:
+        stops = []
+    if stops:
+        if protocol == "anthropic":
+            payload["stop_sequences"] = stops
+            payload.pop("stop", None)
+        else:
+            payload["stop"] = stops[0] if len(stops) == 1 else stops
+
+    return {
+        "enabled": True,
+        "protocol": protocol,
+        "endpoint": str(request_info.get("endpoint") or ""),
+        "headers": dict(request_info.get("headers") if isinstance(request_info.get("headers"), dict) else {}),
+        "payload": payload,
+        "model": str(request_info.get("model") or settings.get("model") or "homer-cloud"),
+        "user_id": user_id,
+        "app_id": app_id,
+        "conversation_id": conversation_id,
+    }
+
+
+def sillytavern_bridge_completion(request_info: dict) -> str:
+    payload = dict(request_info.get("payload") or {})
+    payload["stream"] = False
+    headers = dict(request_info.get("headers") or {})
+    headers["Accept"] = "application/json"
+    req = Request(
+        str(request_info.get("endpoint") or ""),
+        data=json_bytes(payload),
+        method="POST",
+        headers=headers,
+    )
+    with urlopen(req, timeout=90) as response:
+        raw = response.read()
+    text = raw.decode("utf-8", errors="replace").strip()
+    try:
+        data = json.loads(text) if text else {}
+    except Exception:
+        data = {}
+    answer = extract_upstream_chat_answer(data) or extract_sse_answer(text)
+    if not answer:
+        raise RuntimeError("模型没有返回有效内容，请重试")
+    return answer
+
+
+def stream_sillytavern_bridge_completion(request_info: dict):
+    payload = dict(request_info.get("payload") or {})
+    payload["stream"] = True
+    headers = dict(request_info.get("headers") or {})
+    headers["Accept"] = "text/event-stream"
+    emitted = False
+    completed = False
+    req = Request(
+        str(request_info.get("endpoint") or ""),
+        data=json_bytes(payload),
+        method="POST",
+        headers=headers,
+    )
+    with urlopen(req, timeout=90) as response:
+        for raw_line in response:
+            line = raw_line.decode("utf-8", errors="replace").strip()
+            if not line or line.startswith(":"):
+                continue
+            if line.startswith("data:"):
+                line = line[5:].strip()
+            if not line:
+                continue
+            if line == "[DONE]":
+                completed = True
+                break
+            try:
+                event = json.loads(line)
+            except Exception:
+                continue
+            delta = extract_stream_delta(event)
+            if delta:
+                emitted = True
+                yield delta
+            if _stream_event_is_terminal(event):
+                completed = True
+    if not emitted:
+        raise RuntimeError("模型没有返回有效内容，请重试")
+    if not completed:
+        raise RuntimeError("模型流式响应提前结束，请重试")
+
+
 def app_requires_site_runtime(app: dict) -> bool:
     extras = app_extras(app or {})
     has_required_world = any(
@@ -13892,6 +16827,10 @@ def chat_reply_for_app(store: "Store", user_id: str, app_id: str, content: str, 
         if conversation_id:
             apply_conversation_mods(store.conn, store.lock, app, user_id, conversation_id, REQUIRED_WORLD_BOOK_ID)
             store.apply_conversation_worldbook_overrides(app, user_id, conversation_id)
+        app = apply_sillytavern_runtime_state(
+            app,
+            store.get_sillytavern_runtime_state(user_id, app_id, conversation_id),
+        )
         selected_model = store.public_model_selection(model_override)
         if selected_model:
             app["llm_model"] = selected_model
@@ -14161,6 +17100,12 @@ def admin_user_json(user: sqlite3.Row | dict, advanced_creation: dict | None = N
     data["admin_source"] = source
     data["can_toggle_admin"] = source != "env"
     data["balance"] = credit_balance_json(data)
+    try:
+        paid_money_cents = max(0, int(data.get("paid_money_cents") or 0))
+    except (TypeError, ValueError):
+        paid_money_cents = 0
+    data["paid_money_cents"] = paid_money_cents
+    data["paid_money"] = cents_to_money(paid_money_cents)
     data["advanced_creation"] = advanced_creation or {}
     return data
 
@@ -14531,6 +17476,7 @@ def public_site_settings_json(settings: dict) -> dict:
             "subscriptions": [],
             "steps": ["充值通道维护中，暂不开放购买和兑换。"],
         })
+    public["runtime"] = {"dialogue_url": SILLYTAVERN_PUBLIC_URL}
     return public
 
 
@@ -15141,7 +18087,11 @@ class Handler(BaseHTTPRequestHandler):
                 chunks = chunk_text(str(reply or ""))
             if app:
                 global_regex_preset = runtime_settings.get("global_regex_preset") if isinstance(runtime_settings, dict) else None
-                buffered_reply = stream_reply_requires_buffering(app, global_regex_preset)
+                buffered_reply = stream_reply_requires_buffering(
+                    app,
+                    global_regex_preset,
+                    context.get("conversation_settings") if isinstance(context, dict) else None,
+                )
                 raw_parts: list[str] = []
                 first_delta_ms = None
                 upstream_started = time.perf_counter()
@@ -15320,7 +18270,11 @@ class Handler(BaseHTTPRequestHandler):
             settings = self.store.effective_llm_settings(app, user_id=user["id"])
             runtime_settings = apply_conversation_global_preset_override(settings, context)
             global_regex_preset = runtime_settings.get("global_regex_preset")
-            buffered_reply = stream_reply_requires_buffering(app, global_regex_preset)
+            buffered_reply = stream_reply_requires_buffering(
+                app,
+                global_regex_preset,
+                context.get("conversation_settings") if isinstance(context, dict) else None,
+            )
             raw_parts: list[str] = []
             first_delta_ms = None
             upstream_started = time.perf_counter()
@@ -15425,11 +18379,176 @@ class Handler(BaseHTTPRequestHandler):
             slot.__exit__(None, None, None)
             self.close_connection = True
 
+    def handle_sillytavern_models(self) -> None:
+        claims = sillytavern_bridge_claims(self.headers.get("Authorization"))
+        if not claims:
+            self.send_json(401, {"error": {"message": "无效或已过期的酒馆会话", "type": "authentication_error"}})
+            return
+        user_id = str(claims.get("user_id") or "")
+        user = self.store.get_user_by_id(user_id)
+        app = self.store.get_local_app(self.store.resolve_local_app_id(str(claims.get("app_id") or "")))
+        if not user or not user_can_play_app(app, user_id):
+            self.send_json(403, {"error": {"message": "当前角色不可用", "type": "permission_error"}})
+            return
+        models = self.store.public_model_presets().get("list") or []
+        data = [
+            {
+                "id": str(item.get("id") or item.get("model") or "homer-cloud"),
+                "object": "model",
+                "created": 0,
+                "owned_by": "homer",
+            }
+            for item in models
+            if isinstance(item, dict)
+        ]
+        if not data:
+            data = [{"id": "homer-cloud", "object": "model", "created": 0, "owned_by": "homer"}]
+        self.send_json(200, {"object": "list", "data": data})
+
+    def handle_sillytavern_chat_completions(self, body: object) -> None:
+        claims = sillytavern_bridge_claims(self.headers.get("Authorization"))
+        if not claims:
+            self.send_json(401, {"error": {"message": "无效或已过期的酒馆会话，请刷新页面", "type": "authentication_error"}})
+            return
+        if self.command.upper() != "POST" or not isinstance(body, dict):
+            self.send_json(400, {"error": {"message": "invalid request", "type": "invalid_request_error"}})
+            return
+        try:
+            request_info = prepare_sillytavern_bridge_generation(self.store, claims, body)
+            self.store.require_credit_points(str(request_info["user_id"]), CHAT_MESSAGE_COST)
+        except ValueError as exc:
+            message = str(exc)[:500] or "invalid request"
+            status = 402 if "积分不足" in message else 404 if "not found" in message else 409 if "mismatch" in message else 400
+            self.send_json(status, {"error": {"message": message, "type": "invalid_request_error"}})
+            return
+        except Exception as exc:
+            log(f"sillytavern request preparation failed: {type(exc).__name__}: {exc}")
+            self.send_json(503, {"error": {"message": "酒馆模型出口准备失败", "type": "server_error"}})
+            return
+
+        completion_id = "chatcmpl-homer-" + uuid.uuid4().hex
+        created = int(time.time())
+        model = str(request_info.get("model") or "homer-cloud")
+        stream = bool(body.get("stream"))
+        try:
+            slot = GENERATION_LIMITER.acquire(
+                str(request_info["user_id"]),
+                self.client_ip(),
+                "sillytavern_chat_completions",
+            )
+            slot.__enter__()
+        except Exception as exc:
+            self.send_json(429, {"error": {"message": str(exc)[:500] or "请求过于频繁", "type": "rate_limit_error"}})
+            return
+
+        if not stream:
+            try:
+                answer = sillytavern_bridge_completion(request_info)
+                charge = self.store.spend_credit_points(
+                    str(request_info["user_id"]),
+                    CHAT_MESSAGE_COST,
+                    event_type="sillytavern_chat_cost",
+                    summary="角色对话消耗",
+                    payload={
+                        "app_id": request_info["app_id"],
+                        "conversation_id": request_info["conversation_id"],
+                    },
+                )
+                self.send_json(200, {
+                    "id": completion_id,
+                    "object": "chat.completion",
+                    "created": created,
+                    "model": model,
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": answer},
+                        "finish_reason": "stop",
+                    }],
+                    "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                    "homer": charge,
+                })
+            except HTTPError as exc:
+                log(f"sillytavern upstream HTTP error: {exc.code}")
+                self.send_json(502, {"error": {"message": f"模型服务返回 HTTP {exc.code}", "type": "upstream_error"}})
+            except Exception as exc:
+                log(f"sillytavern completion failed: {type(exc).__name__}: {exc}")
+                self.send_json(502, {"error": {"message": "模型请求失败，请稍后重试", "type": "upstream_error"}})
+            finally:
+                slot.__exit__(None, None, None)
+            return
+
+        self.send_sse_headers(200)
+
+        def write_openai_chunk(delta: dict, finish_reason: str | None = None) -> None:
+            payload = {
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model,
+                "choices": [{
+                    "index": 0,
+                    "delta": delta,
+                    "finish_reason": finish_reason,
+                }],
+            }
+            self.wfile.write(
+                ("data: " + json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n\n").encode("utf-8")
+            )
+            self.wfile.flush()
+
+        try:
+            write_openai_chunk({"role": "assistant"})
+            for chunk in stream_sillytavern_bridge_completion(request_info):
+                if chunk:
+                    write_openai_chunk({"content": str(chunk)})
+            self.store.spend_credit_points(
+                str(request_info["user_id"]),
+                CHAT_MESSAGE_COST,
+                event_type="sillytavern_chat_cost",
+                summary="角色对话消耗",
+                payload={
+                    "app_id": request_info["app_id"],
+                    "conversation_id": request_info["conversation_id"],
+                },
+            )
+            write_openai_chunk({}, "stop")
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+        except Exception as exc:
+            log(f"sillytavern stream failed: {type(exc).__name__}: {exc}")
+            try:
+                error_payload = {
+                    "error": {
+                        "message": "模型流式请求失败，请稍后重试",
+                        "type": "upstream_error",
+                    }
+                }
+                self.wfile.write(
+                    ("data: " + json.dumps(error_payload, ensure_ascii=False, separators=(",", ":")) + "\n\n").encode("utf-8")
+                )
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+            except Exception:
+                pass
+        finally:
+            slot.__exit__(None, None, None)
+            self.close_connection = True
+
     def handle_any(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
         if re.fullmatch(r"/console/api/web/card-assets/[^/]+/content", path):
             self.handle_card_asset_content(path)
+            return
+        extension_asset = re.fullmatch(
+            r"/console/api/web/(?:dialogue|sillytavern)/extensions/([^/]+)/assets/(.+)",
+            path,
+        )
+        if extension_asset:
+            self.handle_sillytavern_extension_asset(
+                unquote(extension_asset.group(1)),
+                unquote(extension_asset.group(2)),
+            )
             return
         try:
             body_text, body = self.read_body()
@@ -15529,6 +18648,34 @@ class Handler(BaseHTTPRequestHandler):
             log(f"{self.command} {path}" + (f"?{parsed.query}" if parsed.query else "") + " -> 200")
             self.handle_web_chat_continue_stream(body)
             return
+        if path in (
+            "/console/api/web/dialogue/v1/models",
+            "/console/api/web/sillytavern/v1/models",
+        ):
+            self.store.log_request(
+                self.command,
+                path,
+                parsed.query,
+                {k: v for k, v in self.headers.items()},
+                "",
+                200,
+            )
+            self.handle_sillytavern_models()
+            return
+        if path in (
+            "/console/api/web/dialogue/v1/chat/completions",
+            "/console/api/web/sillytavern/v1/chat/completions",
+        ):
+            self.store.log_request(
+                self.command,
+                path,
+                parsed.query,
+                {k: v for k, v in self.headers.items()},
+                "[redacted prompt]",
+                200,
+            )
+            self.handle_sillytavern_chat_completions(body)
+            return
         payload = self.route(path, parsed.query, body)
         if isinstance(payload, dict) and payload.get("result") == "failure":
             try:
@@ -15537,12 +18684,18 @@ class Handler(BaseHTTPRequestHandler):
                 status = 400
             if status < 400 or status > 599:
                 status = 400
+        request_log_body = body_text
+        if path in (
+            "/console/api/web/dialogue/events",
+            "/console/api/web/sillytavern/events",
+        ):
+            request_log_body = dialogue_event_request_log_body(body)
         self.store.log_request(
             self.command,
             path,
             parsed.query,
             {k: v for k, v in self.headers.items()},
-            body_text,
+            request_log_body,
             status,
         )
         log(f"{self.command} {path}" + (f"?{parsed.query}" if parsed.query else "") + f" -> {status}")
@@ -15550,6 +18703,29 @@ class Handler(BaseHTTPRequestHandler):
             self.send_sse(status, payload.get("events") if isinstance(payload.get("events"), list) else [])
             return
         self.send_json(status, payload)
+
+    def handle_sillytavern_extension_asset(self, extension_id: str, rel_path: str) -> None:
+        """Serve a declared file from an enabled, administrator-installed extension."""
+        if self.command.upper() not in ("GET", "HEAD"):
+            self.send_text(405, "method not allowed")
+            return
+        result = self.store.read_sillytavern_extension_file(extension_id, rel_path)
+        if result is None:
+            self.send_text(404, "not found")
+            return
+        data, content_type = result
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "private, max-age=3600")
+        self.send_cors_headers()
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        if self.command.upper() == "GET":
+            self.wfile.write(data)
+        self.wfile.flush()
+        self.close_connection = True
 
     def handle_card_asset_content(self, path: str) -> None:
         if self.command.upper() != "PUT":
@@ -15592,6 +18768,211 @@ class Handler(BaseHTTPRequestHandler):
             return ok_response("ok")
 
         user = self.authenticated_user()
+
+        if normalized in (
+            "console/api/web/dialogue/session",
+            "console/api/web/sillytavern/session",
+        ):
+            if self.command.upper() != "GET":
+                return error_response("method not allowed", 405)
+            if not user:
+                return error_response("unauthorized", 401)
+            user_id = str(user["id"])
+            payload: dict = {
+                "user": {
+                    "id": user_id,
+                    "handle": homer_sillytavern_handle(user_id),
+                    "name": str(user["name"] or "Homer 用户"),
+                    "is_admin": is_admin(user),
+                },
+                "runtime": {
+                    "backend_base_url": PUBLIC_BASE_URL.rstrip("/"),
+                    "public_url": SILLYTAVERN_PUBLIC_URL,
+                },
+            }
+            app_id = parse_query_str(query, "app_id", "").strip()
+            requested_conversation_id = parse_query_str(query, "conversation_id", "").strip()
+            if not app_id and not requested_conversation_id:
+                return ok_response(payload)
+
+            conversation = None
+            if requested_conversation_id:
+                conversation = self.store.repair_conversation_app(requested_conversation_id, user_id)
+                if not conversation or not conversation.get("available"):
+                    return error_response("conversation character is unavailable", 404)
+                conversation_app_id = self.store.resolve_local_app_id(str(conversation.get("app_id") or ""))
+                if app_id and self.store.resolve_local_app_id(app_id) != conversation_app_id:
+                    return error_response("conversation role mismatch", 409)
+                app_id = conversation_app_id
+            else:
+                app_id = self.store.resolve_local_app_id(app_id)
+
+            app_row = self.store.get_local_app(app_id)
+            if not user_can_play_app(app_row, user_id):
+                return error_response("character not found or unavailable", 404)
+            conversation_id = requested_conversation_id
+            if not conversation:
+                conversation_id = str(uuid.uuid4())
+                try:
+                    conversation = dict(self.store.upsert_conversation(
+                        conversation_id,
+                        user_id,
+                        app_id,
+                        app_name=str(app_row["name"] or ""),
+                        app_icon=str(app_row["cover_url"] or ""),
+                        title=str(app_row["name"] or "新对话"),
+                    ))
+                except (ValueError, PermissionError) as exc:
+                    return error_response(str(exc), 404)
+
+            self.store.ensure_conversation_runtime_profile(
+                conversation_id,
+                user_id,
+                database_enabled=not bool(requested_conversation_id),
+            )
+
+            launch_only = parse_query_str(query, "launch_only", "").strip().lower() in {
+                "1", "true", "yes", "on",
+            }
+            if launch_only:
+                payload["launch"] = {
+                    "app_id": app_id,
+                    "conversation_id": conversation_id,
+                }
+                return ok_response(payload)
+
+            try:
+                effective_app = self.store.versioned_app_for_conversation(
+                    app_id,
+                    conversation_id,
+                    user_id,
+                )
+            except (ValueError, PermissionError) as exc:
+                return error_response(str(exc), 404)
+            if not effective_app:
+                return error_response("character version is unavailable", 404)
+            app_data = dict(effective_app)
+            apply_conversation_mods(
+                self.store.conn,
+                self.store.lock,
+                app_data,
+                user_id,
+                conversation_id,
+                REQUIRED_WORLD_BOOK_ID,
+            )
+            self.store.apply_conversation_worldbook_overrides(
+                app_data,
+                user_id,
+                conversation_id,
+            )
+            app_data = apply_sillytavern_runtime_state(
+                app_data,
+                self.store.get_sillytavern_runtime_state(
+                    user_id,
+                    app_id,
+                    conversation_id,
+                ),
+            )
+            card = local_app_to_card(app_data)
+            silly_card = silly_card_with_homer_cover(
+                local_app_to_silly_card(app_data, card),
+                str(app_data.get("cover_url") or card.get("cover_url") or card.get("cover") or ""),
+            )
+            messages = self.store.list_messages(conversation_id, user_id, limit=500)
+            try:
+                runtime_config = self.store.conversation_runtime_config(conversation_id, user_id)
+            except Exception:
+                runtime_config = {}
+            try:
+                runtime_profile = self.store.get_conversation_runtime_profile(
+                    conversation_id,
+                    user_id,
+                    include_choices=True,
+                )
+            except Exception:
+                runtime_profile = {}
+            payload["launch"] = {
+                "app_id": app_id,
+                "conversation_id": conversation_id,
+                "card": silly_card,
+                "conversation": conversation,
+                "messages": messages,
+                "runtime_config": runtime_config,
+                "runtime_profile": runtime_profile or {},
+                "bridge_token": sillytavern_bridge_token_for(user_id, app_id, conversation_id),
+                "bridge_token_ttl_seconds": SILLYTAVERN_BRIDGE_TOKEN_TTL_SECONDS,
+            }
+            return ok_response(payload)
+
+        if normalized in (
+            "console/api/web/dialogue/sync",
+            "console/api/web/sillytavern/sync",
+        ):
+            if self.command.upper() != "POST" or not isinstance(body, dict):
+                return error_response("invalid request", 400)
+            if not user:
+                return error_response("unauthorized", 401)
+            user_id = str(user["id"])
+            app_id = self.store.resolve_local_app_id(str(body.get("app_id") or ""))
+            conversation_id = str(body.get("conversation_id") or "").strip()
+            app_row = self.store.get_local_app(app_id)
+            if not user_can_play_app(app_row, user_id):
+                return error_response("character not found or unavailable", 404)
+            conversation = self.store.get_conversation(conversation_id, user_id)
+            if not conversation:
+                return error_response("conversation not found", 404)
+            if self.store.resolve_local_app_id(str(conversation.get("app_id") or "")) != app_id:
+                return error_response("conversation role mismatch", 409)
+            try:
+                result = self.store.sync_sillytavern_chat(
+                    conversation_id,
+                    user_id,
+                    app_id,
+                    body.get("messages"),
+                    title=str(body.get("title") or ""),
+                )
+            except ValueError as exc:
+                return error_response(str(exc), 400)
+            self.store.log_event(
+                str(user["id"]),
+                "sillytavern_sync",
+                "同步角色对话会话",
+                {
+                    "app_id": app_id,
+                    "conversation_id": conversation_id,
+                    "message_count": result.get("message_count", 0),
+                },
+            )
+            return ok_response(result)
+
+        if normalized in (
+            "console/api/web/dialogue/events",
+            "console/api/web/sillytavern/events",
+        ):
+            if self.command.upper() != "POST" or not isinstance(body, dict):
+                return error_response("invalid request", 400)
+            if not user:
+                return error_response("unauthorized", 401)
+            user_id = str(user["id"])
+            app_id = self.store.resolve_local_app_id(str(body.get("app_id") or ""))
+            conversation_id = str(body.get("conversation_id") or "").strip()
+            conversation = self.store.get_conversation(conversation_id, user_id)
+            if not conversation:
+                return error_response("conversation not found", 404)
+            if self.store.resolve_local_app_id(str(conversation.get("app_id") or "")) != app_id:
+                return error_response("conversation role mismatch", 409)
+            try:
+                result = self.store.record_dialogue_event(
+                    user_id,
+                    str(body.get("event_id") or ""),
+                    str(body.get("event_type") or ""),
+                    app_id,
+                    conversation_id,
+                    str(body.get("message_id") or ""),
+                )
+            except ValueError as exc:
+                return error_response(str(exc), 400)
+            return ok_response(result)
 
         if not user and not anonymous_route_allowed(normalized, self.command):
             return error_response("unauthorized", 401)
@@ -16013,9 +19394,23 @@ class Handler(BaseHTTPRequestHandler):
         if normalized == "console/api/web/cards/import":
             if not isinstance(body, dict):
                 return error_response("invalid body")
+            imported_cover_url = ""
+            imported_cover_path: Path | None = None
             try:
                 if body.get("card_file"):
-                    card = parse_uploaded_card_file(str(body.get("card_file") or ""), str(body.get("filename") or ""))
+                    card_file = str(body.get("card_file") or "")
+                    filename = str(body.get("filename") or "")
+                    card = parse_uploaded_card_file(card_file, filename)
+                    card_blob, card_mime = decode_data_url(card_file)
+                    if (
+                        str(card_mime or "").lower() == "image/png"
+                        or filename.lower().endswith(".png")
+                        or card_blob.startswith(b"\x89PNG\r\n\x1a\n")
+                    ):
+                        imported_cover_url, imported_cover_path = store_imported_card_png_cover(
+                            card_blob,
+                            filename,
+                        )
                 else:
                     card = body.get("card") if isinstance(body.get("card"), dict) else body
             except Exception as exc:
@@ -16023,13 +19418,19 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 data = silly_card_to_app(card)
             except Exception as exc:
+                if imported_cover_path is not None:
+                    imported_cover_path.unlink(missing_ok=True)
                 return error_response(f"角色卡解析失败：{exc}", 400)
-            data["cover_url"] = normalize_cover_input(data.get("cover_url") or "")
+            data["cover_url"] = imported_cover_url or normalize_cover_input(data.get("cover_url") or "")
             try:
                 row = self.store.create_user_app(user["id"], data)
             except AdvancedCreationError as exc:
+                if imported_cover_path is not None:
+                    imported_cover_path.unlink(missing_ok=True)
                 return error_response(str(exc), 403)
             except CardMediaError as exc:
+                if imported_cover_path is not None:
+                    imported_cover_path.unlink(missing_ok=True)
                 message = str(exc)
                 return error_response(message, 404 if "not found" in message or "not owned" in message else 400)
             payload = local_app_to_card(dict(row))
@@ -16046,7 +19447,7 @@ class Handler(BaseHTTPRequestHandler):
             owner = dict(row).get("owner_user_id")
             if dict(row).get("source") == "user" and owner and owner != user["id"]:
                 return error_response("forbidden", 403)
-            return ok_response(app_to_silly_card(card))
+            return ok_response(local_app_to_silly_card(dict(row), card))
 
         if normalized.startswith("console/api/web/my-apps/") and normalized.endswith("/export-png"):
             app_id = normalized.split("/")[4]
@@ -16058,7 +19459,12 @@ class Handler(BaseHTTPRequestHandler):
             if dict(row).get("source") == "user" and owner and owner != user["id"]:
                 return error_response("forbidden", 403)
             filename = safe_filename((card.get("name") or "character") + ".png", "character.png")
-            return ok_response({"filename": filename, "mime": "image/png", "data_url": app_to_silly_card_png_data_url(card)})
+            silly_card = local_app_to_silly_card(dict(row), card)
+            return ok_response({
+                "filename": filename,
+                "mime": "image/png",
+                "data_url": app_to_silly_card_png_data_url(card, silly_card),
+            })
 
         if normalized.startswith("console/api/web/my-apps/") and normalized.endswith("/update"):
             if not isinstance(body, dict):
@@ -16421,6 +19827,53 @@ class Handler(BaseHTTPRequestHandler):
 
         if normalized == "console/api/web/model-presets":
             return ok_response(self.store.public_model_presets())
+
+        if normalized in (
+            "console/api/web/dialogue/extensions",
+            "console/api/web/sillytavern/extensions",
+        ):
+            token_user = self.authenticated_token_user()
+            if not token_user:
+                return error_response("unauthorized", 401)
+            if self.command.upper() != "GET":
+                return error_response("method not allowed", 405)
+            return ok_response(self.store.enabled_sillytavern_extensions())
+
+        if normalized in (
+            "console/api/web/dialogue/runtime-state",
+            "console/api/web/sillytavern/runtime-state",
+        ):
+            token_user = self.authenticated_token_user()
+            if not token_user:
+                return error_response("unauthorized", 401)
+            if self.command.upper() == "GET":
+                app_id = self.store.resolve_local_app_id(parse_query_str(query, "app_id", ""))
+                conv_id = parse_query_str(query, "conversation_id", "")
+            elif self.command.upper() == "POST" and isinstance(body, dict):
+                app_id = self.store.resolve_local_app_id(str(body.get("app_id") or ""))
+                conv_id = str(body.get("conversation_id") or "").strip()
+            else:
+                return error_response("method not allowed", 405)
+            token_user_id = str(token_user["id"])
+            if app_id:
+                app_row = self.store.get_local_app(app_id)
+                if not user_can_play_app(app_row, token_user_id):
+                    return error_response("role not found", 404)
+            if conv_id:
+                conversation = self.store.get_conversation(conv_id, token_user_id)
+                if not conversation:
+                    return error_response("conversation not found", 404)
+                conversation_app = self.store.resolve_local_app_id(str(conversation.get("app_id") or ""))
+                if app_id and conversation_app != app_id:
+                    return error_response("conversation role mismatch", 409)
+                app_id = app_id or conversation_app
+            if self.command.upper() == "GET":
+                return ok_response(self.store.get_sillytavern_runtime_state(token_user_id, app_id, conv_id))
+            try:
+                state = self.store.save_sillytavern_runtime_state(token_user_id, app_id, conv_id, body)
+            except ValueError as exc:
+                return error_response(str(exc), 400)
+            return ok_response(state)
 
         if normalized == "console/api/web/tavo-plugins/runtime-contributions":
             token_user = self.authenticated_token_user()
@@ -16905,6 +20358,53 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as exc:
                 return error_response(str(exc), 400)
 
+        if normalized.startswith("console/api/web/conversations/") and normalized.endswith("/runtime-profile"):
+            parts = normalized.split("/")
+            conv_id = parts[4] if len(parts) >= 6 else ""
+            if self.command.upper() == "POST":
+                if not isinstance(body, dict):
+                    return error_response("invalid body", 400)
+                try:
+                    profile = self.store.save_conversation_runtime_profile(conv_id, user["id"], body)
+                except ValueError as exc:
+                    return error_response(str(exc), 400)
+            elif self.command.upper() == "GET":
+                profile = self.store.get_conversation_runtime_profile(
+                    conv_id,
+                    user["id"],
+                    include_choices=True,
+                )
+            else:
+                return error_response("method not allowed", 405)
+            if not profile:
+                return error_response("conversation not found", 404)
+            return ok_response({"profile": profile})
+
+        if normalized.startswith("console/api/web/conversations/") and normalized.endswith("/database"):
+            parts = normalized.split("/")
+            conv_id = parts[4] if len(parts) >= 6 else ""
+            if self.command.upper() == "POST":
+                if not isinstance(body, dict) or not isinstance(body.get("operations"), list):
+                    return error_response("operations must be a list", 400)
+                try:
+                    result = self.store.apply_conversation_database_updates(
+                        conv_id,
+                        user["id"],
+                        body.get("operations"),
+                        updated_by="user",
+                        require_enabled=False,
+                    )
+                except ValueError as exc:
+                    status = 404 if str(exc) == "conversation not found" else 400
+                    return error_response(str(exc), status)
+                return ok_response(result)
+            if self.command.upper() != "GET":
+                return error_response("method not allowed", 405)
+            database = self.store.get_conversation_database(conv_id, user["id"], include_rows=True)
+            if not database:
+                return error_response("conversation not found", 404)
+            return ok_response({"database": database})
+
         if normalized.startswith("console/api/web/conversations/") and normalized.endswith("/preset-overrides"):
             parts = normalized.split("/")
             conv_id = parts[4] if len(parts) >= 6 else ""
@@ -17104,6 +20604,11 @@ class Handler(BaseHTTPRequestHandler):
             self.store.upsert_conversation(conv_id, user["id"], app_id,
                                            app_name=app_name, app_icon=app_icon, title=(app_name or "新对话")[:30])
             self.store.set_conversation_version(conv_id, user["id"], requested_version_id)
+            runtime_profile = self.store.ensure_conversation_runtime_profile(
+                conv_id,
+                user["id"],
+                database_enabled=True,
+            )
             messages = []
             template_context = self.store.chat_context(user["id"], app_id, conv_id, "", [])
             if isinstance(template_context, dict):
@@ -17124,6 +20629,7 @@ class Handler(BaseHTTPRequestHandler):
                 "global_preset_enabled": True,
                 "version_id": requested_version_id,
                 "runtime_card": conversation_runtime_card_payload(versioned_row, {"id": conv_id, "version_id": requested_version_id}) if versioned_row else {},
+                "runtime_profile": runtime_profile or {},
                 "messages": messages,
             })
 
@@ -17400,90 +20906,95 @@ class Handler(BaseHTTPRequestHandler):
                 })
 
             if normalized == "admin/api/stats":
-                conn = self.store.conn
-                user_count = conn.execute("select count(*) from users").fetchone()[0]
-                admin_count = sum(1 for r in conn.execute("select id,email,is_admin from users").fetchall() if is_admin(r))
-                request_count = conn.execute("select count(*) from request_log").fetchone()[0]
-                total_points = conn.execute("select coalesce(sum(points),0) from recharge_orders").fetchone()[0]
-                cutoff = now_ms() - 86400000
-                recent_regs = conn.execute("select count(*) from users where created_at > ?", (cutoff,)).fetchone()[0]
-                recent_requests = conn.execute("select count(*) from request_log where ts > ?", (cutoff,)).fetchone()[0]
-                total_balance = conn.execute("select coalesce(sum(points),0) from users").fetchone()[0]
-                order_count = conn.execute("select count(*) from recharge_orders").fetchone()[0]
-                redeem_count = conn.execute("select count(*) from redeem_codes").fetchone()[0]
-                redeem_used_count = conn.execute("select count(*) from redeem_codes where redeemed_at is not null").fetchone()[0]
-                redeem_unused_count = conn.execute(
-                    "select count(*) from redeem_codes where redeemed_at is null and disabled_at is null and (expires_at is null or expires_at>=?)",
-                    (now_ms(),),
-                ).fetchone()[0]
-                issued_redeem_points = conn.execute("select coalesce(sum(points),0) from redemption_history").fetchone()[0]
-                balance_split = conn.execute(
-                    "select coalesce(sum(free_points),0), coalesce(sum(paid_points),0), coalesce(sum(reward_points),0) from users"
-                ).fetchone()
-                content_stats = self.store.content_cache_stats()
-                app_counts = self.store.local_apps_count()
-                status_row = conn.execute(
-                    """
-                    select
-                      coalesce(sum(case when status>=200 and status<300 then 1 else 0 end),0) as s2,
-                      coalesce(sum(case when status>=300 and status<400 then 1 else 0 end),0) as s3,
-                      coalesce(sum(case when status>=400 and status<500 then 1 else 0 end),0) as s4,
-                      coalesce(sum(case when status>=500 then 1 else 0 end),0) as s5
-                    from request_log
-                    """
-                ).fetchone()
-                top_paths = conn.execute(
-                    """
-                    select path, count(*) as value
-                    from request_log
-                    where ts>?
-                    group by path
-                    order by value desc
-                    limit 8
-                    """,
-                    (cutoff,),
-                ).fetchall()
-                return ok_response({
-                    "user_count": user_count,
-                    "admin_count": admin_count,
-                    "request_count": request_count,
-                    "total_points_issued": total_points,
-                    "total_user_balance": total_balance,
-                    "total_free_points": int(balance_split[0] or 0),
-                    "total_paid_points": int(balance_split[1] or 0),
-                    "total_reward_points": int(balance_split[2] or 0),
-                    "registrations_24h": recent_regs,
-                    "requests_24h": recent_requests,
-                    "recharge_order_count": order_count,
-                    "redeem_code_count": redeem_count,
-                    "redeem_code_used_count": redeem_used_count,
-                    "redeem_code_unused_count": redeem_unused_count,
-                    "redeem_points_issued": issued_redeem_points,
-                    "content_cache": content_stats,
-                    "beta": self.store.beta_registration_snapshot(),
-                    "generation_concurrency": GENERATION_LIMITER.snapshot(),
-                    "charts": {
-                        "daily_users": daily_count_series(conn, "users", "created_at", 7),
-                        "daily_requests": daily_count_series(conn, "request_log", "ts", 7),
-                        "request_status": [
-                            {"label": "2xx", "value": int(status_row["s2"] or 0), "tone": "green"},
-                            {"label": "3xx", "value": int(status_row["s3"] or 0), "tone": "blue"},
-                            {"label": "4xx", "value": int(status_row["s4"] or 0), "tone": "yellow"},
-                            {"label": "5xx", "value": int(status_row["s5"] or 0), "tone": "red"},
-                        ],
-                        "points_split": [
-                            {"label": "免费额度", "value": int(balance_split[0] or 0), "tone": "blue"},
-                            {"label": "充值额度", "value": int(balance_split[1] or 0), "tone": "green"},
-                            {"label": "奖励额度", "value": int(balance_split[2] or 0), "tone": "purple"},
-                        ],
-                        "app_sources": [
-                            {"label": "同步角色", "value": int(app_counts.get("upstream") or 0), "tone": "blue"},
-                            {"label": "官方角色", "value": int(app_counts.get("admin") or 0), "tone": "purple"},
-                            {"label": "用户角色", "value": int(app_counts.get("user") or 0), "tone": "green"},
-                        ],
-                        "top_paths": [{"label": r["path"], "value": int(r["value"] or 0)} for r in top_paths],
-                    },
-                })
+                # The development server is threaded but Store intentionally
+                # shares one SQLite connection. Keep this multi-query snapshot
+                # under the Store's re-entrant lock so concurrent request-log
+                # writes cannot close the handler connection mid-response.
+                with self.store.lock:
+                    conn = self.store.conn
+                    user_count = conn.execute("select count(*) from users").fetchone()[0]
+                    admin_count = sum(1 for r in conn.execute("select id,email,is_admin from users").fetchall() if is_admin(r))
+                    request_count = conn.execute("select count(*) from request_log").fetchone()[0]
+                    total_points = conn.execute("select coalesce(sum(points),0) from recharge_orders").fetchone()[0]
+                    cutoff = now_ms() - 86400000
+                    recent_regs = conn.execute("select count(*) from users where created_at > ?", (cutoff,)).fetchone()[0]
+                    recent_requests = conn.execute("select count(*) from request_log where ts > ?", (cutoff,)).fetchone()[0]
+                    total_balance = conn.execute("select coalesce(sum(points),0) from users").fetchone()[0]
+                    order_count = conn.execute("select count(*) from recharge_orders").fetchone()[0]
+                    redeem_count = conn.execute("select count(*) from redeem_codes").fetchone()[0]
+                    redeem_used_count = conn.execute("select count(*) from redeem_codes where redeemed_at is not null").fetchone()[0]
+                    redeem_unused_count = conn.execute(
+                        "select count(*) from redeem_codes where redeemed_at is null and disabled_at is null and (expires_at is null or expires_at>=?)",
+                        (now_ms(),),
+                    ).fetchone()[0]
+                    issued_redeem_points = conn.execute("select coalesce(sum(points),0) from redemption_history").fetchone()[0]
+                    balance_split = conn.execute(
+                        "select coalesce(sum(free_points),0), coalesce(sum(paid_points),0), coalesce(sum(reward_points),0) from users"
+                    ).fetchone()
+                    content_stats = self.store.content_cache_stats()
+                    app_counts = self.store.local_apps_count()
+                    status_row = conn.execute(
+                        """
+                        select
+                          coalesce(sum(case when status>=200 and status<300 then 1 else 0 end),0) as s2,
+                          coalesce(sum(case when status>=300 and status<400 then 1 else 0 end),0) as s3,
+                          coalesce(sum(case when status>=400 and status<500 then 1 else 0 end),0) as s4,
+                          coalesce(sum(case when status>=500 then 1 else 0 end),0) as s5
+                        from request_log
+                        """
+                    ).fetchone()
+                    top_paths = conn.execute(
+                        """
+                        select path, count(*) as value
+                        from request_log
+                        where ts>?
+                        group by path
+                        order by value desc
+                        limit 8
+                        """,
+                        (cutoff,),
+                    ).fetchall()
+                    return ok_response({
+                        "user_count": user_count,
+                        "admin_count": admin_count,
+                        "request_count": request_count,
+                        "total_points_issued": total_points,
+                        "total_user_balance": total_balance,
+                        "total_free_points": int(balance_split[0] or 0),
+                        "total_paid_points": int(balance_split[1] or 0),
+                        "total_reward_points": int(balance_split[2] or 0),
+                        "registrations_24h": recent_regs,
+                        "requests_24h": recent_requests,
+                        "recharge_order_count": order_count,
+                        "redeem_code_count": redeem_count,
+                        "redeem_code_used_count": redeem_used_count,
+                        "redeem_code_unused_count": redeem_unused_count,
+                        "redeem_points_issued": issued_redeem_points,
+                        "content_cache": content_stats,
+                        "beta": self.store.beta_registration_snapshot(),
+                        "generation_concurrency": GENERATION_LIMITER.snapshot(),
+                        "charts": {
+                            "daily_users": daily_count_series(conn, "users", "created_at", 7),
+                            "daily_requests": daily_count_series(conn, "request_log", "ts", 7),
+                            "request_status": [
+                                {"label": "2xx", "value": int(status_row["s2"] or 0), "tone": "green"},
+                                {"label": "3xx", "value": int(status_row["s3"] or 0), "tone": "blue"},
+                                {"label": "4xx", "value": int(status_row["s4"] or 0), "tone": "yellow"},
+                                {"label": "5xx", "value": int(status_row["s5"] or 0), "tone": "red"},
+                            ],
+                            "points_split": [
+                                {"label": "免费额度", "value": int(balance_split[0] or 0), "tone": "blue"},
+                                {"label": "充值额度", "value": int(balance_split[1] or 0), "tone": "green"},
+                                {"label": "奖励额度", "value": int(balance_split[2] or 0), "tone": "purple"},
+                            ],
+                            "app_sources": [
+                                {"label": "同步角色", "value": int(app_counts.get("upstream") or 0), "tone": "blue"},
+                                {"label": "官方角色", "value": int(app_counts.get("admin") or 0), "tone": "purple"},
+                                {"label": "用户角色", "value": int(app_counts.get("user") or 0), "tone": "green"},
+                            ],
+                            "top_paths": [{"label": r["path"], "value": int(r["value"] or 0)} for r in top_paths],
+                        },
+                    })
 
             if normalized == "admin/api/content-cache/stats":
                 return ok_response(self.store.content_cache_stats())
@@ -17576,6 +21087,78 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError as exc:
                     status = 404 if "not found" in str(exc) else 400
                     return error_response(str(exc), status)
+
+            if normalized in (
+                "admin/api/dialogue/extensions",
+                "admin/api/sillytavern/extensions",
+            ):
+                if self.command.upper() != "GET":
+                    return error_response("method not allowed", 405)
+                return ok_response({
+                    "list": self.store.list_sillytavern_extensions(include_manifest=True),
+                    "protocol": "dialogue-extension-v1",
+                })
+
+            if normalized in (
+                "admin/api/dialogue/extensions/import",
+                "admin/api/sillytavern/extensions/import",
+            ):
+                if self.command.upper() != "POST" or not isinstance(body, dict):
+                    return error_response("invalid body")
+                try:
+                    item = self.store.import_sillytavern_extension(
+                        str(body.get("package_file") or body.get("file") or body.get("data_url") or ""),
+                        str(body.get("filename") or body.get("file_name") or ""),
+                    )
+                except ValueError as exc:
+                    return error_response(str(exc), 400)
+                self.store.log_event(
+                    str(user["id"]),
+                    "dialogue_extension_import",
+                    "导入对话扩展",
+                    {"extension_id": item.get("id"), "version": item.get("version")},
+                )
+                return ok_response({"extension": item})
+
+            if (
+                normalized.startswith(("admin/api/dialogue/extensions/", "admin/api/sillytavern/extensions/"))
+                and normalized.endswith("/toggle")
+            ):
+                if self.command.upper() != "POST":
+                    return error_response("method not allowed", 405)
+                parts = normalized.split("/")
+                extension_id = unquote(parts[-2]) if len(parts) >= 2 else ""
+                enabled = True
+                if isinstance(body, dict) and "enabled" in body:
+                    enabled = bool(body.get("enabled"))
+                updated = self.store.set_sillytavern_extension_enabled(extension_id, enabled)
+                if not updated:
+                    return error_response("extension not found", 404)
+                self.store.log_event(
+                    str(user["id"]),
+                    "dialogue_extension_toggle",
+                    "启用对话扩展" if enabled else "停用对话扩展",
+                    {"extension_id": extension_id, "enabled": enabled},
+                )
+                return ok_response({"extension": updated})
+
+            if (
+                normalized.startswith(("admin/api/dialogue/extensions/", "admin/api/sillytavern/extensions/"))
+                and normalized.endswith("/delete")
+            ):
+                if self.command.upper() != "POST":
+                    return error_response("method not allowed", 405)
+                parts = normalized.split("/")
+                extension_id = unquote(parts[-2]) if len(parts) >= 2 else ""
+                deleted = self.store.delete_sillytavern_extension(extension_id)
+                if deleted:
+                    self.store.log_event(
+                        str(user["id"]),
+                        "dialogue_extension_delete",
+                        "删除对话扩展",
+                        {"extension_id": extension_id},
+                    )
+                return ok_response({"deleted": deleted})
 
             if normalized == "admin/api/tavo-plugins":
                 return ok_response({"list": self.store.list_tavo_plugins(include_manifest=True)})
@@ -17707,16 +21290,22 @@ class Handler(BaseHTTPRequestHandler):
                         (pattern, pattern, pattern),
                     ).fetchone()[0]
                     rows = conn.execute(
-                        "select id, email, name, points, free_points, paid_points, reward_points, is_admin, created_at, updated_at from users "
-                        "where email like ? or name like ? or id like ? "
-                        "order by created_at desc limit ? offset ?",
+                        "select u.id, u.email, u.name, u.points, u.free_points, u.paid_points, u.reward_points, "
+                        "u.is_admin, u.created_at, u.updated_at, "
+                        "coalesce((select sum(po.money_cents) from payment_orders po "
+                        "where po.user_id=u.id and po.status='paid'), 0) as paid_money_cents "
+                        "from users u where u.email like ? or u.name like ? or u.id like ? "
+                        "order by u.created_at desc limit ? offset ?",
                         (pattern, pattern, pattern, limit, offset),
                     ).fetchall()
                 else:
                     total = conn.execute("select count(*) from users").fetchone()[0]
                     rows = conn.execute(
-                        "select id, email, name, points, free_points, paid_points, reward_points, is_admin, created_at, updated_at from users "
-                        "order by created_at desc limit ? offset ?",
+                        "select u.id, u.email, u.name, u.points, u.free_points, u.paid_points, u.reward_points, "
+                        "u.is_admin, u.created_at, u.updated_at, "
+                        "coalesce((select sum(po.money_cents) from payment_orders po "
+                        "where po.user_id=u.id and po.status='paid'), 0) as paid_money_cents "
+                        "from users u order by u.created_at desc limit ? offset ?",
                         (limit, offset),
                     ).fetchall()
                 return ok_response({

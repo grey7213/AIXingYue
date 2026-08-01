@@ -5,8 +5,8 @@ import {
   parseGalgameDirectives,
   safeRegExp,
   stripExperienceDirectives,
-} from './card-experience-schema.mjs?v=20260720-community-versions';
-import { SpinePortraitLayer, spineManifestOf } from './spine-portrait.mjs?v=20260720-community-versions';
+} from './card-experience-schema.mjs?v=20260802-stage-shell';
+import { SpinePortraitLayer, spineManifestOf } from './spine-portrait.mjs?v=20260802-stage-shell';
 
 const BLOCKED_ELEMENTS = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'BASE', 'FORM', 'META', 'LINK']);
 const URL_ATTRIBUTES = new Set(['href', 'src', 'poster']);
@@ -123,15 +123,17 @@ function template(value, context) {
     message: context.message || '',
     character: context.card?.name || '',
     'world.name': context.world?.name || '',
-    'world.content': context.world?.content || '',
+    // Worldbook prose never enters author-visible panels. Cards can bind a
+    // public label or a media scene ID, but protected prompt text stays out.
+    'world.content': '',
   };
   return String(value || '').replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, key) => escapeText(data[key] ?? ''));
 }
 
 const BASE_STYLE = `
-  :host { --ce-z: 70; font-family: inherit; color-scheme: dark; }
+  :host { position: fixed; inset: 0; display: block; width: 100vw; height: 100vh; height: 100dvh; --ce-z: 70; font-family: inherit; color-scheme: dark; pointer-events: none; }
   *, *::before, *::after { box-sizing: border-box; }
-  .ce-stage { position: fixed; inset: 0; z-index: var(--ce-z); pointer-events: none; }
+  .ce-stage { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 100vh; min-height: 100dvh; z-index: var(--ce-z); pointer-events: none; }
   .ce-background { position: absolute; inset: 0; z-index: -2; background-position: center; background-size: cover; opacity: 0; transition: opacity .45s ease, background-image .45s ease; }
   .ce-background.is-visible { opacity: 1; }
   .ce-background::after { content: ''; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(13,9,20,.08), rgba(13,9,20,.3)); }
@@ -146,15 +148,27 @@ const BASE_STYLE = `
   .ce-sidebar.left { left: 0; transform: translateX(-105%); }
   .ce-sidebar.right { right: 0; transform: translateX(105%); }
   .ce-sidebar.is-open { transform: translateX(0); }
-  .ce-sidebar__bar { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; background: rgba(20,14,31,.96); border-bottom: 1px solid rgba(255,255,255,.12); }
+  .ce-sidebar__bar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; background: rgba(20,14,31,.96); border-bottom: 1px solid rgba(255,255,255,.12); }
   .ce-sidebar__close, .ce-popup__close { border: 0; color: #fff; background: transparent; font-size: 25px; line-height: 1; cursor: pointer; }
-  .ce-sidebar__content { min-height: calc(100% - 56px); }
+  .ce-sidebar__tabs { position: sticky; top: 57px; z-index: 1; display: flex; gap: 6px; padding: 8px 10px; overflow-x: auto; background: rgba(20,14,31,.94); border-bottom: 1px solid rgba(255,255,255,.08); scrollbar-width: thin; }
+  .ce-sidebar__tabs[hidden] { display: none; }
+  .ce-sidebar__tab { flex: 0 0 auto; min-height: 34px; padding: 6px 11px; cursor: pointer; border: 1px solid rgba(255,255,255,.12); border-radius: 6px; color: rgba(255,255,255,.72); background: rgba(255,255,255,.05); }
+  .ce-sidebar__tab[aria-selected=true] { border-color: rgba(255,255,255,.44); color: #fff; background: rgba(255,255,255,.15); }
+  .ce-sidebar__content { min-height: calc(100% - 104px); }
   .ce-backdrop { position: absolute; inset: 0; z-index: 5; display: grid; place-items: center; padding: 18px; pointer-events: auto; background: rgba(8,5,14,.58); opacity: 0; visibility: hidden; transition: .2s; }
   .ce-backdrop.is-open { opacity: 1; visibility: visible; }
   .ce-popup { position: relative; width: min(640px, 94vw); max-height: min(82vh, 820px); overflow: auto; }
   .ce-popup__close { position: absolute; top: 10px; right: 12px; z-index: 2; width: 34px; height: 34px; border-radius: 50%; background: rgba(0,0,0,.35); }
-  .ce-floats { position: absolute; top: max(74px, env(safe-area-inset-top)); left: 50%; z-index: 6; width: min(460px, calc(100vw - 32px)); transform: translateX(-50%); display: grid; gap: 10px; pointer-events: auto; }
-  .ce-float { border: 1px solid rgba(255,255,255,.2); border-radius: 16px; background: rgba(24,17,38,.92); box-shadow: 0 16px 42px rgba(0,0,0,.34); overflow: hidden; animation: ce-in .22s ease both; }
+  .ce-floats { position: fixed; z-index: 6; inset: 0; overflow: hidden; pointer-events: none; }
+  .ce-float { position: absolute; top: max(74px, env(safe-area-inset-top)); left: 50%; width: min(460px, calc(100vw - 32px)); transform: translateX(-50%); border: 1px solid rgba(255,255,255,.2); border-radius: 16px; background: rgba(24,17,38,.92); box-shadow: 0 16px 42px rgba(0,0,0,.34); overflow: hidden; pointer-events: auto; animation: ce-in .22s ease both; }
+  .ce-float__bar { display: flex; align-items: center; justify-content: flex-end; min-height: 34px; padding: 3px 5px; border-bottom: 1px solid rgba(255,255,255,.1); background: rgba(255,255,255,.035); }
+  .ce-float__drag, .ce-float__close { display: grid; place-items: center; width: 30px; height: 28px; padding: 0; border: 0; color: rgba(255,255,255,.82); background: transparent; }
+  .ce-float__drag { margin-right: auto; cursor: grab; touch-action: none; }
+  .ce-float__drag:active { cursor: grabbing; }
+  .ce-float__close { cursor: pointer; font-size: 20px; }
+  .ce-float__content { max-height: min(68vh, 620px); overflow: auto; }
+  .ce-float.is-dragging { animation: none; user-select: none; }
+  .ce-float:focus-within { border-color: rgba(255,255,255,.45); }
   .ce-player { position: absolute; right: max(14px, env(safe-area-inset-right)); bottom: max(82px, env(safe-area-inset-bottom)); z-index: 3; display: flex; align-items: center; gap: 8px; min-height: 42px; max-width: min(360px, calc(100vw - 28px)); padding: 8px 12px; border-radius: 999px; pointer-events: auto; }
   .ce-player button { flex: 0 0 auto; width: 28px; height: 28px; border: 0; border-radius: 50%; color: #21162f; background: #fff; cursor: pointer; }
   .ce-player span { overflow: hidden; font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }
@@ -204,6 +218,7 @@ class CardExperienceRuntime {
     this.lastRawMessage = '';
     this.lastCleanMessage = '';
     this.spineLayer = null;
+    this.floatTimers = new Set();
     this.userGestureHandler = () => this.tryAutoplay();
   }
 
@@ -475,17 +490,110 @@ class CardExperienceRuntime {
   }
 
   showFloating(rule, context) {
+    const container = this.shadow.querySelector('.ce-floats');
+    if (!container) return;
+    const existing = [...container.querySelectorAll('.ce-float')];
+    if (existing.length >= 6) existing[0].remove();
     const card = document.createElement('div');
     card.className = 'ce-float';
+    card.setAttribute('role', 'dialog');
+    card.setAttribute('aria-label', rule.name || '角色悬浮窗');
+    const index = Math.min(existing.length, 5);
+    card.style.top = `max(${74 + index * 18}px, env(safe-area-inset-top))`;
+    const bar = document.createElement('div');
+    bar.className = 'ce-float__bar';
+    const drag = document.createElement('button');
+    drag.className = 'ce-float__drag';
+    drag.type = 'button';
+    drag.textContent = '⠿';
+    drag.setAttribute('aria-label', '移动悬浮窗');
+    const close = document.createElement('button');
+    close.className = 'ce-float__close';
+    close.type = 'button';
+    close.textContent = '×';
+    close.setAttribute('aria-label', '关闭悬浮窗');
+    bar.append(drag, close);
     const style = document.createElement('style');
     style.textContent = sanitizeScopedCss(rule.scoped_css);
-    card.append(style);
     const content = document.createElement('div');
+    content.className = 'ce-float__content';
     content.innerHTML = sanitizeCardHtml(template(rule.template_html, context));
-    card.append(content);
+    card.append(style, bar, content);
     this.bindDeclarativeActions(card);
-    this.shadow.querySelector('.ce-floats').append(card);
-    setTimeout(() => card.remove(), rule.duration_ms || 5000);
+    container.append(card);
+    this.makeDraggable(card, drag);
+    let timer = null;
+    const remove = () => {
+      if (timer !== null) {
+        clearTimeout(timer);
+        this.floatTimers.delete(timer);
+      }
+      card.remove();
+    };
+    close.addEventListener('click', remove);
+    if (rule.duration_ms > 0) {
+      timer = setTimeout(remove, rule.duration_ms);
+      this.floatTimers.add(timer);
+    }
+  }
+
+  makeDraggable(node, handle) {
+    if (!node || !handle) return;
+    const stage = this.shadow?.querySelector('.ce-stage');
+    const clampPosition = (left, top) => {
+      const bounds = stage?.getBoundingClientRect() || { left: 0, top: 0, width: innerWidth, height: innerHeight };
+      const rect = node.getBoundingClientRect();
+      return {
+        left: Math.max(bounds.left + 8, Math.min(left, bounds.left + bounds.width - rect.width - 8)),
+        top: Math.max(bounds.top + 8, Math.min(top, bounds.top + bounds.height - rect.height - 8)),
+      };
+    };
+    const settle = () => {
+      const rect = node.getBoundingClientRect();
+      const next = clampPosition(rect.left, rect.top);
+      node.style.left = `${next.left}px`;
+      node.style.top = `${next.top}px`;
+      node.style.transform = 'none';
+    };
+    settle();
+    let dragState = null;
+    handle.addEventListener('pointerdown', event => {
+      if (event.button !== 0) return;
+      const rect = node.getBoundingClientRect();
+      dragState = { pointerId: event.pointerId, x: event.clientX - rect.left, y: event.clientY - rect.top };
+      handle.setPointerCapture?.(event.pointerId);
+      node.classList.add('is-dragging');
+      event.preventDefault();
+    });
+    handle.addEventListener('pointermove', event => {
+      if (!dragState || dragState.pointerId !== event.pointerId) return;
+      const next = clampPosition(event.clientX - dragState.x, event.clientY - dragState.y);
+      node.style.left = `${next.left}px`;
+      node.style.top = `${next.top}px`;
+      node.style.transform = 'none';
+    });
+    const finish = event => {
+      if (!dragState || dragState.pointerId !== event.pointerId) return;
+      dragState = null;
+      node.classList.remove('is-dragging');
+      try { handle.releasePointerCapture?.(event.pointerId); } catch { /* capture already released */ }
+    };
+    handle.addEventListener('pointerup', finish);
+    handle.addEventListener('pointercancel', finish);
+    handle.addEventListener('keydown', event => {
+      const delta = event.shiftKey ? 24 : 8;
+      const movement = {
+        ArrowLeft: [-delta, 0], ArrowRight: [delta, 0],
+        ArrowUp: [0, -delta], ArrowDown: [0, delta],
+      }[event.key];
+      if (!movement) return;
+      const rect = node.getBoundingClientRect();
+      const next = clampPosition(rect.left + movement[0], rect.top + movement[1]);
+      node.style.left = `${next.left}px`;
+      node.style.top = `${next.top}px`;
+      node.style.transform = 'none';
+      event.preventDefault();
+    });
   }
 
   insertComposerText(text, mode = 'append') {
@@ -498,22 +606,68 @@ class CardExperienceRuntime {
 
   openSidebar(sidebarId, context = {}) {
     const sidebar = this.config.sidebars.find((item) => item.enabled && item.id === sidebarId);
-
     if (!sidebar) return;
+    const sidebars = this.config.sidebars.filter(item => item.enabled && item.position === sidebar.position);
     const slot = this.shadow.querySelector('.ce-sidebar-slot');
     slot.replaceChildren();
     const panel = document.createElement('aside');
     panel.className = `ce-sidebar ${sidebar.position}`;
-    panel.style.width = `${sidebar.width}px`;
-    const world = this.world.find((entry) => entry.id === sidebar.world_entry_id);
-    const rawContent = sidebar.content_mode === 'worldbook' && world
-      ? `<article class="worldbook-content"><h3>${escapeText(world.name || sidebar.name)}</h3><p>${escapeText(world.content || '').replace(/\n/g, '<br>')}</p></article>`
-      : template(sidebar.content_html, { ...context, card: this.card, world });
-    panel.innerHTML = `<style>${sanitizeScopedCss(sidebar.scoped_css)}</style><div class="ce-sidebar__bar"><strong>${escapeText(sidebar.name)}</strong><button class="ce-sidebar__close" type="button" aria-label="关闭">×</button></div><div class="ce-sidebar__content">${sanitizeCardHtml(rawContent)}</div>`;
-    panel.querySelector('.ce-sidebar__close').addEventListener('click', () => panel.classList.remove('is-open'));
+    const bar = document.createElement('div');
+    bar.className = 'ce-sidebar__bar';
+    const title = document.createElement('strong');
+    const close = document.createElement('button');
+    close.className = 'ce-sidebar__close';
+    close.type = 'button';
+    close.textContent = '×';
+    close.setAttribute('aria-label', '关闭');
+    bar.append(title, close);
+    const tabs = document.createElement('div');
+    tabs.className = 'ce-sidebar__tabs';
+    tabs.setAttribute('role', 'tablist');
+    tabs.setAttribute('aria-label', '角色面板');
+    tabs.hidden = sidebars.length < 2;
+    const content = document.createElement('div');
+    content.className = 'ce-sidebar__content';
+    content.setAttribute('role', 'tabpanel');
+    panel.append(bar, tabs, content);
+    const tabButtons = new Map();
+    const renderTab = active => {
+      panel.style.width = `${active.width}px`;
+      title.textContent = active.name;
+      for (const [item, button] of tabButtons) {
+        const selected = item === active;
+        button.setAttribute('aria-selected', String(selected));
+        button.tabIndex = selected ? 0 : -1;
+      }
+      const world = this.world.find(entry => entry.id === active.world_entry_id);
+      const publicWorld = world ? { ...world, content: '' } : null;
+      const rawContent = active.content_mode === 'worldbook' && !active.content_html
+        ? `<article class="worldbook-content"><h3>${escapeText(publicWorld?.name || active.name)}</h3></article>`
+        : template(active.content_html, { ...context, card: this.card, world: publicWorld });
+      const authorStyle = document.createElement('style');
+      authorStyle.dataset.author = '1';
+      authorStyle.textContent = sanitizeScopedCss(active.scoped_css);
+      const body = document.createElement('div');
+      body.className = 'ce-sidebar__panel';
+      body.innerHTML = sanitizeCardHtml(rawContent);
+      content.replaceChildren(authorStyle, body);
+      this.bindCardSearchFilter(body);
+      this.syncLiveElements(content);
+    };
+    for (const item of sidebars) {
+      const button = document.createElement('button');
+      button.className = 'ce-sidebar__tab';
+      button.type = 'button';
+      button.setAttribute('role', 'tab');
+      button.textContent = item.trigger_label || item.name;
+      button.addEventListener('click', () => renderTab(item));
+      tabButtons.set(item, button);
+      tabs.append(button);
+    }
+    close.addEventListener('click', () => panel.classList.remove('is-open'));
     this.bindDeclarativeActions(panel, { panel });
-    this.syncLiveElements(panel);
     slot.append(panel);
+    renderTab(sidebar);
     requestAnimationFrame(() => panel.classList.add('is-open'));
   }
 
@@ -703,7 +857,13 @@ class CardExperienceRuntime {
 
   destroy() {
     document.removeEventListener('pointerdown', this.userGestureHandler);
+    for (const timer of this.floatTimers) clearTimeout(timer);
+    this.floatTimers.clear();
     if (this._typeTimer) { clearInterval(this._typeTimer); this._typeTimer = null; }
+    if (this.spineLayer) {
+      try { this.spineLayer.dispose(); } catch { /* renderer already unavailable */ }
+      this.spineLayer = null;
+    }
     this.host?.classList.remove('ce-galgame-on');
     this.audio?.pause();
 

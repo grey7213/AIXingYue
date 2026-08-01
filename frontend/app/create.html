@@ -9,9 +9,9 @@
   <script src="/assets/vendor/tailwindcss-browser.js?v=20260713-local"></script>
   <link rel="stylesheet" href="/app/assets/css/app.css?v=20260720-community-versions">
   <link rel="stylesheet" href="/app/assets/css/worldbook-editor.css?v=20260713">
-  <link rel="stylesheet" href="/app/assets/css/card-experience-editor.css?v=20260716">
+  <link rel="stylesheet" href="/app/assets/css/card-experience-editor.css?v=20260801-stage3">
   <script src="/app/assets/vendor/jszip-3.10.1.min.js?v=3.10.1"></script>
-  <script type="module" src="/app/assets/js/create.js?v=20260720-community-versions"></script>
+  <script type="module" src="/app/assets/js/create.js?v=20260802-stage-shell"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen creator-editor-page">
@@ -420,7 +420,7 @@
         <!-- 互动界面（折叠，不改变原有编辑流程） -->
         <div class="editor-group" id="creator-experience" :class="{ 'is-open': expand.experience }">
           <div class="editor-group__head" @click="expand.experience = !expand.experience">
-            <div class="editor-group__title"><span class="editor-group__title-mark"></span><span>互动界面</span><span class="text-xs text-violet-300/60 font-normal">BGM · 弹窗 · 悬浮窗 · 侧栏</span></div>
+            <div class="editor-group__title"><span class="editor-group__title-mark"></span><span>互动界面</span><span class="text-xs text-violet-300/60 font-normal">布局 · 主题 · 立绘 · BGM · 互动组件</span><span class="experience-count" x-text="`${experienceFeatureCount()} 项启用`"></span></div>
             <svg class="editor-group__chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M6 9l6 6 6-6"/></svg>
           </div>
           <div class="editor-group__body experience-editor" x-show="expand.experience">
@@ -436,13 +436,63 @@
             </section>
             <fieldset :disabled="!canUseAdvancedCreation()" style="display:contents" :style="!canUseAdvancedCreation() ? 'opacity:.55' : ''">
             <div class="experience-guide"><strong>怎么触发？</strong><span>让模型回复类似 <code>[POPUP:notice]</code> 的标记，再用下方正则匹配。标记会从正文隐藏。卡内只支持声明式按钮，不执行作者 JavaScript。</span></div>
+            <div class="experience-guide is-warning" x-show="legacySidebarMigrationCount"><strong>旧侧栏已迁移</strong><span x-text="`${legacySidebarMigrationCount} 个旧侧栏原本直接读取世界书。为保护设定正文，现已改为公开内容模式；请检查并填写希望玩家看到的内容。`"></span></div>
 
             <section class="experience-section">
-              <div class="experience-section__head"><div><strong>① 素材库与 BGM</strong><small>文件经过大小、SHA-256 和真实格式校验后绑定当前卡。</small></div></div>
+              <div class="experience-section__head"><div><strong>① 角色卡专属舞台</strong><small>只改变本卡的布局、气泡、背景与输入栏外观；发送、生成、存档和回溯仍使用网站统一能力。</small></div></div>
+              <div class="experience-stage-preview" :class="[`layout-${form.card_experience.stage.layout}`, `avatars-${form.card_experience.stage.avatar_position}`, { 'input-floating': form.card_experience.stage.input_style === 'floating' }]" :style="stagePreviewStyle()">
+                <span class="experience-stage-preview__video" x-show="form.media_assets.find(item => item.id === form.card_experience.stage.background_asset_id)?.mime_type?.startsWith('video/')">动态背景</span>
+                <img class="experience-stage-preview__portrait" x-show="stagePortraitPreview()" :src="stagePortraitPreview()" :style="stagePortraitPreviewStyle()" alt="立绘预览">
+                <div class="experience-stage-preview__chat">
+                  <div class="experience-stage-preview__message is-assistant"><i x-show="form.card_experience.stage.show_avatars"></i><span>角色回复预览</span></div>
+                  <div class="experience-stage-preview__message is-user"><span>用户消息预览</span><i x-show="form.card_experience.stage.show_avatars"></i></div>
+                </div>
+                <div class="experience-stage-preview__composer"><span>输入消息</span><b>↑</b></div>
+              </div>
+              <div class="experience-preset-row">
+                <span>主题预设</span>
+                <template x-for="preset in stageThemePresets" :key="preset.id"><button type="button" :class="{ 'is-active': stageThemeIsActive(preset) }" @click="applyStageThemePreset(preset.id)"><i :style="`--preset-accent:${preset.accent_color};--preset-user:${preset.user_bubble_color};--preset-assistant:${preset.assistant_bubble_color}`"></i><b x-text="preset.name"></b></button></template>
+              </div>
+              <div class="experience-preset-row">
+                <span>气泡形状</span>
+                <template x-for="preset in bubbleStylePresets" :key="preset.id"><button type="button" :class="{ 'is-active': bubbleStyleIsActive(preset) }" @click="applyBubbleStylePreset(preset.id)"><i class="is-bubble" :style="`border-radius:${preset.bubble_radius}px`"></i><b x-text="preset.name"></b></button></template>
+              </div>
+              <div class="experience-bgm-grid">
+                <label class="editor-checkbox"><input type="checkbox" x-model="form.card_experience.stage.enabled"><div class="editor-checkbox__text"><div class="editor-checkbox__title">启用专属舞台</div><div class="editor-checkbox__hint">切换角色卡时自动加载与卸载</div></div></label>
+                <label><span>布局</span><select class="xy-input text-sm" x-model="form.card_experience.stage.layout"><option value="standard">标准聊天</option><option value="landscape">横屏沉浸</option><option value="split">立绘 / 对话分栏</option><option value="visual_novel">视觉小说</option></select></label>
+                <label><span>对话区宽度 <output x-text="`${form.card_experience.stage.chat_width}%`"></output></span><input class="xy-input text-sm" type="range" min="35" max="100" step="1" x-model.number="form.card_experience.stage.chat_width"></label>
+                <label><span>输入栏</span><select class="xy-input text-sm" x-model="form.card_experience.stage.input_style"><option value="dock">底部停靠</option><option value="floating">悬浮输入</option></select></label>
+                <label><span>舞台背景</span><select class="xy-input text-sm" x-model="form.card_experience.stage.background_asset_id"><option value="">不设置</option><template x-for="asset in stageBackgroundOptions()" :key="asset.id"><option :value="asset.id" x-text="asset.name"></option></template></select></label>
+                <label><span>固定立绘</span><select class="xy-input text-sm" x-model="form.card_experience.stage.portrait_asset_id"><option value="">不设置</option><template x-for="asset in galgamePortraitOptions()" :key="asset.id"><option :value="asset.id" x-text="asset.name"></option></template></select></label>
+                <label class="editor-checkbox"><input type="checkbox" x-model="form.card_experience.stage.show_portrait"><div class="editor-checkbox__text"><div class="editor-checkbox__title">显示固定立绘</div><div class="editor-checkbox__hint">可随卡片舞台单独开关</div></div></label>
+                <label><span>立绘位置</span><select class="xy-input text-sm" x-model="form.card_experience.stage.portrait_position"><option value="left">左侧</option><option value="center">居中</option><option value="right">右侧</option></select></label>
+                <label><span>立绘宽度 <output x-text="`${form.card_experience.stage.portrait_width}%`"></output></span><input class="xy-input text-sm" type="range" min="18" max="70" step="1" x-model.number="form.card_experience.stage.portrait_width"></label>
+                <label><span>立绘透明度 <output x-text="`${Math.round(form.card_experience.stage.portrait_opacity * 100)}%`"></output></span><input class="xy-input text-sm" type="range" min="0.2" max="1" step="0.05" x-model.number="form.card_experience.stage.portrait_opacity"></label>
+                <label class="editor-checkbox"><input type="checkbox" x-model="form.card_experience.stage.show_avatars"><div class="editor-checkbox__text"><div class="editor-checkbox__title">显示消息头像</div><div class="editor-checkbox__hint">立绘模式可关闭气泡头像</div></div></label>
+                <label><span>头像排列</span><select class="xy-input text-sm" x-model="form.card_experience.stage.avatar_position"><option value="split">双方分列</option><option value="left">统一左侧</option><option value="right">统一右侧</option></select></label>
+                <label><span>气泡圆角 <output x-text="`${form.card_experience.stage.bubble_radius}px`"></output></span><input class="xy-input text-sm" type="range" min="0" max="36" step="1" x-model.number="form.card_experience.stage.bubble_radius"></label>
+                <label><span>字体缩放 <output x-text="`${Math.round(form.card_experience.stage.font_scale * 100)}%`"></output></span><input class="xy-input text-sm" type="range" min="0.8" max="1.35" step="0.05" x-model.number="form.card_experience.stage.font_scale"></label>
+              </div>
+              <div class="experience-stage-colors">
+                <label><span>强调色</span><input type="color" x-model="form.card_experience.stage.accent_color"></label>
+                <label><span>用户气泡</span><input type="color" x-model="form.card_experience.stage.user_bubble_color"></label>
+                <label><span>角色气泡</span><input type="color" x-model="form.card_experience.stage.assistant_bubble_color"></label>
+                <label><span>文字</span><input type="color" x-model="form.card_experience.stage.text_color"></label>
+              </div>
+              <div class="experience-stage-colors is-input-colors">
+                <label><span>输入栏背景</span><input type="color" x-model="form.card_experience.stage.input_background_color"></label>
+                <label><span>输入文字</span><input type="color" x-model="form.card_experience.stage.input_text_color"></label>
+                <label><span>输入边框</span><input type="color" x-model="form.card_experience.stage.input_border_color"></label>
+              </div>
+            </section>
+
+            <section class="experience-section">
+              <div class="experience-section__head"><div><strong>② 素材库与 BGM</strong><small>文件经过大小、SHA-256 和真实格式校验后绑定当前卡。</small></div></div>
               <div class="experience-upload-row">
                 <label class="experience-upload"><input type="file" accept=".mp3,audio/mpeg" :disabled="uploadingMedia" @change="onAssetLibraryChange($event, 'bgm')"><span>＋ 上传 MP3</span></label>
                 <label class="experience-upload"><input type="file" accept=".png,.jpg,.jpeg,.webp,.gif,image/*" :disabled="uploadingMedia" @change="onAssetLibraryChange($event, 'portrait')"><span>＋ 上传立绘</span></label>
                 <label class="experience-upload"><input type="file" accept=".png,.jpg,.jpeg,.webp,.gif,image/*" :disabled="uploadingMedia" @change="onAssetLibraryChange($event, 'background')"><span>＋ 上传背景</span></label>
+                <label class="experience-upload"><input type="file" accept=".mp4,.webm,video/mp4,video/webm" :disabled="uploadingMedia" @change="onAssetLibraryChange($event, 'background')"><span>＋ 上传视频背景</span></label>
               </div>
               <div class="experience-bgm-grid">
                 <label class="editor-checkbox"><input type="checkbox" x-model="form.card_experience.bgm.enabled"><div class="editor-checkbox__text"><div class="editor-checkbox__title">启用卡片 BGM</div><div class="editor-checkbox__hint">首次用户交互后播放，遵守手机浏览器策略</div></div></label>
@@ -458,15 +508,22 @@
             </section>
 
             <section class="experience-section">
-              <div class="experience-section__head"><div><strong>② 正则界面规则</strong><small>命中最终角色回复后打开界面、切歌或切换世界书场景。</small></div><button type="button" class="editor-toolbar__btn" @click="addUiRule('open_popup')">＋ 添加规则</button></div>
+              <div class="experience-section__head"><div><strong>③ 正则界面规则</strong><small>选择动作后生成完整规则，命中最终角色回复时执行；触发标记默认不会显示给用户。</small></div></div>
+              <div class="experience-action-picker"><template x-for="action in uiActionOptions" :key="action.id"><button type="button" @click="addUiRule(action.id)" :title="action.hint"><b>＋</b><span x-text="action.name"></span></button></template></div>
               <template x-for="(rule, i) in form.card_experience.ui_rules" :key="rule.id">
                 <details class="experience-card" :open="i === 0">
                   <summary><span x-text="rule.name || `界面规则 ${i + 1}`"></span><small x-text="rule.action"></small></summary>
                   <div class="experience-card__body">
                     <div class="experience-card__toolbar"><label class="editor-checkbox"><input type="checkbox" x-model="rule.enabled"><div class="editor-checkbox__text"><div class="editor-checkbox__title">启用</div></div></label><button type="button" class="editor-toolbar__btn is-danger" @click="removeUiRule(i)">删除</button></div>
-                    <div class="editor-row-2"><input class="xy-input text-sm" x-model="rule.name" placeholder="规则名称"><select class="xy-input text-sm" x-model="rule.action"><option value="open_popup">打开弹窗</option><option value="show_floating">显示悬浮窗</option><option value="switch_bgm">切换 BGM</option><option value="open_sidebar">打开侧栏</option><option value="set_scene">切换世界书场景</option></select></div>
+                    <div class="editor-row-2"><input class="xy-input text-sm" x-model="rule.name" placeholder="规则名称"><select class="xy-input text-sm" x-model="rule.action" @change="onUiRuleActionChange(rule)"><option value="open_popup">打开弹窗</option><option value="show_floating">显示悬浮窗</option><option value="switch_bgm">切换 BGM</option><option value="open_sidebar">打开侧栏</option><option value="set_scene">切换世界书场景</option></select></div>
+                    <div class="experience-template-picker" x-show="uiRuleTemplateOptions(rule.action).length"><span>内容模板</span><template x-for="template in uiRuleTemplateOptions(rule.action)" :key="template.id"><button type="button" @click="applyUiRuleTemplate(rule, template.id)" x-text="template.name"></button></template></div>
                     <div class="experience-pattern"><input class="xy-input text-sm" x-model="rule.pattern" placeholder="正则，例如 \[POPUP:notice\]"><input class="xy-input text-sm" x-model="rule.flags" placeholder="flags，如 i"></div>
                     <label x-show="['switch_bgm','open_sidebar','set_scene'].includes(rule.action)"><span>目标 ID</span><select class="xy-input text-sm" x-show="rule.action === 'switch_bgm'" x-model="rule.target_id"><option value="">选择 BGM</option><template x-for="asset in assetsByKind('bgm')" :key="asset.id"><option :value="asset.id" x-text="asset.name"></option></template></select><select class="xy-input text-sm" x-show="rule.action === 'open_sidebar'" x-model="rule.target_id"><option value="">选择侧栏</option><template x-for="bar in form.card_experience.sidebars" :key="bar.id"><option :value="bar.id" x-text="bar.name"></option></template></select><select class="xy-input text-sm" x-show="rule.action === 'set_scene'" x-model="rule.target_id"><option value="">选择世界书条目</option><template x-for="entry in form.world_info" :key="entry.id"><option :value="entry.id" x-text="entry.name"></option></template></select></label>
+                    <div class="experience-rule-options">
+                      <label><span>执行顺序</span><input class="xy-input text-sm" type="number" min="-10000" max="10000" x-model.number="rule.order"></label>
+                      <label x-show="rule.action === 'show_floating'"><span>显示时长（毫秒）</span><input class="xy-input text-sm" type="number" min="0" max="120000" step="500" x-model.number="rule.duration_ms"></label>
+                      <label class="editor-checkbox"><input type="checkbox" x-model="rule.remove_match"><div class="editor-checkbox__text"><div class="editor-checkbox__title">从正文隐藏触发标记</div></div></label>
+                    </div>
                     <template x-if="['open_popup','show_floating'].includes(rule.action)"><div class="experience-code-grid"><label><span>HTML 内容</span><textarea class="xy-input text-sm" x-model="rule.template_html" placeholder="可用 {{message}}、{{character}}；按钮可写 data-card-action=&quot;toggle-bgm&quot;"></textarea></label><label><span>局部 CSS</span><textarea class="xy-input text-sm" x-model="rule.scoped_css" placeholder="只作用于本卡界面，不支持脚本和外链"></textarea></label></div></template>
                   </div>
                 </details>
@@ -474,12 +531,29 @@
             </section>
 
             <section class="experience-section">
-              <div class="experience-section__head"><div><strong>③ 自定义侧栏</strong><small>可设置位置、宽度、正则、静态 HTML 或世界书内容。</small></div><button type="button" class="editor-toolbar__btn" @click="addExperienceSidebar">＋ 添加侧栏</button></div>
-              <template x-for="(bar, i) in form.card_experience.sidebars" :key="bar.id"><details class="experience-card"><summary><span x-text="bar.name || `侧栏 ${i + 1}`"></span><small x-text="`${bar.position === 'left' ? '左侧' : '右侧'} · ${bar.width}px`"></small></summary><div class="experience-card__body"><div class="experience-card__toolbar"><label class="editor-checkbox"><input type="checkbox" x-model="bar.enabled"><div class="editor-checkbox__text"><div class="editor-checkbox__title">启用</div></div></label><button type="button" class="editor-toolbar__btn is-danger" @click="removeExperienceSidebar(i)">删除</button></div><div class="editor-row-2"><input class="xy-input text-sm" x-model="bar.name" placeholder="侧栏名称"><input class="xy-input text-sm" x-model="bar.trigger_label" placeholder="边缘按钮文字"></div><div class="experience-sidebar-grid"><label><span>位置</span><select class="xy-input text-sm" x-model="bar.position"><option value="left">左侧</option><option value="right">右侧</option></select></label><label><span>宽度（240–720px）</span><input class="xy-input text-sm" type="number" min="240" max="720" x-model.number="bar.width"></label><label><span>内容来源</span><select class="xy-input text-sm" x-model="bar.content_mode"><option value="static">自定义 HTML</option><option value="worldbook">世界书条目</option></select></label><label x-show="bar.content_mode === 'worldbook'"><span>世界书条目</span><select class="xy-input text-sm" x-model="bar.world_entry_id"><option value="">请选择</option><template x-for="entry in form.world_info" :key="entry.id"><option :value="entry.id" x-text="entry.name"></option></template></select></label></div><div class="experience-pattern"><input class="xy-input text-sm" x-model="bar.open_pattern" placeholder="打开正则，例如 \[SIDEBAR:info1\]"><input class="xy-input text-sm" x-model="bar.flags" placeholder="flags，如 i"></div><div class="experience-code-grid" x-show="bar.content_mode === 'static'"><label><span>HTML 内容</span><textarea class="xy-input text-sm" x-model="bar.content_html"></textarea></label><label><span>局部 CSS</span><textarea class="xy-input text-sm" x-model="bar.scoped_css"></textarea></label></div></div></details></template>
+              <div class="experience-section__head"><div><strong>④ 自定义侧栏</strong><small>公开内容由创作者手动填写；运行时不会把世界书正文暴露给用户。</small></div><button type="button" class="editor-toolbar__btn" @click="addExperienceSidebar">＋ 添加侧栏</button></div>
+              <div class="experience-guide"><strong>公开边界</strong><span>侧栏只保存下方明确填写的 HTML，不读取世界书正文。需要根据剧情变化时，请用公开变量、声明式按钮或正则规则控制。</span></div>
+              <template x-for="(bar, i) in form.card_experience.sidebars" :key="bar.id">
+                <details class="experience-card">
+                  <summary><span x-text="bar.name || `侧栏 ${i + 1}`"></span><small x-text="`${bar.position === 'left' ? '左侧' : '右侧'} · ${bar.width}px`"></small></summary>
+                  <div class="experience-card__body">
+                    <div class="experience-card__toolbar"><label class="editor-checkbox"><input type="checkbox" x-model="bar.enabled"><div class="editor-checkbox__text"><div class="editor-checkbox__title">启用</div></div></label><button type="button" class="editor-toolbar__btn is-danger" @click="removeExperienceSidebar(i)">删除</button></div>
+                    <div class="editor-row-2"><input class="xy-input text-sm" x-model="bar.name" placeholder="侧栏名称"><input class="xy-input text-sm" x-model="bar.trigger_label" placeholder="边缘按钮文字"></div>
+                    <div class="experience-template-picker"><span>公开内容模板</span><template x-for="template in sidebarTemplateOptions()" :key="template.id"><button type="button" @click="applySidebarTemplate(bar, template.id)" x-text="template.name"></button></template></div>
+                    <div class="experience-sidebar-grid">
+                      <label><span>位置</span><select class="xy-input text-sm" x-model="bar.position"><option value="left">左侧</option><option value="right">右侧</option></select></label>
+                      <label><span>宽度（240–720px）</span><input class="xy-input text-sm" type="number" min="240" max="720" x-model.number="bar.width"></label>
+                      <label><span>执行顺序</span><input class="xy-input text-sm" type="number" min="-10000" max="10000" x-model.number="bar.order"></label>
+                    </div>
+                    <div class="experience-pattern"><input class="xy-input text-sm" x-model="bar.open_pattern" placeholder="打开正则，例如 \[SIDEBAR:info1\]"><input class="xy-input text-sm" x-model="bar.flags" placeholder="flags，如 i"></div>
+                    <div class="experience-code-grid"><label><span>向玩家公开的 HTML</span><textarea class="xy-input text-sm" x-model="bar.content_html" placeholder="只填写允许玩家查看的资料、图鉴或助手内容"></textarea></label><label><span>局部 CSS</span><textarea class="xy-input text-sm" x-model="bar.scoped_css" placeholder="样式只作用于当前侧栏"></textarea></label></div>
+                  </div>
+                </details>
+              </template>
             </section>
 
             <section class="experience-section">
-              <div class="experience-section__head"><div><strong>④ galgame 横板对话模式</strong><small>碧蓝档案 / galgame 风：立绘 + 对话栏，AI 回复用 <code>[立绘:微笑]</code> / <code>[背景:教室]</code> 标记自动切换。</small></div></div>
+              <div class="experience-section__head"><div><strong>⑤ galgame 横板对话模式</strong><small>立绘 + 对话栏；AI 回复用 <code>[立绘:微笑]</code> / <code>[背景:教室]</code> 标记自动切换。</small></div></div>
               <div class="experience-bgm-grid">
                 <label class="editor-checkbox"><input type="checkbox" x-model="form.card_experience.galgame.enabled"><div class="editor-checkbox__text"><div class="editor-checkbox__title">启用 galgame 模式</div><div class="editor-checkbox__hint">聊天页切换为横板立绘 + 对话栏渲染</div></div></label>
                 <label><span>对话栏位置</span><select class="xy-input text-sm" x-model="form.card_experience.galgame.dialogue_position"><option value="bottom">底部</option><option value="top">顶部</option></select></label>
@@ -491,6 +565,22 @@
               </div>
               <div class="experience-pattern"><input class="xy-input text-sm" x-model="form.card_experience.galgame.portrait_directive" placeholder="立绘切换正则，如 \[(?:立绘|portrait)[:：]\s*([^\]]+)\]"><input class="xy-input text-sm" x-model="form.card_experience.galgame.background_directive" placeholder="背景切换正则，如 \[(?:背景|bg)[:：]\s*([^\]]+)\]"></div>
               <div class="experience-guide"><small>立绘标记的捕获组会与立绘的「情绪标签」匹配（不区分大小写），匹配不到时回退按立绘名称包含匹配。给每张立绘设置好情绪标签即可让 AI 用 <code>[立绘:xxx]</code> 精准切换。</small></div>
+            </section>
+
+            <section class="experience-section">
+              <div class="experience-section__head"><div><strong>⑥ AI 结构化互动组件</strong><small>AI 一次输出数据，地图下钻、物品筛选、关系网、技能树和状态面板都在本地交互，不额外消耗 Token。</small></div></div>
+              <label class="editor-checkbox"><input type="checkbox" x-model="form.card_experience.structured_components.enabled"><div class="editor-checkbox__text"><div class="editor-checkbox__title">识别 homer-ui 数据块</div><div class="editor-checkbox__hint">统一写法：Markdown 代码块语言为 homer-ui，内容是带 type 字段的 JSON</div></div></label>
+              <div class="experience-components-grid">
+                <template x-for="item in structuredComponentOptions" :key="item.id">
+                  <label class="editor-checkbox"><input type="checkbox" x-model="form.card_experience.structured_components[item.id]" :disabled="!form.card_experience.structured_components.enabled"><div class="editor-checkbox__text"><div class="editor-checkbox__title" x-text="item.name"></div></div></label>
+                </template>
+              </div>
+              <div class="experience-component-example">
+                <div class="experience-component-example__tabs"><template x-for="item in structuredComponentOptions" :key="item.id"><button type="button" :class="{ 'is-active': structuredExampleType === item.id }" @click="structuredExampleType = item.id" x-text="item.name"></button></template></div>
+                <div class="experience-component-example__head"><div><strong x-text="structuredComponentExample()?.name"></strong><small x-text="structuredComponentExample()?.fields"></small></div><button type="button" class="editor-toolbar__btn" @click="copyStructuredExample">复制示例</button></div>
+                <textarea class="xy-input" readonly :value="structuredExampleCode()" aria-label="结构化组件示例"></textarea>
+              </div>
+              <div class="experience-guide"><strong>本地交互</strong><span>原始 JSON 会从消息正文隐藏并保留在该条消息中，地图下钻、筛选和节点切换不再请求模型；刷新、切换会话和回溯后均可由消息数据重建。</span></div>
             </section>
             </fieldset>
           </div>
@@ -778,7 +868,7 @@
         <div class="xy-modal__head"><div><strong>发布新版本</strong><span>当前公开版本不会被直接覆盖；已有会话继续使用原版本。</span></div><button type="button" @click="publishDialogOpen = false">×</button></div>
         <div class="xy-modal__body" style="display:grid;gap:14px">
           <label class="editor-field"><span class="editor-field__label">版本名称</span><input class="xy-input" maxlength="80" x-model="versionName" placeholder="例如：v2.0 · 新剧情线"></label>
-          <label class="editor-field"><span class="editor-field__label">作者介绍 / 更新说明</span><textarea class="xy-input" rows="5" maxlength="4000" x-model="versionDescription" placeholder="说明这个版本改了什么、适合怎样游玩。玩家会在版本历史和选择弹窗中看到。"></textarea></label>
+          <label class="editor-field"><span class="editor-field__label">作者介绍 / 更新说明</span><textarea class="xy-input" rows="5" maxlength="4000" x-model="versionDescription" placeholder="说明这个版本改了什么、适合怎样游玩。内容会保存在版本历史中。"></textarea></label>
           <div style="display:flex;justify-content:flex-end;gap:10px"><button type="button" class="xy-btn xy-btn-ghost" @click="publishDialogOpen = false">取消</button><button type="button" class="xy-btn xy-btn-primary" @click="publishEditedVersion" :disabled="loading"><span x-show="!loading">确认发布</span><span x-show="loading" class="xy-loading"></span></button></div>
         </div>
       </section>

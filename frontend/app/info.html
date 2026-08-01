@@ -39,6 +39,10 @@
           <div class="stat-card stat-card--favorite"><div class="num" x-text="stats?.favorites || 0"></div><div class="label" x-text="infoValue('info_stat_favorites_label', '你的收藏')">你的收藏</div></div>
           <div class="stat-card stat-card--conversation"><div class="num" x-text="stats?.conversations || 0"></div><div class="label" x-text="infoValue('info_stat_conversations_label', '你的会话')">你的会话</div></div>
         </div>
+        <div class="form-panel flex flex-col md:flex-row md:items-center gap-4">
+          <div class="grow"><strong>开源许可与源码</strong><p class="text-sm text-slate-400 mt-1">查看内部兼容组件的许可证、来源与对应源码获取方式。</p></div>
+          <a class="xy-btn xy-btn-ghost" href="/app/open-source.html">查看许可</a>
+        </div>
       </section>
     </main>
     <nav class="app-bottom-nav" data-app-bottom-nav></nav>

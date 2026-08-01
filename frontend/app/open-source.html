@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <title>开源许可与源码 · 惑梦</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
+  <style>
+    :root {
+      font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+      color: #f7ead5;
+      background: #0d0b09;
+    }
+    * { box-sizing: border-box; }
+    body {
+      min-height: 100vh;
+      margin: 0;
+      background:
+        radial-gradient(circle at 14% 4%, rgba(214, 158, 76, .15), transparent 28rem),
+        radial-gradient(circle at 88% 92%, rgba(123, 70, 39, .16), transparent 30rem),
+        linear-gradient(145deg, #0b0908, #17120e 56%, #0a0908);
+    }
+    a { color: #e7c17d; }
+    .page { width: min(880px, calc(100% - 2rem)); margin: 0 auto; padding: 2rem 0 4rem; }
+    .top { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 2rem; }
+    .brand { color: #f7ead5; font-weight: 900; letter-spacing: .08em; text-decoration: none; }
+    .back { padding: .65rem .9rem; border: 1px solid rgba(230, 191, 121, .25); border-radius: .8rem; text-decoration: none; }
+    .hero, .card {
+      border: 1px solid rgba(230, 191, 121, .2);
+      background: rgba(24, 19, 14, .84);
+      box-shadow: 0 1.5rem 4rem rgba(0, 0, 0, .28), inset 0 1px rgba(255,255,255,.035);
+      backdrop-filter: blur(18px);
+    }
+    .hero { padding: clamp(1.5rem, 5vw, 2.6rem); border-radius: 1.5rem; }
+    .eyebrow { margin: 0 0 .65rem; color: #c99c57; font-size: .72rem; font-weight: 850; letter-spacing: .16em; }
+    h1 { margin: 0; font-size: clamp(1.7rem, 6vw, 2.7rem); }
+    .lead { max-width: 46rem; margin: 1rem 0 0; color: #c9b9a5; line-height: 1.85; }
+    .stack { display: grid; gap: 1rem; margin-top: 1rem; }
+    .card { padding: 1.35rem; border-radius: 1.1rem; }
+    h2 { margin: 0 0 .7rem; font-size: 1.05rem; }
+    p, li { color: #c5b5a1; line-height: 1.75; }
+    ul { margin: .7rem 0 0; padding-left: 1.25rem; }
+    code { padding: .12rem .35rem; border-radius: .35rem; background: rgba(255,255,255,.065); color: #f1d8ae; }
+    .meta { display: grid; grid-template-columns: 9rem 1fr; gap: .5rem 1rem; margin: 1rem 0 0; }
+    .meta dt { color: #8d806f; }
+    .meta dd { margin: 0; color: #ead8bc; overflow-wrap: anywhere; }
+    .notice { color: #ad9d88; font-size: .83rem; }
+    @media (max-width: 560px) {
+      .page { width: min(100% - 1rem, 880px); padding-top: .8rem; }
+      .top { margin-bottom: .8rem; }
+      .meta { grid-template-columns: 1fr; gap: .15rem; }
+      .meta dd { margin-bottom: .65rem; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <nav class="top" aria-label="页面导航">
+      <a class="brand" href="/app/">惑梦 HOMER</a>
+      <a class="back" href="/app/info.html">返回信息中心</a>
+    </nav>
+
+    <section class="hero">
+      <p class="eyebrow">OPEN SOURCE</p>
+      <h1>开源许可与源码</h1>
+      <p class="lead">惑梦的日常对话界面由网站统一呈现。本页集中列出内部对话兼容模块所使用的开源组件、许可证和对应源码获取方式，不在普通对话操作中展示第三方宣传信息。</p>
+    </section>
+
+    <div class="stack">
+      <section class="card" id="dialogue-runtime">
+        <h2>SillyTavern 对话兼容运行时</h2>
+        <p>该组件依据 GNU Affero General Public License v3.0（AGPL-3.0）许可使用和修改。</p>
+        <dl class="meta">
+          <dt>导入版本</dt><dd>1.18.0（上游提交 <code>51ad27f</code>）</dd>
+          <dt>上游项目</dt><dd><a href="https://github.com/SillyTavern/SillyTavern" rel="noreferrer">github.com/SillyTavern/SillyTavern</a></dd>
+          <dt>许可证</dt><dd><a href="https://www.gnu.org/licenses/agpl-3.0.html" rel="noreferrer">GNU AGPL-3.0</a></dd>
+          <dt>对应源码</dt><dd>当前本地交付版本的完整修改源码位于项目随附的 <code>sillytavern-runtime/</code> 目录；来源与校验信息见 <code>sillytavern-runtime/HOMER-UPSTREAM.md</code>。</dd>
+        </dl>
+      </section>
+
+      <section class="card">
+        <h2>网络部署时的源码提供</h2>
+        <p>部署方应为每个实际运行版本提供与该版本完全对应的源码副本，包含惑梦所作修改和构建、安装所需文件，并通过本页或同等公开入口免费提供。仅链接上游原始仓库不能替代修改版对应源码。</p>
+      </section>
+
+      <section class="card">
+        <h2>第三方兼容扩展</h2>
+        <ul>
+          <li>JS-Slash-Runner / TavernHelper：用于 Slash 命令与角色卡脚本兼容。</li>
+          <li>ST-Prompt-Template：用于角色卡提示词模板兼容。</li>
+          <li>其他前端依赖的版权与许可证保留在各自源码、清单或 LICENSE 文件中。</li>
+        </ul>
+        <p class="notice">本页是法律与源码入口，不代表这些上游项目对惑梦提供背书或承担服务责任。</p>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

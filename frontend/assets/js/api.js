@@ -208,13 +208,15 @@ export const api = {
       request(`/admin/api/global-presets/${encodeURIComponent(kind)}/${encodeURIComponent(presetId)}`, { method: 'POST', body: { preset: payload } }),
     activateGlobalPreset: (kind, presetId) =>
       request(`/admin/api/global-presets/${encodeURIComponent(kind)}/${encodeURIComponent(presetId)}/activate`, { method: 'POST', body: {} }),
-    tavoPlugins: () => request('/admin/api/tavo-plugins'),
+    // Historical method names are retained by the Alpine component, while the
+    // transport targets the canonical dialogue-extension registry.
+    tavoPlugins: () => request('/admin/api/dialogue/extensions'),
     importTavoPlugin: (payload) =>
-      request('/admin/api/tavo-plugins/import', { method: 'POST', body: payload }),
+      request('/admin/api/dialogue/extensions/import', { method: 'POST', body: payload }),
     toggleTavoPlugin: (pluginId, enabled) =>
-      request(`/admin/api/tavo-plugins/${encodeURIComponent(pluginId)}/toggle`, { method: 'POST', body: { enabled: !!enabled } }),
+      request(`/admin/api/dialogue/extensions/${encodeURIComponent(pluginId)}/toggle`, { method: 'POST', body: { enabled: !!enabled } }),
     deleteTavoPlugin: (pluginId) =>
-      request(`/admin/api/tavo-plugins/${encodeURIComponent(pluginId)}/delete`, { method: 'POST', body: {} }),
+      request(`/admin/api/dialogue/extensions/${encodeURIComponent(pluginId)}/delete`, { method: 'POST', body: {} }),
     apps: (params = {}) => {
       const qs = new URLSearchParams(params);
       return request(`/admin/api/apps?${qs}`);

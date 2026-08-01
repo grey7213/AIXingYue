@@ -22,7 +22,7 @@ function adminPanel() {
       { id: 'site', label: '运营配置', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h10M4 18h7m8-7l-2 2-1-1m3 4l-2 2-1-1"/></svg>' },
       { id: 'llm', label: '模型配置', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>' },
       { id: 'global-presets', label: '全局预设', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h10M18 16l2 2 3-3"/></svg>' },
-      { id: 'plugins', label: 'Tavo 插件', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3M5 11h14M7 21h10a2 2 0 002-2v-8H5v8a2 2 0 002 2zm5-6v3m-2-2h4"/></svg>' },
+      { id: 'plugins', label: '对话扩展', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3M5 11h14M7 21h10a2 2 0 002-2v-8H5v8a2 2 0 002 2zm5-6v3m-2-2h4"/></svg>' },
       { id: 'apps', label: '角色卡', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14-7H5a2 2 0 00-2 2v12a2 2 0 002 2h14a2 2 0 002-2V6a2 2 0 00-2-2zm-3 11l-2-2-4 4"/></svg>' },
     ],
     navLabelItems: [
@@ -1956,7 +1956,7 @@ function adminPanel() {
         const data = r.data || r;
         this.tavoPlugins = data.list || [];
       } catch (err) {
-        this.showToast(err.message || '加载 Tavo 插件失败', 'error');
+        this.showToast(err.message || '加载对话扩展失败', 'error');
       } finally { this.loading = false; }
     },
 
@@ -1968,12 +1968,12 @@ function adminPanel() {
       try {
         const dataUrl = await this.readFileAsDataUrl(file);
         const r = await api.admin.importTavoPlugin({ filename: file.name, package_file: dataUrl });
-        const plugin = (r.data || r).plugin || {};
+        const plugin = (r.data || r).extension || {};
         this.tavoPluginDetail = plugin;
-        this.showToast(`插件已导入：${plugin.name || file.name}`, 'success');
+        this.showToast(`扩展已导入：${plugin.display_name || plugin.name || file.name}`, 'success');
         await this.loadTavoPlugins();
       } catch (err) {
-        this.showToast(err.message || '插件导入失败', 'error');
+        this.showToast(err.message || '扩展导入失败', 'error');
       } finally {
         this.tavoPluginUploading = false;
         event.target.value = '';
@@ -1986,27 +1986,27 @@ function adminPanel() {
       try {
         const nextEnabled = !plugin.enabled;
         const r = await api.admin.toggleTavoPlugin(plugin.id, nextEnabled);
-        const updated = (r.data || r).plugin;
+        const updated = (r.data || r).extension;
         const idx = this.tavoPlugins.findIndex(item => item.id === plugin.id);
         if (idx >= 0 && updated) this.tavoPlugins.splice(idx, 1, updated);
         if (this.tavoPluginDetail?.id === plugin.id && updated) this.tavoPluginDetail = updated;
-        this.showToast(nextEnabled ? '插件已启用' : '插件已停用', 'success');
+        this.showToast(nextEnabled ? '扩展已启用' : '扩展已停用', 'success');
       } catch (err) {
-        this.showToast(err.message || '插件状态更新失败', 'error');
+        this.showToast(err.message || '扩展状态更新失败', 'error');
       } finally { this.loading = false; }
     },
 
     async deleteTavoPlugin(plugin) {
       if (!plugin?.id) return;
-      if (!confirm(`删除 Tavo 插件「${plugin.name || plugin.id}」？`)) return;
+      if (!confirm(`删除对话扩展「${plugin.display_name || plugin.name || plugin.id}」？`)) return;
       this.loading = true;
       try {
         await api.admin.deleteTavoPlugin(plugin.id);
         this.tavoPlugins = this.tavoPlugins.filter(item => item.id !== plugin.id);
         if (this.tavoPluginDetail?.id === plugin.id) this.tavoPluginDetail = null;
-        this.showToast('插件已删除', 'success');
+        this.showToast('扩展已删除', 'success');
       } catch (err) {
-        this.showToast(err.message || '插件删除失败', 'error');
+        this.showToast(err.message || '扩展删除失败', 'error');
       } finally { this.loading = false; }
     },
 
@@ -2015,17 +2015,14 @@ function adminPanel() {
     },
 
     tavoPluginFeatureBadges(plugin) {
-      const features = plugin?.features || {};
-      const labels = {
-        inputActions: '输入动作',
-        sidebar: '侧栏',
-        messageActions: '消息动作',
-        htmlFragments: 'HTML 片段',
-        settings: '设置项',
-      };
-      return Object.entries(labels)
-        .map(([key, label]) => ({ key, label, count: Number(features[key] || 0) }))
-        .filter(item => item.count > 0);
+      const badges = [];
+      if (plugin?.js) badges.push({ key: 'js', label: 'JavaScript', count: 1 });
+      if (plugin?.css) badges.push({ key: 'css', label: 'CSS', count: 1 });
+      const hookCount = Object.keys(plugin?.hooks || {}).length;
+      if (hookCount) badges.push({ key: 'hooks', label: '生命周期', count: hookCount });
+      const requiredCount = Array.isArray(plugin?.requires) ? plugin.requires.length : 0;
+      if (requiredCount) badges.push({ key: 'requires', label: '必需依赖', count: requiredCount });
+      return badges;
     },
 
     emptyAppForm() {

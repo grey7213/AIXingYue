@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import sqlite3
 import time
@@ -30,7 +31,7 @@ from spine_media_support import (
 MEDIA_RULES = {
     "bgm": {"mimes": {"audio/mpeg", "audio/mp3"}, "max_size": 30 * 1024 * 1024},
     "portrait": {"mimes": {"image/png", "image/jpeg", "image/webp", "image/gif"}, "max_size": 20 * 1024 * 1024},
-    "background": {"mimes": {"image/png", "image/jpeg", "image/webp", "image/gif"}, "max_size": 20 * 1024 * 1024},
+    "background": {"mimes": {"image/png", "image/jpeg", "image/webp", "image/gif", "video/mp4", "video/webm"}, "max_size": 80 * 1024 * 1024},
     "spine": {"mimes": set(SPINE_MIMES), "max_size": SPINE_MAX_UPLOAD_BYTES},
 }
 UI_ACTIONS = {"open_popup", "show_floating", "switch_bgm", "open_sidebar", "set_scene"}
@@ -60,13 +61,27 @@ CHAT_SHELL_LIMITS = {
     "javascript": 240000,
     "permissions": len(CHAT_SHELL_PERMISSIONS),
 }
+STAGE_LAYOUTS = {"standard", "landscape", "split", "visual_novel"}
+STRUCTURED_COMPONENT_TYPES = {"map", "inventory", "relationship", "skill_tree", "status"}
+SAFE_COLOR = re.compile(r"^(?:#[0-9a-f]{3,8}|rgba?\([^)]{1,28}\)|hsla?\([^)]{1,28}\))$", re.I)
 BAD_REGEX = re.compile(r"\((?:[^()]|\\.)*[+*](?:[^()]|\\.)*\)[+*{]")
 AMBIGUOUS_REGEX = re.compile(r"\((?:[^()]|\\.)*\|(?:[^()]|\\.)*\)\s*(?:[+*]|\{\d*,?\d*\})")
 BAD_HTML = re.compile(r"<(?:script|style|iframe|object|embed|base|form|meta|link)\b|\bon\w+\s*=|\bsrcdoc\s*=", re.I)
 BAD_CSS = re.compile(r"@(?:import|font-face)|\b(?:expression|behavior|-moz-binding)\s*:|url\s*\(", re.I)
 MAX_ASSETS_PER_OWNER = 200
+MAX_WORLD_INFO_ENTRIES = 2000
 MAX_PENDING_INTENTS_PER_HOUR = 40
+MAX_UI_RULES = 200
+MAX_SIDEBARS = 20
+MAX_CARD_EXPERIENCE_MARKUP_BYTES = 1_000_000
+MAX_CARD_EXPERIENCE_UNKNOWN_BYTES = 256_000
+MAX_STRUCTURED_COMPONENT_BYTES = 100_000
+MAX_STRUCTURED_COMPONENT_ITEMS = 200
+MAX_STRUCTURED_MAP_DEPTH = 7
 DEFAULT_STALE_SECONDS = 24 * 60 * 60
+
+_OMIT = object()
+_UNSAFE_JSON_KEYS = {"__proto__", "prototype", "constructor"}
 
 
 CARD_MEDIA_TABLE_SQL = """
@@ -243,6 +258,10 @@ def _sniff_mime(head: bytes) -> str:
         return "audio/mpeg"
     if head.startswith(b"PK\x03\x04"):
         return "application/zip"
+    if len(head) >= 12 and head[4:8] == b"ftyp":
+        return "video/mp4"
+    if head.startswith(b"\x1a\x45\xdf\xa3"):
+        return "video/webm"
     return "application/octet-stream"
 
 
@@ -328,6 +347,7 @@ class CardMediaService:
         extension = {
             "audio/mpeg": ".mp3", "audio/mp3": ".mp3", "image/png": ".png",
             "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif",
+            "video/mp4": ".mp4", "video/webm": ".webm",
             "application/zip": ".spine.zip", "application/x-zip-compressed": ".spine.zip",
         }[mime]
         object_key = f"{owner[:24]}/{asset_id}{extension}"
@@ -671,6 +691,99 @@ class CardMediaService:
         ).fetchall()
 
 
+@dataclass
+class _ByteBudget:
+    remaining: int
+
+    def reserve(self, amount: int) -> bool:
+        cost = max(0, int(amount))
+        if cost > self.remaining:
+            return False
+        self.remaining -= cost
+        return True
+
+    def take(self, value: object, maximum: int) -> str:
+        text = str(value or "")
+        if maximum <= 0 or self.remaining <= 0:
+            return ""
+        encoded = text.encode("utf-8")[:min(maximum, self.remaining)]
+        output = encoded.decode("utf-8", errors="ignore")
+        self.remaining -= len(output.encode("utf-8"))
+        return output
+
+
+def _bounded_json_clone(value: object, budget: _ByteBudget, depth: int = 0) -> object:
+    """Keep future protocol fields opaque without accepting unbounded JSON."""
+    if depth > 6 or budget.remaining <= 0:
+        return _OMIT
+    if value is None or isinstance(value, bool):
+        return value if budget.reserve(5) else _OMIT
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if not math.isfinite(float(value)):
+            return _OMIT
+        return value if budget.reserve(len(str(value).encode("utf-8")) + 1) else _OMIT
+    if isinstance(value, str):
+        return budget.take(value, 20_000)
+    if isinstance(value, list):
+        if not budget.reserve(2):
+            return _OMIT
+        output = []
+        for item in value[:100]:
+            if output and not budget.reserve(1):
+                break
+            cloned = _bounded_json_clone(item, budget, depth + 1)
+            if cloned is not _OMIT:
+                output.append(cloned)
+        return output
+    if isinstance(value, dict):
+        if not budget.reserve(2):
+            return _OMIT
+        output: dict = {}
+        for raw_key, item in list(value.items())[:100]:
+            key = str(raw_key or "").strip()[:80]
+            if not key or key in _UNSAFE_JSON_KEYS:
+                continue
+            if not budget.reserve(len(key.encode("utf-8")) + (1 if not output else 2)):
+                break
+            cloned = _bounded_json_clone(item, budget, depth + 1)
+            if cloned is not _OMIT:
+                output[key] = cloned
+        return output
+    return _OMIT
+
+
+def _preserved_unknown_fields(raw: dict, known: set[str], budget: _ByteBudget) -> dict:
+    output: dict = {}
+    for raw_key, value in raw.items():
+        key = str(raw_key or "").strip()[:80]
+        if not key or key in known or key in _UNSAFE_JSON_KEYS:
+            continue
+        if not budget.reserve(len(key.encode("utf-8")) + (1 if not output else 2)):
+            break
+        cloned = _bounded_json_clone(value, budget)
+        if cloned is not _OMIT:
+            output[key] = cloned
+    return output
+
+
+def merge_card_experience_fields(base: object, update: object, depth: int = 0) -> dict:
+    """Merge a workshop update without erasing opaque future object fields."""
+    original = base if isinstance(base, dict) else {}
+    incoming = update if isinstance(update, dict) else {}
+    if depth > 6:
+        return dict(incoming)
+    output = {key: value for key, value in original.items() if str(key) not in _UNSAFE_JSON_KEYS}
+    for raw_key, value in incoming.items():
+        key = str(raw_key)
+        if key in _UNSAFE_JSON_KEYS:
+            continue
+        if isinstance(value, dict) and isinstance(output.get(key), dict):
+            output[key] = merge_card_experience_fields(output[key], value, depth + 1)
+        else:
+            output[key] = value
+    return output
+
+
 def _safe_regex(value: object, flags: object = "i") -> tuple[str, str]:
     pattern = str(value or "").strip()[:240]
     clean_flags = "".join(dict.fromkeys(ch for ch in str(flags or "") if ch in "ims"))
@@ -689,13 +802,212 @@ def _safe_regex(value: object, flags: object = "i") -> tuple[str, str]:
     return pattern, clean_flags
 
 
-def _safe_markup(value: object, maximum: int, kind: str) -> str:
+def _safe_markup(value: object, maximum: int, kind: str, budget: _ByteBudget | None = None) -> str:
     text = str(value or "")[:maximum]
     if kind == "html" and BAD_HTML.search(text):
         raise CardMediaError("unsafe HTML in card experience")
     if kind == "css" and BAD_CSS.search(text):
         raise CardMediaError("unsafe CSS in card experience")
-    return text
+    return budget.take(text, maximum * 4) if budget is not None else text
+
+
+def _component_text(value: object, maximum: int = 4000) -> str:
+    return str(value if value is not None else "")[:maximum]
+
+
+def _component_id(value: object, fallback: str = "") -> str:
+    text = _component_text(value, 100).strip()
+    text = re.sub(r"[^\w:.-]", "-", text)
+    return text or fallback
+
+
+def _component_number(value: object, minimum: float, maximum: float, fallback: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    return max(minimum, min(maximum, number)) if math.isfinite(number) else fallback
+
+
+def _component_scalar(value: object, maximum: int = 80) -> str | int | float | bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and math.isfinite(value):
+        return value
+    return _component_text(value, maximum)
+
+
+def _component_url(value: object) -> str:
+    text = _component_text(value, 2048).strip()
+    if text.startswith("/") and not text.startswith("//"):
+        return text
+    if re.match(r"^https://", text, re.I):
+        return text
+    if len(text) <= 32_768 and re.match(r"^data:image/(?:png|jpe?g|webp|gif);base64,", text, re.I):
+        return text
+    return ""
+
+
+def _normalize_map_node(raw: object, index: int, depth: int, counter: list[int]) -> dict | None:
+    if not isinstance(raw, dict) or depth > MAX_STRUCTURED_MAP_DEPTH or counter[0] >= MAX_STRUCTURED_COMPONENT_ITEMS:
+        return None
+    counter[0] += 1
+    output = {
+        "id": _component_id(raw.get("id"), f"map-{depth}-{index}"),
+        "name": _component_text(raw.get("name") or raw.get("title") or f"区域 {index + 1}", 100),
+        "description": _component_text(raw.get("description") or raw.get("desc"), 2000),
+        "prompt": _component_text(raw.get("prompt"), 500),
+        "children": [],
+    }
+    image = _component_url(raw.get("image") or raw.get("background"))
+    if image:
+        output["image"] = image
+    for key, minimum, maximum in (("x", 5, 95), ("y", 8, 92)):
+        if raw.get(key) is not None:
+            output[key] = _component_number(raw.get(key), minimum, maximum, minimum)
+    children = raw.get("children") if isinstance(raw.get("children"), list) else []
+    for child_index, child in enumerate(children):
+        normalized = _normalize_map_node(child, child_index, depth + 1, counter)
+        if normalized is not None:
+            output["children"].append(normalized)
+        if counter[0] >= MAX_STRUCTURED_COMPONENT_ITEMS:
+            break
+    return output
+
+
+def normalize_structured_component_payload(value: object) -> dict:
+    """Normalize one ``homer-ui-json-v1`` block before trusted reuse."""
+    if not isinstance(value, dict):
+        raise CardMediaError("structured component must be an object")
+    try:
+        encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise CardMediaError("structured component is not JSON serializable") from exc
+    if len(encoded) > MAX_STRUCTURED_COMPONENT_BYTES:
+        raise CardMediaError("structured component is too large")
+    component_type = str(value.get("type") or "").strip().lower().replace("-", "_")
+    if component_type not in STRUCTURED_COMPONENT_TYPES:
+        raise CardMediaError("unsupported structured component type")
+    output: dict = {
+        "type": component_type,
+        "title": _component_text(value.get("title"), 120),
+        "subtitle": _component_text(value.get("subtitle"), 240),
+    }
+
+    if component_type == "map":
+        root = _normalize_map_node(value.get("root") or value.get("map") or value, 0, 0, [0])
+        output["root"] = root or {
+            "id": "map-0-0", "name": "区域 1", "description": "", "prompt": "", "children": [],
+        }
+        return output
+
+    if component_type == "inventory":
+        items = []
+        for index, raw in enumerate(value.get("items") if isinstance(value.get("items"), list) else []):
+            if not isinstance(raw, dict) or len(items) >= MAX_STRUCTURED_COMPONENT_ITEMS:
+                continue
+            item = {
+                "id": _component_id(raw.get("id"), f"item-{index + 1}"),
+                "name": _component_text(raw.get("name") or "未命名物品", 100),
+                "description": _component_text(raw.get("description") or raw.get("desc"), 800),
+                "quantity": _component_scalar(raw.get("quantity", raw.get("qty", "")), 20),
+                "category": _component_text(raw.get("category") or raw.get("type"), 60),
+                "rarity": _component_text(raw.get("rarity"), 40),
+            }
+            image = _component_url(raw.get("icon") or raw.get("image"))
+            if image:
+                item["icon"] = image
+            items.append(item)
+        output["items"] = items
+        return output
+
+    if component_type == "relationship":
+        center_raw = value.get("center")
+        center = center_raw if isinstance(center_raw, dict) else {"name": center_raw or "我"}
+        output["center"] = {
+            "id": _component_id(center.get("id"), "center"),
+            "name": _component_text(center.get("name") or center.get("label") or "我", 80),
+            "description": _component_text(center.get("description"), 500),
+        }
+        nodes = []
+        raw_nodes = value.get("nodes") if isinstance(value.get("nodes"), list) else value.get("people")
+        for index, raw in enumerate(raw_nodes if isinstance(raw_nodes, list) else []):
+            if not isinstance(raw, dict) or len(nodes) >= 60:
+                continue
+            nodes.append({
+                "id": _component_id(raw.get("id"), f"person-{index + 1}"),
+                "name": _component_text(raw.get("name") or raw.get("label") or f"人物 {index + 1}", 80),
+                "description": _component_text(raw.get("description") or raw.get("desc"), 500),
+                "relation": _component_text(raw.get("relation") or raw.get("type"), 80),
+            })
+        output["nodes"] = nodes
+        valid_ids = {output["center"]["id"], *(item["id"] for item in nodes)}
+        edges = []
+        for raw in value.get("edges") if isinstance(value.get("edges"), list) else []:
+            if not isinstance(raw, dict) or len(edges) >= MAX_STRUCTURED_COMPONENT_ITEMS:
+                continue
+            source = _component_id(raw.get("source"))
+            target = _component_id(raw.get("target"))
+            if source not in valid_ids or target not in valid_ids or source == target:
+                continue
+            edges.append({
+                "source": source,
+                "target": target,
+                "label": _component_text(raw.get("label") or raw.get("relation"), 80),
+            })
+        output["edges"] = edges
+        return output
+
+    if component_type == "skill_tree":
+        raw_nodes = value.get("nodes") if isinstance(value.get("nodes"), list) else value.get("skills")
+        nodes = []
+        for index, raw in enumerate(raw_nodes if isinstance(raw_nodes, list) else []):
+            if not isinstance(raw, dict) or len(nodes) >= MAX_STRUCTURED_COMPONENT_ITEMS:
+                continue
+            requires = []
+            for item in raw.get("requires") if isinstance(raw.get("requires"), list) else []:
+                dependency = _component_id(item)
+                if dependency and dependency not in requires:
+                    requires.append(dependency)
+                if len(requires) >= 20:
+                    break
+            node = {
+                "id": _component_id(raw.get("id"), f"skill-{index + 1}"),
+                "name": _component_text(raw.get("name") or "技能", 80),
+                "description": _component_text(raw.get("description") or raw.get("desc"), 1200),
+                "tier": int(_component_number(raw.get("tier", raw.get("level", 0)), 0, 20, 0)),
+                "requires": requires,
+                "unlocked": raw.get("unlocked") is not False,
+            }
+            icon = _component_url(raw.get("icon") or raw.get("image"))
+            if icon:
+                node["icon"] = icon
+            nodes.append(node)
+        output["nodes"] = nodes
+        output["hint"] = _component_text(value.get("hint"), 300)
+        return output
+
+    items = []
+    raw_items = value.get("items") if isinstance(value.get("items"), list) else value.get("stats")
+    for index, raw in enumerate(raw_items if isinstance(raw_items, list) else []):
+        if not isinstance(raw, dict) or len(items) >= MAX_STRUCTURED_COMPONENT_ITEMS:
+            continue
+        item = {
+            "id": _component_id(raw.get("id"), f"status-{index + 1}"),
+            "label": _component_text(raw.get("label") or raw.get("name") or "状态", 80),
+            "value": _component_scalar(raw.get("value", ""), 80),
+            "description": _component_text(raw.get("description"), 500),
+        }
+        if raw.get("max") is not None:
+            item["max"] = _component_number(raw.get("max"), 0, 1_000_000_000, 0)
+        icon = _component_url(raw.get("icon") or raw.get("image"))
+        if icon:
+            item["icon"] = icon
+        items.append(item)
+    output["items"] = items
+    return output
 
 
 def _chat_shell_source(value: object, maximum: int) -> str:
@@ -732,7 +1044,7 @@ def _normalize_chat_shell(value: object) -> dict:
 def normalize_world_media_bindings(value: object, allowed_assets: dict[str, str]) -> list[dict]:
     entries = value if isinstance(value, list) else []
     output: list[dict] = []
-    for index, raw in enumerate(entries[:200]):
+    for index, raw in enumerate(entries[:MAX_WORLD_INFO_ENTRIES]):
         if not isinstance(raw, dict):
             continue
         item = dict(raw)
@@ -758,13 +1070,65 @@ def normalize_world_media_bindings(value: object, allowed_assets: dict[str, str]
 
 def normalize_card_experience(value: object, allowed_assets: dict[str, str], world_ids: set[str]) -> dict:
     raw = value if isinstance(value, dict) else {}
+    unknown_budget = _ByteBudget(MAX_CARD_EXPERIENCE_UNKNOWN_BYTES)
+    markup_budget = _ByteBudget(MAX_CARD_EXPERIENCE_MARKUP_BYTES)
+    stage_raw = raw.get("stage") if isinstance(raw.get("stage"), dict) else {}
+    stage_background = _clean_id(stage_raw.get("background_asset_id"), "asset_id", optional=True)
+    stage_portrait = _clean_id(stage_raw.get("portrait_asset_id"), "asset_id", optional=True)
+    if stage_background and allowed_assets.get(stage_background) != "background":
+        raise CardMediaError("stage background is not an owned background asset")
+    if stage_portrait and allowed_assets.get(stage_portrait) not in {"portrait", "spine"}:
+        raise CardMediaError("stage portrait is not an owned portrait/spine asset")
+
+    def _stage_color(key: str, fallback: str) -> str:
+        candidate = str(stage_raw.get(key) or "").strip()[:32]
+        return candidate if SAFE_COLOR.fullmatch(candidate) else fallback
+
+    layout = str(stage_raw.get("layout") or "standard")
+    stage = {**_preserved_unknown_fields(stage_raw, {
+        "enabled", "layout", "chat_width", "background_asset_id", "portrait_asset_id",
+        "show_portrait", "portrait_position", "portrait_width", "portrait_opacity",
+        "show_avatars", "avatar_position", "accent_color", "user_bubble_color",
+        "assistant_bubble_color", "text_color", "bubble_radius", "font_scale",
+        "input_style", "input_background_color", "input_text_color", "input_border_color",
+    }, unknown_budget),
+        "enabled": bool(stage_raw.get("enabled")),
+        "layout": layout if layout in STAGE_LAYOUTS else "standard",
+        "chat_width": int(_component_number(stage_raw.get("chat_width", 72), 35, 100, 72)),
+        "background_asset_id": stage_background,
+        "portrait_asset_id": stage_portrait,
+        "show_portrait": stage_raw.get("show_portrait") is not False,
+        "portrait_position": stage_raw.get("portrait_position") if stage_raw.get("portrait_position") in {"left", "center", "right"} else "right",
+        "portrait_width": int(_component_number(stage_raw.get("portrait_width", 43), 18, 70, 43)),
+        "portrait_opacity": _component_number(stage_raw.get("portrait_opacity", 1), 0.2, 1, 1),
+        "show_avatars": stage_raw.get("show_avatars") is not False,
+        "avatar_position": stage_raw.get("avatar_position") if stage_raw.get("avatar_position") in {"split", "left", "right"} else "split",
+        "accent_color": _stage_color("accent_color", "#d7b878"),
+        "user_bubble_color": _stage_color("user_bubble_color", "#5b4635"),
+        "assistant_bubble_color": _stage_color("assistant_bubble_color", "#211d19"),
+        "text_color": _stage_color("text_color", "#fff8ed"),
+        "bubble_radius": int(_component_number(stage_raw.get("bubble_radius", 18), 0, 36, 18)),
+        "font_scale": _component_number(stage_raw.get("font_scale", 1), 0.8, 1.35, 1),
+        "input_style": "floating" if stage_raw.get("input_style") == "floating" else "dock",
+        "input_background_color": _stage_color("input_background_color", "#211d19"),
+        "input_text_color": _stage_color("input_text_color", "#fff8ed"),
+        "input_border_color": _stage_color("input_border_color", "#d7b878"),
+    }
+    components_raw = raw.get("structured_components") if isinstance(raw.get("structured_components"), dict) else {}
+    structured_components = _preserved_unknown_fields(
+        components_raw,
+        {"enabled", *STRUCTURED_COMPONENT_TYPES},
+        unknown_budget,
+    )
+    structured_components["enabled"] = components_raw.get("enabled") is not False
+    structured_components.update({kind: components_raw.get(kind) is not False for kind in sorted(STRUCTURED_COMPONENT_TYPES)})
     bgm_raw = raw.get("bgm") if isinstance(raw.get("bgm"), dict) else {}
     default_bgm = _clean_id(bgm_raw.get("default_asset_id"), "asset_id", optional=True)
     if default_bgm and allowed_assets.get(default_bgm) != "bgm":
         raise CardMediaError("default BGM is not an owned BGM asset")
     rules: list[dict] = []
     for index, item in enumerate(raw.get("ui_rules") if isinstance(raw.get("ui_rules"), list) else []):
-        if not isinstance(item, dict) or len(rules) >= 40:
+        if not isinstance(item, dict) or len(rules) >= MAX_UI_RULES:
             continue
         pattern, flags = _safe_regex(item.get("pattern"), item.get("flags"))
         action = str(item.get("action") or "open_popup")
@@ -775,7 +1139,10 @@ def normalize_card_experience(value: object, allowed_assets: dict[str, str], wor
             raise CardMediaError("UI rule BGM target is invalid")
         if action == "set_scene" and target not in world_ids:
             raise CardMediaError("UI rule scene target is invalid")
-        rules.append({
+        rules.append({**_preserved_unknown_fields(item, {
+            "id", "name", "enabled", "pattern", "find", "flags", "action", "target_id",
+            "template_html", "html", "scoped_css", "css", "duration_ms", "order", "remove_match",
+        }, unknown_budget),
             "id": _clean_id(item.get("id") or f"ui-rule-{index + 1}", "ui_rule_id"),
             "name": str(item.get("name") or f"界面规则 {index + 1}")[:80],
             "enabled": item.get("enabled") is not False,
@@ -783,50 +1150,65 @@ def normalize_card_experience(value: object, allowed_assets: dict[str, str], wor
             "flags": flags,
             "action": action,
             "target_id": target,
-            "template_html": _safe_markup(item.get("template_html"), 30000, "html"),
-            "scoped_css": _safe_markup(item.get("scoped_css"), 30000, "css"),
-            "duration_ms": max(0, min(120000, int(item.get("duration_ms") or 0))),
-            "order": max(-10000, min(10000, int(item.get("order") or index + 1))),
+            "template_html": _safe_markup(item.get("template_html", item.get("html")), 30000, "html", markup_budget),
+            "scoped_css": _safe_markup(item.get("scoped_css", item.get("css")), 30000, "css", markup_budget),
+            "duration_ms": int(_component_number(item.get("duration_ms", 0), 0, 120000, 0)),
+            "order": int(_component_number(item.get("order", index + 1), -10000, 10000, index + 1)),
             "remove_match": item.get("remove_match") is not False,
         })
     sidebars: list[dict] = []
     for index, item in enumerate(raw.get("sidebars") if isinstance(raw.get("sidebars"), list) else []):
-        if not isinstance(item, dict) or len(sidebars) >= 20:
+        if not isinstance(item, dict) or len(sidebars) >= MAX_SIDEBARS:
             continue
         sidebar_id = _clean_id(item.get("id") or f"sidebar-{index + 1}", "sidebar_id")
         pattern, flags = ("", "")
         if str(item.get("open_pattern") or "").strip():
             pattern, flags = _safe_regex(item.get("open_pattern"), item.get("flags"))
-        world_id = _clean_id(item.get("world_entry_id"), "world_entry_id", optional=True)
-        mode = "worldbook" if item.get("content_mode") == "worldbook" else "static"
-        if mode == "worldbook" and world_id not in world_ids:
-            raise CardMediaError("sidebar worldbook target is invalid")
-        sidebars.append({
+        # Worldbook bodies are private. Legacy references remain in the source
+        # card snapshot, while the public runtime receives only static content.
+        sidebars.append({**_preserved_unknown_fields(item, {
+            "id", "name", "enabled", "position", "width", "order", "trigger_label",
+            "open_pattern", "flags", "content_mode", "world_entry_id", "content_html", "scoped_css",
+        }, unknown_budget),
             "id": sidebar_id,
             "name": str(item.get("name") or f"侧栏 {index + 1}")[:80],
             "enabled": item.get("enabled") is not False,
             "position": "left" if item.get("position") == "left" else "right",
-            "width": max(240, min(720, int(item.get("width") or 340))),
-            "order": max(-10000, min(10000, int(item.get("order") or index + 1))),
+            "width": int(_component_number(item.get("width", 340), 240, 720, 340)),
+            "order": int(_component_number(item.get("order", index + 1), -10000, 10000, index + 1)),
             "trigger_label": str(item.get("trigger_label") or item.get("name") or "侧栏")[:24],
             "open_pattern": pattern,
             "flags": flags,
-            "content_mode": mode,
-            "world_entry_id": world_id,
-            "content_html": _safe_markup(item.get("content_html"), 50000, "html"),
-            "scoped_css": _safe_markup(item.get("scoped_css"), 30000, "css"),
+            "content_mode": "static",
+            "world_entry_id": "",
+            "content_html": _safe_markup(item.get("content_html"), 50000, "html", markup_budget),
+            "scoped_css": _safe_markup(item.get("scoped_css"), 30000, "css", markup_budget),
         })
     sidebar_ids = {item["id"] for item in sidebars}
     if any(rule["action"] == "open_sidebar" and rule["target_id"] not in sidebar_ids for rule in rules):
         raise CardMediaError("UI rule sidebar target is invalid")
-    galgame = _normalize_galgame(raw.get("galgame"), allowed_assets)
-    return {
-        "version": 1,
-        "bgm": {
+    galgame_raw = raw.get("galgame") if isinstance(raw.get("galgame"), dict) else {}
+    galgame = {
+        **_preserved_unknown_fields(galgame_raw, {
+            "enabled", "dialogue_position", "portrait_layout", "default_portrait_id",
+            "default_background_id", "portrait_directive", "background_directive",
+            "hide_bubble_avatar", "typewriter",
+        }, unknown_budget),
+        **_normalize_galgame(galgame_raw, allowed_assets),
+    }
+    return {**_preserved_unknown_fields(raw, {
+        "version", "stage", "structured_components", "bgm", "ui_rules", "sidebars", "galgame",
+    }, unknown_budget),
+        "version": 2,
+        "stage": stage,
+        "structured_components": structured_components,
+        "bgm": {**_preserved_unknown_fields(bgm_raw, {
+            "enabled", "default_asset_id", "autoplay", "volume", "loop", "show_floating_player",
+        }, unknown_budget),
             "enabled": bool(bgm_raw.get("enabled")),
             "default_asset_id": default_bgm,
             "autoplay": "after-interaction",
-            "volume": max(0.0, min(1.0, float(bgm_raw.get("volume", 0.45)))),
+            "volume": _component_number(bgm_raw.get("volume", 0.45), 0, 1, 0.45),
             "loop": bgm_raw.get("loop") is not False,
             "show_floating_player": bgm_raw.get("show_floating_player") is not False,
         },
@@ -842,7 +1224,7 @@ DEFAULT_BACKGROUND_DIRECTIVE = r"\[(?:背景|bg|scene)[:：]\s*([^\]]+)\]"
 
 
 def _normalize_galgame(value: object, allowed_assets: dict[str, str]) -> dict:
-    """校验并归一化 galgame（横板立绘对话）配置。未知字段一律丢弃。"""
+    """校验并归一化 galgame（横板立绘对话）的已知字段。"""
     raw = value if isinstance(value, dict) else {}
     default_portrait = _clean_id(raw.get("default_portrait_id"), "asset_id", optional=True)
     if default_portrait and allowed_assets.get(default_portrait) not in {"portrait", "spine"}:

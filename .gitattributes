@@ -1,0 +1,3 @@
+# Preserve imported SillyTavern and bundled extension snapshots byte-for-byte.
+# Their upstream whitespace is not project-authored and is excluded from diff checks.
+sillytavern-runtime/** -whitespace

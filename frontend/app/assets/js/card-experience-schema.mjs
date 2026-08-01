@@ -1,4 +1,4 @@
-export const CARD_EXPERIENCE_VERSION = 1;
+export const CARD_EXPERIENCE_VERSION = 2;
 
 export const MEDIA_KINDS = Object.freeze(['bgm', 'portrait', 'background', 'spine']);
 export const UI_ACTIONS = Object.freeze(['open_popup', 'show_floating', 'switch_bgm', 'open_sidebar', 'set_scene']);
@@ -27,6 +27,52 @@ export const CHAT_SHELL_LIMITS = Object.freeze({
   javascript: 240000,
   permissions: CHAT_SHELL_PERMISSIONS.length,
 });
+export const STAGE_LAYOUTS = Object.freeze(['standard', 'landscape', 'split', 'visual_novel']);
+export const STRUCTURED_COMPONENT_TYPES = Object.freeze(['map', 'inventory', 'relationship', 'skill_tree', 'status']);
+
+export const STAGE_THEME_PRESETS = Object.freeze([
+  Object.freeze({ id: 'warm', name: '暖金', accent_color: '#d7b878', user_bubble_color: '#5b4635', assistant_bubble_color: '#211d19', text_color: '#fff8ed' }),
+  Object.freeze({ id: 'night', name: '夜幕', accent_color: '#63d7c6', user_bubble_color: '#28465a', assistant_bubble_color: '#17252d', text_color: '#effffb' }),
+  Object.freeze({ id: 'sakura', name: '绯樱', accent_color: '#ef8fa5', user_bubble_color: '#925167', assistant_bubble_color: '#382932', text_color: '#fff7fa' }),
+  Object.freeze({ id: 'daylight', name: '清昼', accent_color: '#357b8c', user_bubble_color: '#d9edf0', assistant_bubble_color: '#f4f1ea', text_color: '#233038' }),
+]);
+
+export const BUBBLE_STYLE_PRESETS = Object.freeze([
+  Object.freeze({ id: 'compact', name: '利落', bubble_radius: 6 }),
+  Object.freeze({ id: 'soft', name: '柔和', bubble_radius: 18 }),
+  Object.freeze({ id: 'round', name: '圆润', bubble_radius: 30 }),
+]);
+
+export const UI_ACTION_OPTIONS = Object.freeze([
+  Object.freeze({ id: 'open_popup', name: '弹窗', hint: '在对话上方打开内容面板' }),
+  Object.freeze({ id: 'show_floating', name: '悬浮窗', hint: '显示可自动关闭的轻量提示' }),
+  Object.freeze({ id: 'switch_bgm', name: '切换 BGM', hint: '切换到素材库中的音乐' }),
+  Object.freeze({ id: 'open_sidebar', name: '打开侧栏', hint: '打开创作者填写的公开侧栏' }),
+  Object.freeze({ id: 'set_scene', name: '切换场景', hint: '触发世界书绑定的立绘、背景和 BGM' }),
+]);
+
+export const STRUCTURED_COMPONENT_OPTIONS = Object.freeze([
+  Object.freeze({
+    id: 'map', name: '层级地图', fields: 'title、root；节点使用 name、description、children',
+    example: { type: 'map', title: '世界地图', root: { name: '大陆', description: '选择区域继续探索', children: [{ name: '王都', description: '贸易与行政中心', children: [] }] } },
+  }),
+  Object.freeze({
+    id: 'inventory', name: '物品清单', fields: 'title、items；物品使用 name、description、quantity、category',
+    example: { type: 'inventory', title: '随身物品', items: [{ name: '旧钥匙', description: '刻着陌生纹章', quantity: 1, category: '关键物品' }] },
+  }),
+  Object.freeze({
+    id: 'relationship', name: '人物关系', fields: 'title、nodes、edges；连线使用 source、target、label',
+    example: { type: 'relationship', title: '人物关系', nodes: [{ id: 'you', name: '你' }, { id: 'guide', name: '向导' }], edges: [{ source: 'you', target: 'guide', label: '同行' }] },
+  }),
+  Object.freeze({
+    id: 'skill_tree', name: '技能树', fields: 'title、nodes；技能使用 id、name、description、requires、unlocked',
+    example: { type: 'skill_tree', title: '探索技能', nodes: [{ id: 'observe', name: '观察', description: '发现隐藏线索', requires: [], unlocked: true }] },
+  }),
+  Object.freeze({
+    id: 'status', name: '状态面板', fields: 'title、items；状态使用 label、value，可选 max、icon',
+    example: { type: 'status', title: '当前状态', items: [{ label: '体力', value: 72, max: 100 }, { label: '好感度', value: 18, max: 100 }] },
+  }),
+]);
 
 const clamp = (value, min, max, fallback) => {
   const number = Number(value);
@@ -45,6 +91,8 @@ export function newStableId(prefix = 'item') {
 export function defaultCardExperience() {
   return {
     version: CARD_EXPERIENCE_VERSION,
+    stage: defaultStage(),
+    structured_components: defaultStructuredComponents(),
     bgm: {
       enabled: false,
       default_asset_id: '',
@@ -94,6 +142,108 @@ export function normalizeChatShell(raw) {
     permissions,
     fallback: 'default',
   };
+}
+
+export function defaultStage() {
+  return {
+    enabled: false,
+    layout: 'standard',
+    chat_width: 72,
+    background_asset_id: '',
+    portrait_asset_id: '',
+    show_portrait: true,
+    portrait_position: 'right',
+    portrait_width: 43,
+    portrait_opacity: 1,
+    show_avatars: true,
+    avatar_position: 'split',
+    accent_color: '#d7b878',
+    user_bubble_color: '#5b4635',
+    assistant_bubble_color: '#211d19',
+    text_color: '#fff8ed',
+    bubble_radius: 18,
+    font_scale: 1,
+    input_style: 'dock',
+    input_background_color: '#211d19',
+    input_text_color: '#fff8ed',
+    input_border_color: '#d7b878',
+  };
+}
+
+export function defaultStructuredComponents() {
+  return {
+    enabled: true,
+    map: true,
+    inventory: true,
+    relationship: true,
+    skill_tree: true,
+    status: true,
+  };
+}
+
+function color(value, fallback) {
+  const candidate = text(value, 32);
+  return /^(?:#[0-9a-f]{3,8}|rgba?\([^)]{1,28}\)|hsla?\([^)]{1,28}\))$/i.test(candidate) ? candidate : fallback;
+}
+
+export function normalizeStage(raw) {
+  const fallback = defaultStage();
+  if (!raw || typeof raw !== 'object') return fallback;
+  return {
+    enabled: !!raw.enabled,
+    layout: STAGE_LAYOUTS.includes(raw.layout) ? raw.layout : fallback.layout,
+    chat_width: Math.round(clamp(raw.chat_width, 35, 100, fallback.chat_width)),
+    background_asset_id: idText(raw.background_asset_id),
+    portrait_asset_id: idText(raw.portrait_asset_id),
+    show_portrait: raw.show_portrait !== false,
+    portrait_position: ['left', 'center', 'right'].includes(raw.portrait_position) ? raw.portrait_position : fallback.portrait_position,
+    portrait_width: Math.round(clamp(raw.portrait_width, 18, 70, fallback.portrait_width)),
+    portrait_opacity: clamp(raw.portrait_opacity, 0.2, 1, fallback.portrait_opacity),
+    show_avatars: raw.show_avatars !== false,
+    avatar_position: ['split', 'left', 'right'].includes(raw.avatar_position) ? raw.avatar_position : fallback.avatar_position,
+    accent_color: color(raw.accent_color, fallback.accent_color),
+    user_bubble_color: color(raw.user_bubble_color, fallback.user_bubble_color),
+    assistant_bubble_color: color(raw.assistant_bubble_color, fallback.assistant_bubble_color),
+    text_color: color(raw.text_color, fallback.text_color),
+    bubble_radius: Math.round(clamp(raw.bubble_radius, 0, 36, fallback.bubble_radius)),
+    font_scale: clamp(raw.font_scale, 0.8, 1.35, fallback.font_scale),
+    input_style: raw.input_style === 'floating' ? 'floating' : 'dock',
+    input_background_color: color(raw.input_background_color, fallback.input_background_color),
+    input_text_color: color(raw.input_text_color, fallback.input_text_color),
+    input_border_color: color(raw.input_border_color, fallback.input_border_color),
+  };
+}
+
+export function applyStageTheme(stage, presetId) {
+  const preset = STAGE_THEME_PRESETS.find(item => item.id === presetId);
+  if (!preset) return normalizeStage(stage);
+  return normalizeStage({
+    ...(stage && typeof stage === 'object' ? stage : {}),
+    accent_color: preset.accent_color,
+    user_bubble_color: preset.user_bubble_color,
+    assistant_bubble_color: preset.assistant_bubble_color,
+    text_color: preset.text_color,
+    input_background_color: preset.assistant_bubble_color,
+    input_text_color: preset.text_color,
+    input_border_color: preset.accent_color,
+  });
+}
+
+export function applyBubbleStyle(stage, presetId) {
+  const preset = BUBBLE_STYLE_PRESETS.find(item => item.id === presetId);
+  return normalizeStage({
+    ...(stage && typeof stage === 'object' ? stage : {}),
+    ...(preset ? { bubble_radius: preset.bubble_radius } : {}),
+  });
+}
+
+export function normalizeStructuredComponents(raw) {
+  const fallback = defaultStructuredComponents();
+  if (!raw || typeof raw !== 'object') return fallback;
+  return STRUCTURED_COMPONENT_TYPES.reduce((output, type) => {
+    output[type] = raw[type] !== false;
+    return output;
+  }, { enabled: raw.enabled !== false });
 }
 
 export function defaultGalgame() {
@@ -235,6 +385,8 @@ export function normalizeCardExperience(raw) {
   const bgm = raw.bgm && typeof raw.bgm === 'object' ? raw.bgm : {};
   return {
     version: CARD_EXPERIENCE_VERSION,
+    stage: normalizeStage(raw.stage),
+    structured_components: normalizeStructuredComponents(raw.structured_components),
     bgm: {
       enabled: !!bgm.enabled,
       default_asset_id: idText(bgm.default_asset_id),

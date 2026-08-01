@@ -218,6 +218,24 @@ export const api = {
   },
   myAppsCount: () => rawRequest('/console/api/web/my-apps-count'),
   modelPresets: () => rawRequest('/console/api/web/model-presets'),
+  dialogueSession: (appId = '', conversationId = '', { launchOnly = false } = {}) => {
+    const qs = new URLSearchParams();
+    if (appId) qs.set('app_id', appId);
+    if (conversationId) qs.set('conversation_id', conversationId);
+    if (launchOnly) qs.set('launch_only', '1');
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return rawRequest(`/console/api/web/dialogue/session${suffix}`);
+  },
+  dialogueExtensions: () => rawRequest('/console/api/web/dialogue/extensions'),
+  dialogueRuntimeState: (appId = '', conversationId = '') => {
+    const qs = new URLSearchParams();
+    if (appId) qs.set('app_id', appId);
+    if (conversationId) qs.set('conversation_id', conversationId);
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return rawRequest(`/console/api/web/dialogue/runtime-state${suffix}`);
+  },
+  saveDialogueRuntimeState: (payload) =>
+    rawRequest('/console/api/web/dialogue/runtime-state', { method: 'POST', body: payload || {} }),
   creatorAccess: () => rawRequest('/console/api/web/creator-access'),
   ttsVoices: () => rawRequest('/console/api/web/tts/voices'),
   synthesizeTts: (payload) => rawRequest('/console/api/web/tts/synthesize', { method: 'POST', body: payload }),

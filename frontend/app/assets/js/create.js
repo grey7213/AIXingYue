@@ -1,6 +1,9 @@
 import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js?v=20260720-community-versions';
 import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260703-channels-closed';
 import {
+  applyBubbleStyle,
+  applyStageTheme,
+  BUBBLE_STYLE_PRESETS,
   createSidebarTemplate,
   createUiRuleTemplate,
   defaultCardExperience,
@@ -8,7 +11,11 @@ import {
   normalizeCardExperience,
   normalizeMediaAssets,
   normalizeMediaBindings,
-} from '/app/assets/js/card-experience-schema.mjs?v=20260720-community-versions';
+  safeRegExp,
+  STAGE_THEME_PRESETS,
+  STRUCTURED_COMPONENT_OPTIONS,
+  UI_ACTION_OPTIONS,
+} from '/app/assets/js/card-experience-schema.mjs?v=20260802-stage-shell';
 import {
   buildCardPackMediaUpdate,
   isCardPackFilename,
@@ -78,6 +85,12 @@ function createPage() {
     favoriteUiTemplates: [],
     communityFavLoading: false,
     form: emptyForm(),
+    stageThemePresets: STAGE_THEME_PRESETS,
+    bubbleStylePresets: BUBBLE_STYLE_PRESETS,
+    uiActionOptions: UI_ACTION_OPTIONS,
+    structuredComponentOptions: STRUCTURED_COMPONENT_OPTIONS,
+    structuredExampleType: 'map',
+    legacySidebarMigrationCount: 0,
     editingId: '',  // empty = create, set = edit existing app
     cardVersions: [],
     cardVersionsLoading: false,
@@ -336,6 +349,13 @@ function createPage() {
           : [];
         this.form.media_assets = normalizeMediaAssets(app.media_assets);
         this.form.card_experience = normalizeCardExperience(app.card_experience);
+        const legacyWorldbookSidebars = this.form.card_experience.sidebars.filter(bar => bar.content_mode === 'worldbook');
+        this.legacySidebarMigrationCount = legacyWorldbookSidebars.length;
+        for (const bar of legacyWorldbookSidebars) {
+          // 世界书正文不会进入用户端。旧侧栏只保留作者原本明确填写的公开 HTML。
+          bar.content_mode = 'static';
+          bar.world_entry_id = '';
+        }
         this.form.card_prompt_preset = app.card_prompt_preset && typeof app.card_prompt_preset === 'object'
           ? { ...emptyCardPromptPreset(), ...app.card_prompt_preset, enabled: app.card_prompt_preset.enabled === true }
           : emptyCardPromptPreset();
@@ -443,6 +463,61 @@ function createPage() {
       return this.form.media_assets.filter(asset => asset.kind === kind && asset.status !== 'pending');
     },
 
+    applyStageThemePreset(presetId) {
+      this.form.card_experience.stage = applyStageTheme(this.form.card_experience.stage, presetId);
+    },
+
+    stageThemeIsActive(preset) {
+      const stage = this.form.card_experience.stage;
+      return ['accent_color', 'user_bubble_color', 'assistant_bubble_color', 'text_color']
+        .every(key => String(stage[key] || '').toLowerCase() === String(preset[key] || '').toLowerCase());
+    },
+
+    applyBubbleStylePreset(presetId) {
+      this.form.card_experience.stage = applyBubbleStyle(this.form.card_experience.stage, presetId);
+    },
+
+    bubbleStyleIsActive(preset) {
+      return Number(this.form.card_experience.stage.bubble_radius) === Number(preset.bubble_radius);
+    },
+
+    stagePreviewStyle() {
+      const stage = this.form.card_experience.stage;
+      const asset = this.form.media_assets.find(item => item.id === stage.background_asset_id);
+      const style = {
+        '--experience-preview-accent': stage.accent_color,
+        '--experience-preview-user': stage.user_bubble_color,
+        '--experience-preview-assistant': stage.assistant_bubble_color,
+        '--experience-preview-text': stage.text_color,
+        '--experience-preview-radius': `${stage.bubble_radius}px`,
+        '--experience-preview-font-scale': stage.font_scale,
+        '--experience-preview-input-bg': stage.input_background_color,
+        '--experience-preview-input-text': stage.input_text_color,
+        '--experience-preview-input-border': stage.input_border_color,
+      };
+      if (asset?.url && !String(asset.mime_type || '').startsWith('video/')) {
+        style.backgroundImage = `linear-gradient(rgba(10, 9, 8, .28), rgba(10, 9, 8, .5)), url("${String(asset.url).replace(/["\\]/g, '\\$&')}")`;
+      }
+      return style;
+    },
+
+    stagePortraitPreview() {
+      const stage = this.form.card_experience.stage;
+      if (!stage.show_portrait) return '';
+      return this.form.media_assets.find(item => item.id === stage.portrait_asset_id && item.kind === 'portrait')?.url || '';
+    },
+
+    stagePortraitPreviewStyle() {
+      const stage = this.form.card_experience.stage;
+      return {
+        width: `${stage.portrait_width}%`,
+        opacity: stage.portrait_opacity,
+        left: stage.portrait_position === 'left' ? '2%' : (stage.portrait_position === 'center' ? '50%' : 'auto'),
+        right: stage.portrait_position === 'right' ? '2%' : 'auto',
+        transform: stage.portrait_position === 'center' ? 'translateX(-50%)' : 'none',
+      };
+    },
+
     worldAssetBindings(worldIndex) {
       const bindings = normalizeMediaBindings(this.form.world_info[worldIndex]?.media_bindings);
       return bindings.map(binding => ({ ...binding, asset: this.form.media_assets.find(asset => asset.id === binding.asset_id) })).filter(item => item.asset);
@@ -453,14 +528,16 @@ function createPage() {
       const rules = {
         bgm: { max: 30 * 1024 * 1024, accept: ['audio/mpeg', 'audio/mp3'] },
         portrait: { max: 20 * 1024 * 1024, accept: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] },
-        background: { max: 20 * 1024 * 1024, accept: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] },
+        background: { max: 80 * 1024 * 1024, accept: ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'video/mp4', 'video/webm'] },
         spine: { max: 60 * 1024 * 1024, accept: ['application/zip', 'application/x-zip-compressed', 'application/octet-stream', ''] },
       };
       const rule = rules[kind];
       const validSpineName = kind !== 'spine' || /\.spine\.zip$/i.test(file.name);
       if (!rule || !validSpineName || !rule.accept.includes(file.type) || file.size <= 0 || file.size > rule.max) {
         if (kind === 'spine') throw new Error('仅支持 60MB 内、文件名以 .spine.zip 结尾的 Spine 资源包');
-        throw new Error(kind === 'bgm' ? '仅支持 30MB 内的 MP3 文件' : '仅支持 20MB 内的 PNG / JPG / WebP / GIF 图片');
+        throw new Error(kind === 'bgm'
+          ? '仅支持 30MB 内的 MP3 文件'
+          : '仅支持 20MB 内图片或 80MB 内 MP4 / WebM 场景视频');
       }
       // Chromium/Windows may expose ZIP files as application/octet-stream or
       // with an empty File.type.  The package has already been constrained by
@@ -498,6 +575,9 @@ function createPage() {
         if (kind === 'bgm' && !this.form.card_experience.bgm.default_asset_id) {
           this.form.card_experience.bgm.default_asset_id = asset.id;
           this.form.card_experience.bgm.enabled = true;
+        }
+        if (kind === 'background' && !this.form.card_experience.stage.background_asset_id) {
+          this.form.card_experience.stage.background_asset_id = asset.id;
         }
         this.showToast(`${asset.name} 已上传并绑定当前角色卡`, 'success');
       } catch (err) { this.showToast(err.message || '素材上传失败', 'error'); }
@@ -537,7 +617,16 @@ function createPage() {
         this.form.media_assets = this.form.media_assets.filter(asset => asset.id !== assetId);
         for (const entry of this.form.world_info) entry.media_bindings = normalizeMediaBindings(entry.media_bindings).filter(binding => binding.asset_id !== assetId);
         if (this.form.card_experience.bgm.default_asset_id === assetId) this.form.card_experience.bgm.default_asset_id = '';
+        if (this.form.card_experience.stage.background_asset_id === assetId) this.form.card_experience.stage.background_asset_id = '';
+        if (this.form.card_experience.stage.portrait_asset_id === assetId) this.form.card_experience.stage.portrait_asset_id = '';
         if (this.form.card_experience.galgame.default_portrait_id === assetId) this.form.card_experience.galgame.default_portrait_id = '';
+        if (this.form.card_experience.galgame.default_background_id === assetId) this.form.card_experience.galgame.default_background_id = '';
+        for (const rule of this.form.card_experience.ui_rules) {
+          if (rule.action === 'switch_bgm' && rule.target_id === assetId) {
+            rule.target_id = '';
+            rule.enabled = false;
+          }
+        }
         this.showToast('素材已移除', 'success');
       } catch (err) { this.showToast(err.message || '素材删除失败', 'error'); }
     },
@@ -556,6 +645,10 @@ function createPage() {
     },
 
     galgameBackgroundOptions() {
+      return this.assetsByKind('background').filter(asset => !String(asset.mime_type || '').startsWith('video/'));
+    },
+
+    stageBackgroundOptions() {
       return this.assetsByKind('background');
     },
 
@@ -713,7 +806,17 @@ function createPage() {
       });
       this.expand.worldinfo = true;
     },
-    removeWorldEntry(i) { this.form.world_info.splice(i, 1); },
+    removeWorldEntry(i) {
+      const entryId = this.form.world_info[i]?.id;
+      this.form.world_info.splice(i, 1);
+      if (!entryId) return;
+      for (const rule of this.form.card_experience.ui_rules) {
+        if (rule.action === 'set_scene' && rule.target_id === entryId) {
+          rule.target_id = '';
+          rule.enabled = false;
+        }
+      }
+    },
     duplicateWorldEntry(i) {
       const source = this.form.world_info[i];
       if (!source) return;
@@ -768,11 +871,150 @@ function createPage() {
       this.expand.experience = true;
     },
     removeUiRule(i) { this.form.card_experience.ui_rules.splice(i, 1); },
+    onUiRuleActionChange(rule) {
+      rule.target_id = '';
+      if (rule.action === 'show_floating' && Number(rule.duration_ms) <= 0) rule.duration_ms = 5000;
+    },
+    uiRuleTemplateOptions(action) {
+      const templates = {
+        open_popup: [
+          { id: 'notice', name: '剧情提示' },
+          { id: 'choice', name: '快捷选择' },
+        ],
+        show_floating: [
+          { id: 'status', name: '状态变化' },
+          { id: 'achievement', name: '成就提示' },
+        ],
+      };
+      return templates[action] || [];
+    },
+    applyUiRuleTemplate(rule, templateId) {
+      const templates = {
+        notice: {
+          name: '剧情提示', pattern: '\\[POPUP:notice\\]',
+          template_html: '<section class="card-notice"><h3>剧情提示</h3><p>{{message}}</p><button data-card-action="close-popup">知道了</button></section>',
+          scoped_css: '.card-notice{padding:22px;color:#fff;background:#241f2c;border:1px solid #d7b878;border-radius:12px}.card-notice h3{margin:0 0 10px}.card-notice button{margin-top:14px;padding:8px 14px;border:0;border-radius:7px;background:#d7b878;color:#241f2c}',
+        },
+        choice: {
+          name: '快捷选择', pattern: '\\[POPUP:choice\\]',
+          template_html: '<section class="card-choice"><h3>接下来怎么做？</h3><div><button data-card-action="insert-text" data-text="调查周围">调查周围</button><button data-card-action="insert-text" data-text="继续前进">继续前进</button></div><button data-card-action="close-popup">关闭</button></section>',
+          scoped_css: '.card-choice{padding:22px;color:#fff;background:#1c2730;border-radius:12px}.card-choice div{display:grid;gap:8px;margin:14px 0}.card-choice button{padding:9px 12px;border:1px solid #63d7c6;border-radius:7px;color:#effffb;background:#28465a}',
+        },
+        status: {
+          name: '状态变化', pattern: '\\[FLOAT:status\\]', duration_ms: 5000,
+          template_html: '<div class="card-status"><strong>状态已更新</strong><span>{{message}}</span></div>',
+          scoped_css: '.card-status{display:grid;gap:3px;padding:12px 16px;color:#effffb;background:#17252d;border-left:3px solid #63d7c6;border-radius:8px}',
+        },
+        achievement: {
+          name: '成就提示', pattern: '\\[FLOAT:achievement\\]', duration_ms: 6500,
+          template_html: '<div class="card-achievement"><strong>新记录</strong><span>{{message}}</span></div>',
+          scoped_css: '.card-achievement{display:grid;gap:3px;padding:12px 16px;color:#fff8ed;background:#211d19;border:1px solid #d7b878;border-radius:8px}',
+        },
+      };
+      const template = templates[templateId];
+      if (!template) return;
+      Object.assign(rule, template);
+    },
     addExperienceSidebar() {
       this.form.card_experience.sidebars.push(createSidebarTemplate(this.form.card_experience.sidebars.length));
       this.expand.experience = true;
     },
-    removeExperienceSidebar(i) { this.form.card_experience.sidebars.splice(i, 1); },
+    removeExperienceSidebar(i) {
+      const sidebarId = this.form.card_experience.sidebars[i]?.id;
+      this.form.card_experience.sidebars.splice(i, 1);
+      if (!sidebarId) return;
+      for (const rule of this.form.card_experience.ui_rules) {
+        if (rule.action === 'open_sidebar' && rule.target_id === sidebarId) {
+          rule.target_id = '';
+          rule.enabled = false;
+        }
+      }
+    },
+    sidebarTemplateOptions() {
+      return [{ id: 'profile', name: '角色资料' }, { id: 'catalog', name: '可搜索图鉴' }, { id: 'journal', name: '剧情记录' }];
+    },
+    applySidebarTemplate(bar, templateId) {
+      const templates = {
+        profile: {
+          content_html: '<article class="card-profile"><p class="eyebrow">角色资料</p><h3>{{character}}</h3><p>在这里填写允许向玩家公开的角色介绍。</p></article>',
+          scoped_css: '.card-profile{padding:22px;color:#fff8ed}.card-profile .eyebrow{color:#d7b878;font-size:12px}.card-profile h3{margin:6px 0 12px;font-size:22px}',
+        },
+        catalog: {
+          content_html: '<section class="card-catalog"><input data-card-search placeholder="搜索条目"><div data-card-item data-name="示例条目" data-type="地点"><strong>示例条目</strong><p>替换为允许公开的图鉴内容。</p></div></section>',
+          scoped_css: '.card-catalog{display:grid;gap:10px;padding:18px;color:#effffb}.card-catalog input{padding:9px;border:1px solid #63d7c6;border-radius:7px;background:#17252d;color:inherit}.card-catalog [data-card-item]{padding:12px;border-radius:8px;background:#28465a}',
+        },
+        journal: {
+          content_html: '<article class="card-journal"><h3>剧情记录</h3><ol><li><strong>第一章</strong><span>在这里填写允许公开的摘要。</span></li></ol></article>',
+          scoped_css: '.card-journal{padding:20px;color:#fff7fa}.card-journal ol{display:grid;gap:10px;padding-left:20px}.card-journal li span{display:block;margin-top:3px;color:#d9c9d0}',
+        },
+      };
+      const template = templates[templateId];
+      if (template) Object.assign(bar, template, { content_mode: 'static', world_entry_id: '' });
+    },
+
+    structuredComponentExample() {
+      return this.structuredComponentOptions.find(item => item.id === this.structuredExampleType)
+        || this.structuredComponentOptions[0];
+    },
+    structuredExampleCode() {
+      const example = this.structuredComponentExample()?.example || {};
+      return `\`\`\`homer-ui\n${JSON.stringify(example, null, 2)}\n\`\`\``;
+    },
+    async copyStructuredExample() {
+      try {
+        await navigator.clipboard.writeText(this.structuredExampleCode());
+        this.showToast('组件示例已复制', 'success', 1200);
+      } catch {
+        this.showToast('浏览器未允许复制，请手动选择示例内容', 'error');
+      }
+    },
+
+    experienceFeatureCount() {
+      const experience = this.form.card_experience;
+      return Number(!!experience.stage.enabled)
+        + Number(!!experience.bgm.enabled)
+        + Number(!!experience.galgame.enabled)
+        + experience.ui_rules.filter(item => item.enabled !== false).length
+        + experience.sidebars.filter(item => item.enabled !== false).length
+        + Object.entries(experience.structured_components).filter(([key, value]) => key !== 'enabled' && value).length;
+    },
+
+    validateCardExperience() {
+      if (!this.canUseAdvancedCreation()) return true;
+      const experience = this.form.card_experience;
+      const assets = new Map(this.form.media_assets.filter(item => item.status !== 'pending').map(item => [item.id, item.kind]));
+      const worldIds = new Set(this.form.world_info.map(item => item.id).filter(Boolean));
+      const sidebarIds = new Set(experience.sidebars.map(item => item.id));
+      const stage = experience.stage;
+      let message = '';
+      if (stage.background_asset_id && assets.get(stage.background_asset_id) !== 'background') message = '专属舞台引用的背景素材已经不存在';
+      else if (stage.portrait_asset_id && !['portrait', 'spine'].includes(assets.get(stage.portrait_asset_id))) message = '专属舞台引用的立绘素材已经不存在';
+      else if (experience.bgm.default_asset_id && assets.get(experience.bgm.default_asset_id) !== 'bgm') message = '默认 BGM 素材已经不存在';
+      else if (experience.galgame.default_portrait_id && !['portrait', 'spine'].includes(assets.get(experience.galgame.default_portrait_id))) message = 'galgame 默认立绘已经不存在';
+      else if (experience.galgame.default_background_id && assets.get(experience.galgame.default_background_id) !== 'background') message = 'galgame 默认背景已经不存在';
+      for (let index = 0; !message && index < experience.ui_rules.length; index += 1) {
+        const rule = experience.ui_rules[index];
+        if (rule.enabled === false) continue;
+        const label = rule.name || `界面规则 ${index + 1}`;
+        if (!String(rule.pattern || '').trim()) message = `「${label}」缺少触发正则`;
+        else if (!safeRegExp(rule.pattern, rule.flags)) message = `「${label}」的触发正则无效或复杂度过高`;
+        else if (rule.action === 'switch_bgm' && assets.get(rule.target_id) !== 'bgm') message = `「${label}」需要选择 BGM`;
+        else if (rule.action === 'open_sidebar' && !sidebarIds.has(rule.target_id)) message = `「${label}」需要选择侧栏`;
+        else if (rule.action === 'set_scene' && !worldIds.has(rule.target_id)) message = `「${label}」需要选择世界书场景`;
+      }
+      for (let index = 0; !message && index < experience.sidebars.length; index += 1) {
+        const bar = experience.sidebars[index];
+        if (bar.enabled === false) continue;
+        const label = bar.name || `侧栏 ${index + 1}`;
+        if (!String(bar.content_html || '').trim()) message = `「${label}」需要填写向玩家公开的内容`;
+        else if (bar.open_pattern && !safeRegExp(bar.open_pattern, bar.flags)) message = `「${label}」的打开正则无效或复杂度过高`;
+      }
+      if (!message) return true;
+      this.expand.experience = true;
+      this.showToast(message, 'error', 3200);
+      requestAnimationFrame(() => document.getElementById('creator-experience')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+      return false;
+    },
 
     triggerCardPresetImport() { this.$refs.cardPresetInput?.click(); },
     async onCardPresetImport(event) {
@@ -893,7 +1135,7 @@ function createPage() {
       }
     },
 
-    // ---- 导出当前角色卡为 SillyTavern V2 JSON ----
+    // ---- 导出当前角色卡为标准 V2 JSON ----
     async exportCard() {
       if (!this.editingId) return;
       try {
@@ -940,6 +1182,7 @@ function createPage() {
     },
 
     async submit() {
+      if (!this.validateCardExperience()) return;
       const payload = this.payload();
       if (!this.validatePayload(payload)) return;
       if (this.editingId) {
@@ -963,6 +1206,7 @@ function createPage() {
     },
 
     async publishEditedVersion() {
+      if (!this.validateCardExperience()) return;
       const payload = this.payload();
       if (!this.validatePayload(payload)) return;
       const versionName = String(this.versionName || '').trim();

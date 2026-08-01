@@ -41,6 +41,7 @@
 - `reverse-analysis/base-1-apk/unpacked/`: decoded Compose APK.
 - `specs/`: project requirements, design, and task tracking. Start from `specs/README.md`; most dated task triplets are historical and should not be read unless their feature is in scope.
 - `tools/ai_fengyue_local_server.py`: AI星月 Web/backend implementation, including `site_settings` admin/public APIs, rewards, credits, role cards, chat, and admin operations.
+- `sillytavern-runtime/`: 固定的 SillyTavern 1.18.0 对话 runtime；`public/scripts/extensions/homer-bridge/` 负责身份、角色/消息同步、模型桥、逐消息动作、RoleplayHub 沙箱和关键词注入侧栏。固定公共扩展为 `js-slash-runner`、`ST-Prompt-Template`、`st-yuzi-phone`、`SillyTavern-MemoryBooks`；`st-yuzi-phone` 固定自官方仓库提交 `00ddd047f81164e9a20abb6870dc54a72c328672`（manifest `1.4.2`）。
 - `frontend/assets/js/site-settings.js`: public homepage hydrator for admin-managed site copy and links.
 - `frontend/app/assets/js/layout.js`: shared Web App shell navigation and admin-managed announcement injection.
 - `frontend/admin.html` + `frontend/assets/js/admin-app.js`: admin console, including user/admin authorization, data charts, model presets, role cards, redeem codes, and site operations settings.
@@ -50,6 +51,7 @@
 ## Artifact Hygiene
 
 - Do not put temporary verification screenshots, one-off data files, browser traces, or throwaway scripts in the project root.
+- `sillytavern-runtime/` 是固定上游/公共扩展快照，根目录 `.gitattributes` 对该目录关闭 whitespace diff 检查；不要为了格式化而批量改写其历史尾随空格或 source map。
 - Put test screenshots under `output/playwright/` or a task-specific `output/<task>/` directory.
 - Put one-off verification/import/prune scripts under `output/` if they are short-lived, or `tools/` only when they become reusable project tooling.
 - After a task is verified, archive useful temporary artifacts under `output/root-artifact-archive-*` or delete disposable files; keep the project root limited to source APKs, source zips, docs, and stable project files.
@@ -62,6 +64,21 @@
 - Before committing, check `git status --short` and avoid staging unrelated user changes.
 
 ## Reusable Pitfalls
+
+- Symptom: 在 `E:\酒馆开发\sillytavern-runtime` 直接启动原版 SillyTavern 时，webpack/静态资源编译出现中文路径相关异常，或浏览器只能打开部分资源。
+  Cause: SillyTavern/webpack 的部分 Windows 路径处理对中文工作区不稳定；仅更改当前目录不能消除依赖解析中的原始路径。
+  Fix: E2E 启动器为 runtime 建立受校验的短 ASCII Junction，并从该路径启动；不要复制运行数据回源码目录。
+  Verify: 2026-08-02 原版 ST 冷启动日志显示 webpack `5.105.4 compiled successfully`，两套 Chromium E2E 均完成 runtime ready 和对话动作。
+
+- Symptom: 隔离 SillyTavern E2E 启动后生成动作访问公网、卡住，或因没有真实模型出口而无法验证续写/重生成。
+  Cause: 原版 ST 必须有可用的模型连接；默认 `koboldhorde` 还可能在 Homer bridge 接管前触发外网请求。
+  Fix: E2E 使用本地 OpenAI-compatible model stub，并在默认 settings 中固定 `main_api=openai` 与本地 API 地址；验收同时记录并断言外部请求为 0。
+  Verify: 2026-08-02 `message-continue`、`continue`、`regenerate`、`next` 均取得真实本地 stub 回复，离线 Chromium 外部导航被拦截、外部请求为 0。
+
+- Symptom: 在 `sillytavern-runtime` 为临时 lint 执行普通 `npm install` 后，`lib.js` 编译失败或 webpack 版本漂移。
+  Cause: 普通安装会重新解析依赖并把锁定的 webpack `5.105.4` 漂移到不兼容版本，例如 `5.109.2`。
+  Fix: 不在固定 runtime 中执行普通 `npm install`；需要恢复运行依赖时使用 `npm ci --omit=dev --no-audit --no-fund`，并复核 package/lock 哈希和实际 webpack 版本。
+  Verify: 2026-08-02 恢复后 webpack 为 `5.105.4`，package/lock 与备份哈希一致，冷启动编译和两套核心 E2E 再次通过。
 
 - Symptom: 本地把新用户注册送额度改为 `2500` 后，线上注册仍可能到账 `500`，首页/登录页也继续显示旧的“约 10 次回复”。
   Cause: 生产 `ai-fengyue.env` 中显式的 `NEW_USER_INITIAL_POINTS=500` 会覆盖代码默认值；公开站点配置和静态 HTML 还各有注册送额度兜底文案，仅改常量不会同步生效。
