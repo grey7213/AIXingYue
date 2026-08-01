@@ -19,7 +19,7 @@
 | HSA11 | 静态、后端与 SillyTavern 自测 | Done | `python -m compileall -q tools`、前端/bridge/Yuzi bundle `node --check`、`git diff --check` 通过；webpack lock/runtime 均为 `5.105.4`；Card Experience Schema 4/4、Card Stage、Conversation Database、SillyTavern Runtime 自测全部通过；临时 SQLite `quick_check=ok`。 |
 | HSA12 | Chromium 桌面/移动端到端验收 | Done | `_e2e_original_sillytavern_browser.py`、`_e2e_sillytavern_runtime.py`、`_verify_homer_admin_users_browser.py` 全部通过；RoleplayHub 23 条 Regex、1 个 UI 模板、5 个媒体项，iframe sandbox 精确为 `allow-scripts`。 |
 | HSA13 | 更新 AGENTS 错误记忆与任务结果 | Done | 已记录中文路径 Junction、离线模型 stub 和 webpack 版本锁三项稳定经验；未写入密钥或临时日志。 |
-| HSA14 | 聚焦 Git 提交并推送 | In progress | 不提交用户 `Tavo_主题效果_14G5y(1).thm`；提交和 `origin/main` 推送结果在最终收尾后补记。 |
+| HSA14 | 聚焦 Git 提交并推送 | Done | 主实现提交 `fae520b`（`feat: integrate Homer SillyTavern runtime`）已推送到 `origin/main`；用户 `Tavo_主题效果_14G5y(1).thm` 保持未跟踪、未修改、未提交。 |
 
 ## 固定公共扩展
 
@@ -40,5 +40,5 @@
 ## 验收产物
 
 - 本地运行数据与截图：`output/sillytavern-e2e/`（不提交 Git）。
-- 进程登记：`output/sillytavern-e2e/runtime/original-sillytavern-processes.json`（验收结束后按 PID 和命令行精确停止）。
+- 进程登记：`output/sillytavern-e2e/runtime/original-sillytavern-processes.json`；验收结束后已按 PID 和命令特征精确停止新旧两套测试栈，`18080/18081/18082/18091` 均无监听。
 - 原版 ST 浏览器结果包含：真实生成、逐消息动作、实时回溯、扩展设置持久化、关键词侧栏、普通用户 403、桌面/移动布局。

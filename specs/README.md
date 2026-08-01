@@ -29,6 +29,5 @@
 
 ## 当前未完成事项
 
-- `homer-sillytavern-apk-readiness-20260729-tasks.md`：原版 SillyTavern 1.18.0/Homer bridge 本地验收与 Git 备份收尾。
 - `community-version-spine-20260720-tasks.md`：新交接 ZIP 已提供 4.2 Spine 样本、社区和版本草案，当前按安全审计结果重构并验收。
 - `tavo-worldbook-full-tasks.md`：本机未跟踪的待续草案，确认范围后再决定是否纳入 Git。
