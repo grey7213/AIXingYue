@@ -29,6 +29,7 @@ MAIN_ACTIVITY = "org.nebula.horizon.composeai.MainActivity"
 RECHARGE_ACTIVITY = "org.nebula.horizon.composeai.ctf.RechargeActivity"
 DEFAULT_LOCAL_SERVER_URL = "http://10.0.2.2:8000/"
 DEFAULT_SERVER_NODES_SMALI = DECODED / "smali_classes5" / "org" / "nebula" / "horizon" / "composeai" / "core" / "common" / "constants" / "DefaultServerNodes.smali"
+PAYMENT_RETURN_URL_SMALI = DECODED / "smali_classes5" / "org" / "nebula" / "horizon" / "composeai" / "PayViewModel$toPay$1.smali"
 NETWORK_SECURITY_CONFIG = DECODED / "res" / "xml" / "network_security_config.xml"
 NODE_TEST_SERVICE_SMALI = DECODED / "smali_classes5" / "org" / "nebula" / "horizon" / "composeai" / "core" / "data" / "remote" / "NodeTestService.smali"
 ORIGINAL_SERVER_URLS = [
@@ -55,6 +56,7 @@ KNOWN_PATCHED_SERVER_URLS = [
     "https://villainy.top/",
     "https://patcher.villainy.top/",
 ]
+ORIGINAL_PAYMENT_RETURN_URL = "https://aifuck.cc/explore/apps?ranking=overall_rank"
 
 
 RECHARGE_JAVA = r'''package org.nebula.horizon.composeai.ctf;
@@ -362,7 +364,18 @@ def log(message: str) -> None:
 
 
 def run(cmd, cwd=ROOT, check=True):
-    printable = " ".join(str(x) for x in cmd)
+    printable_parts = []
+    redact_next = False
+    for item in cmd:
+        value = str(item)
+        if redact_next:
+            printable_parts.append("<redacted>")
+            redact_next = False
+            continue
+        printable_parts.append(value)
+        if value in {"--ks-pass", "--key-pass", "--storepass", "--store-pass"}:
+            redact_next = True
+    printable = " ".join(printable_parts)
     log(printable)
     env = os.environ.copy()
     env["JAVA_HOME"] = str(find_java_home())
@@ -514,6 +527,32 @@ def patch_server_nodes(server_url: str | None) -> str | None:
         raise RuntimeError("server node patch did not find any original, previous, or target URLs")
     log(f"patched server nodes to {target_url}; replacements={replaced}; target_occurrences={text.count(target_url)}")
     return target_url
+
+
+def patch_payment_return_url(server_url: str | None) -> None:
+    if not server_url:
+        return
+    target_url = normalize_base_url(server_url).rstrip("/") + "/app/"
+    smali = PAYMENT_RETURN_URL_SMALI
+    if not smali.exists():
+        raise FileNotFoundError(f"payment return URL smali not found: {smali}")
+    text = smali.read_text(encoding="utf-8")
+    candidates = [ORIGINAL_PAYMENT_RETURN_URL]
+    candidates.extend(base.rstrip("/") + "/app/" for base in KNOWN_PATCHED_SERVER_URLS)
+    replaced = 0
+    for candidate in dict.fromkeys(candidates):
+        if candidate == target_url:
+            continue
+        count = text.count(candidate)
+        if count:
+            replaced += count
+            text = text.replace(candidate, target_url)
+    if replaced == 0 and target_url not in text:
+        raise RuntimeError("payment return URL patch did not find the original, previous, or target URL")
+    smali.write_text(text, encoding="utf-8")
+    if ORIGINAL_PAYMENT_RETURN_URL in text:
+        raise RuntimeError("payment return URL patch incomplete")
+    log(f"patched payment return URL to {target_url}; replacements={replaced}")
 
 
 def patch_network_security_config(server_url: str | None) -> None:
@@ -743,16 +782,16 @@ def align_and_sign(build_tools: Path, unaligned: Path, keystore: Path, output_st
     return out_signed
 
 
-def adb_verify(sdk: Path, apk: Path, clear_data: bool = False) -> None:
+def adb_verify(sdk: Path, apk: Path, clear_data: bool = False) -> str:
     adb = sdk / "platform-tools" / "adb.exe"
     if not adb.exists():
         log("adb not found; skipping runtime verification")
-        return
+        return "skipped: adb was not found"
     devices = run([str(adb), "devices", "-l"], check=False)
     lines = [line for line in devices.stdout.splitlines() if "\tdevice" in line]
     if not lines:
         log("no adb device connected; skipping install/start verification")
-        return
+        return "skipped: no connected adb device"
     run([str(adb), "install", "-r", str(apk)])
     if clear_data:
         run([str(adb), "shell", "pm", "clear", PACKAGE], check=False)
@@ -762,11 +801,12 @@ def adb_verify(sdk: Path, apk: Path, clear_data: bool = False) -> None:
     with screenshot.open("wb") as f:
         p = subprocess.run([str(adb), "exec-out", "screencap", "-p"], stdout=f)
         log(f"screenshot capture exit={p.returncode}: {screenshot}")
+    return f"completed on {len(lines)} connected adb device(s); screenshot={screenshot.name}"
 
 
-def write_report(apk: Path, source_apk: Path, server_url: str | None) -> Path:
+def write_report(apk: Path, source_apk: Path, server_url: str | None, runtime_verification: str) -> Path:
     report = OUT / "final-report.md"
-    text = rf"""# 1.zip AI风月 Repack Report
+    text = rf"""# 惑梦 Android APK Repack Report
 
 ## Result
 
@@ -804,21 +844,14 @@ E:\\android\\Sdk\\platform-tools\\adb.exe shell am start -n {PACKAGE}/{RECHARGE_
 
 ## Runtime Verification
 
-- `adb install -r` result: `Success`.
-- Original Activity launch: `{PACKAGE}/.MainActivity`.
-- Injected Activity launch: `{PACKAGE}/.ctf.RechargeActivity`.
-- UI before tap: `内置充值收费模块`, `付费状态：未充值`, `余额：0 积分`.
-- UI after tap: `付费状态：已充值 / 可使用`, `余额：100 积分`, `Verified locally`.
-- Evidence files:
-  - `ai-fengyue-recharge-screen.png`
-  - `ai-fengyue-recharge-after-tap.png`
-  - `ai-fengyue-recharge-ui.xml`
-  - `ai-fengyue-recharge-ui-after-tap.xml`
+- Status: `{runtime_verification}`.
+- The report does not infer installation or launch success from a successful build.
+- Run with `--install` while an adb device is connected to perform installation and Activity launch checks.
 
-## Artifact Package
+## Delivery
 
-- `E:\\酒馆开发\\output\\zip-1-repack\\ctf-breach-artifacts.zip`
-- Contains the signed APK, screenshots, UI dumps, logcat file, report, and signing keystore used for this repack.
+- Deliver the signed APK together with an independent hash/signature verification summary.
+- Do not include the signing keystore or its password in the public delivery package.
 """
     report.write_text(text, encoding="utf-8")
     return report
@@ -858,6 +891,7 @@ def main() -> int:
         source_apk = extract_zip_if_needed()
         ensure_decoded(apktool, source_apk, args.force_decode)
         patched_server_url = patch_server_nodes(args.server_url)
+        patch_payment_return_url(patched_server_url)
         patch_network_security_config(patched_server_url)
         patch_node_test_latency(patched_server_url)
         patch_branding("AI星月", content_parity=args.functional_parity)
@@ -878,9 +912,10 @@ def main() -> int:
         else:
             output_stem = "ai-fengyue-localserver-signed" if patched_server_url else "ai-fengyue-recharge-signed"
         signed = align_and_sign(build_tools, unaligned, keystore, output_stem)
-        report = write_report(signed, source_apk, patched_server_url)
+        runtime_verification = "not requested; static build only"
         if args.install:
-            adb_verify(sdk, signed, clear_data=args.clear_data or bool(patched_server_url))
+            runtime_verification = adb_verify(sdk, signed, clear_data=args.clear_data or bool(patched_server_url))
+        report = write_report(signed, source_apk, patched_server_url, runtime_verification)
         log(f"done: {signed}")
         log(f"report: {report}")
         return 0

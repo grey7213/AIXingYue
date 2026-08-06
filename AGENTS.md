@@ -65,6 +65,11 @@
 
 ## Reusable Pitfalls
 
+- Symptom: APK 的 `DefaultServerNodes` 已全部绑定新域名，但最终二进制仍能扫到旧上游域名；构建报告还可能在没有 ADB 设备时写成“安装成功”，签名命令日志也可能直接显示密码参数。
+  Cause: 历史支付协程在 `PayViewModel$toPay$1.smali` 单独硬编码 `return_url`，不属于节点列表补丁；旧报告使用固定运行结果文本，命令日志未脱敏敏感参数。
+  Fix: APK 流水线按绑定服务器同步把支付返回地址改为其 `/app/`，对 `--ks-pass/--key-pass/--storepass` 后续值脱敏；ADB 验证返回真实状态，报告只记录实际执行结果。
+  Verify: 2026-08-06 最终 APK 的 588 个代码/文本条目中 `patcher.villainy.top` 命中 3、17 个旧上游域名命中 0、高置信凭据命中 0；apksigner v2/v3 与 zipalign 通过。`adb devices -l` 为空，报告明确标记仅静态构建、未安装启动。
+
 - Symptom: 在 `E:\酒馆开发\sillytavern-runtime` 直接启动原版 SillyTavern 时，webpack/静态资源编译出现中文路径相关异常，或浏览器只能打开部分资源。
   Cause: SillyTavern/webpack 的部分 Windows 路径处理对中文工作区不稳定；仅更改当前目录不能消除依赖解析中的原始路径。
   Fix: E2E 启动器为 runtime 建立受校验的短 ASCII Junction，并从该路径启动；不要复制运行数据回源码目录。
