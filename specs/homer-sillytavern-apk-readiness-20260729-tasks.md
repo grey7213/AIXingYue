@@ -23,7 +23,7 @@
 | HSA15 | 补齐 TavernHelper 卡内脚本查看、编辑、导入、导出和无损持久化 | Done | 专用字段 `tavern_helper_scripts`；最多 100 条/4 MiB；显式提交需高级创作权限；基础编辑不覆盖旧脚本；JSON/PNG/ST 导出无损；锁定投影同时脱敏 `extensions.tavern_helper.scripts` 正文。后端与浏览器夹具均通过。 |
 | HSA16 | 补齐生产 dialogue runtime、systemd、Nginx 和部署工具 | Done | 部署工具已实现安全包、源码/数据分离、专用用户、loopback `8091`、同源 `/module/dialogue/`、旧路径/根相对资源重定向、cookie path、独立 frame policy、webpack `5.105.4` 校验与失败回滚；本地布局/归档验证通过。 |
 | HSA17 | 完成本地静态、后端、runtime 和桌面/移动浏览器回归 | Done | `py_compile`、`node --check`、`git diff --check`、4 项卡体验自测、对话数据库/ST runtime 自测、TavernHelper 后端/浏览器、后端 readiness、原版 ST 与 Homer runtime Chromium E2E 均通过；桌面/390px 无溢出、console/page/network error 为 0，固定四扩展和 RoleplayHub sandbox 均通过。 |
-| HSA18 | 备份并部署生产，完成安全、许可和回滚验收 | In Progress | 下一步执行部署工具并做真实生产验收：backend/runtime/Nginx active，8008/8091 仅 loopback，内外 health、`CONTENT_MODE=local_only`、顶层重定向、源码入口、1440/390px 真实登录全部通过。 |
+| HSA18 | 备份并部署生产，完成安全、许可和回滚验收 | In Progress | 首次生产执行已完成 SQLite 双份 `quick_check=ok`、runtime 包 SHA/webpack `5.105.4` 校验，但主机在前端逐文件 SFTP 阶段全球不可达，不能计为部署成功。部署器已改为单一校验前端归档、SSH keepalive/重试、独立回滚重连和正确的首次安装旧目标判断；待主机恢复后重新完整执行并验收。 |
 | HSA19 | 更新项目记忆、聚焦提交并推送 | Pending | 更新真实验证结果；不提交用户 `.thm`、运行数据、截图、token、Cookie 或 secrets。 |
 
 ## 固定公共扩展

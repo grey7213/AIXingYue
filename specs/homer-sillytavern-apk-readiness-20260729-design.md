@@ -105,9 +105,10 @@ systemd homer-dialogue.service
 ```
 
 - 部署包排除 `node_modules`、data、backups、logs、output、Cookie、token、secret 和测试运行数据。
+- Web 静态文件同样先生成排除 `download/media-cache` 的校验归档，上传 SHA-256 验证通过后再解包，避免逐文件 SFTP 中断形成半套线上前端。
 - runtime 源码目录和数据目录分离；源码替换使用版本化临时目录 + 原子切换，数据目录不随部署覆盖。
 - Nginx 的 dialogue location 使用独立 CSP（`frame-ancestors 'self'`）并复用 `offline_dev_proxy.py` 已验证的根相对路径映射；站点全局 `frame-ancestors 'none'` 不套用到该模块响应。
-- 修改远端 Nginx、systemd、runtime 前建立时间戳备份；健康检查失败时恢复配置/源码链接并重启旧服务，不迁移或删除 SQLite。
+- 修改远端 Nginx、systemd、runtime 前建立时间戳备份；SSH 使用 keepalive/有限重试，健康检查或传输失败时以独立重连恢复配置/源码链接并重启旧服务，不迁移或删除 SQLite。
 - `/app/open-source.html` 提供 SillyTavern 上游、固定提交、AGPL 文本、修改日期、公开源码仓库和第三方扩展逐项来源/许可证说明。
 
 ## 用户充值聚合

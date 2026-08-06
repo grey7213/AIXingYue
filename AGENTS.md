@@ -764,3 +764,8 @@
   Cause: `/opt/homer-dialogue-runtime` 若为 `root:root 0750`，专用账号无法穿透父目录；旧回滚只处理“已有 runtime 指针/配置”的升级场景，没有记录文件原先是否存在，也没有处理旧 `current` 为实体目录的迁移。
   Fix: runtime 根和 releases 使用 `root:homer-dialogue 0750`，数据目录继续归专用账号；部署前记录 unit/Nginx/current 的存在形态，实体旧目录先改名保留，首次安装失败时禁用并删除新增 unit、配置和指针，升级失败时恢复原目标。
   Verify: 2026-08-06 `output/verify_dialogue_deploy_layout.py` 验证父目录访问策略、首次安装回滚分支、安全归档、四扩展和 webpack 锁定；生产部署后再以 systemd/8091 实际状态确认。
+
+- Symptom: dialogue runtime 依赖安装完成后，逐文件 SFTP 上传前端时远端连接被重置，线上只写入部分静态文件；异常处理继续复用失效 SSH 会话，自动回滚也随之失败。首次安装时 `readlink -f` 还会把不存在的 `current` 返回为自身绝对路径，形成伪旧目标。
+  Cause: 大包安装、数十次目录命令和逐文件 SFTP 共用一个长连接；上传前没有完整归档校验与切换边界，回滚没有独立重连；缺失路径的 GNU `readlink -f` 行为被误当成已存在目标。
+  Fix: 前端改为排除 `download/media-cache` 的单一校验 tar 包，上传并核对 SHA-256 后才在远端解包；SSH 启用 keepalive 和有限重试，失效会话时以新连接执行回滚；只有 `current` 实际为 symlink/directory 时才读取旧目标。
+  Verify: 2026-08-06 `py_compile`、`git diff --check`、前端归档安全/权限断言和 `output/verify_dialogue_deploy_layout.py` 通过；生产主机当时从全球探测节点均连接超时，恢复后必须重新完整部署并核对服务/路由/数据库，不把首次中断视为成功。

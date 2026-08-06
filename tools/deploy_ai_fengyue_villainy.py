@@ -74,6 +74,13 @@ DIALOGUE_EXCLUDED_PUBLIC_PREFIXES = (
     PurePosixPath("public/assets"),
     PurePosixPath("public/error"),
 )
+FRONTEND_EXCLUDED_TOP_LEVEL = {
+    ".git",
+    "download",
+    "media-cache",
+    "node_modules",
+    "output",
+}
 DOMAIN_NAME_RE = re.compile(
     r"(?=.{1,253}\Z)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}\Z"
 )
@@ -109,8 +116,42 @@ def connect(host: str, user: str, key: Path) -> paramiko.SSHClient:
         look_for_keys=False,
         allow_agent=False,
         timeout=20,
+        banner_timeout=20,
+        auth_timeout=20,
     )
+    transport = client.get_transport()
+    if transport is not None:
+        transport.set_keepalive(15)
     return client
+
+
+def connect_with_retries(
+    host: str,
+    user: str,
+    key: Path,
+    *,
+    attempts: int = 3,
+    delay_seconds: int = 5,
+) -> paramiko.SSHClient:
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return connect(host, user, key)
+        except Exception as exc:
+            last_error = exc
+            if attempt >= attempts:
+                break
+            log(f"SSH connection attempt {attempt}/{attempts} failed; retrying in {delay_seconds}s")
+            time.sleep(delay_seconds)
+    assert last_error is not None
+    raise last_error
+
+
+def ssh_connection_active(ssh: paramiko.SSHClient | None) -> bool:
+    if ssh is None:
+        return False
+    transport = ssh.get_transport()
+    return bool(transport and transport.is_active())
 
 
 def upload_text(sftp: paramiko.SFTPClient, path: str, text: str, mode: int = 0o644) -> None:
@@ -227,6 +268,83 @@ def build_dialogue_runtime_archive(runtime_root: Path, destination: Path) -> dic
         "source_bytes": included_bytes,
         "files": included_files,
         "package_lock_sha256": sha256_file(runtime_root / "package-lock.json"),
+    }
+
+
+def frontend_archive_excluded(relative_path: PurePosixPath) -> bool:
+    parts = relative_path.parts
+    if not parts:
+        return False
+    if parts[0] in FRONTEND_EXCLUDED_TOP_LEVEL:
+        return True
+    return any(part == "__pycache__" for part in parts)
+
+
+def normalize_frontend_tarinfo(member: tarfile.TarInfo) -> tarfile.TarInfo:
+    member.uid = 0
+    member.gid = 0
+    member.uname = "root"
+    member.gname = "root"
+    member.mode = 0o755 if member.isdir() else 0o644
+    return member
+
+
+def build_frontend_archive(frontend_root: Path, destination: Path) -> dict:
+    frontend_root = frontend_root.resolve()
+    required = (
+        frontend_root / "index.html",
+        frontend_root / "admin.html",
+        frontend_root / "app" / "chat.html",
+        frontend_root / "app" / "open-source.html",
+    )
+    for path in required:
+        if not path.is_file():
+            raise FileNotFoundError(path)
+
+    included_files = 0
+    included_bytes = 0
+    with tarfile.open(destination, "w:gz", format=tarfile.PAX_FORMAT) as archive:
+        for item in sorted(frontend_root.rglob("*"), key=lambda path: path.as_posix().lower()):
+            relative = PurePosixPath(item.relative_to(frontend_root).as_posix())
+            if frontend_archive_excluded(relative):
+                continue
+            if item.is_symlink():
+                raise RuntimeError(f"frontend package refuses symlink: {relative}")
+            if not item.is_dir() and not item.is_file():
+                raise RuntimeError(f"frontend package refuses special file: {relative}")
+            archive.add(
+                item,
+                arcname=relative.as_posix(),
+                recursive=False,
+                filter=normalize_frontend_tarinfo,
+            )
+            if item.is_file():
+                included_files += 1
+                included_bytes += item.stat().st_size
+
+    with tarfile.open(destination, "r:gz") as archive:
+        members = archive.getmembers()
+        names = {PurePosixPath(member.name) for member in members}
+        if any(member.name.startswith("/") or ".." in PurePosixPath(member.name).parts for member in members):
+            raise RuntimeError("frontend archive contains an unsafe path")
+        expected = {
+            PurePosixPath("index.html"),
+            PurePosixPath("admin.html"),
+            PurePosixPath("app/chat.html"),
+            PurePosixPath("app/open-source.html"),
+        }
+        missing = sorted(str(path) for path in expected if path not in names)
+        if missing:
+            raise RuntimeError(f"frontend archive missing required files: {missing}")
+        forbidden = [str(path) for path in names if frontend_archive_excluded(path)]
+        if forbidden:
+            raise RuntimeError(f"frontend archive contains excluded paths: {forbidden[:5]}")
+    return {
+        "path": destination,
+        "sha256": sha256_file(destination),
+        "archive_bytes": destination.stat().st_size,
+        "source_bytes": included_bytes,
+        "files": included_files,
     }
 
 
@@ -717,7 +835,20 @@ def main() -> int:
             f"sha256={dialogue_package['sha256']}"
         )
 
+    frontend_temp_dir = None
+    frontend_package = None
+    if not args.skip_frontend and args.frontend.exists():
+        frontend_temp_dir = tempfile.TemporaryDirectory(prefix="homer-frontend-deploy-")
+        frontend_archive_path = Path(frontend_temp_dir.name) / "homer-frontend.tgz"
+        frontend_package = build_frontend_archive(args.frontend, frontend_archive_path)
+        log(
+            "prepared frontend package: "
+            f"{frontend_package['files']} files, {frontend_package['archive_bytes']:,} bytes, "
+            f"sha256={frontend_package['sha256']}"
+        )
+
     ssh = None
+    rollback_ssh = None
     dialogue_previous_target = ""
     dialogue_current_kind = "missing"
     dialogue_legacy_backup = ""
@@ -728,7 +859,7 @@ def main() -> int:
     patcher_nginx_backup = ""
     dialogue_unit_backup = ""
     try:
-        ssh = connect(args.host, args.user, args.key)
+        ssh = connect_with_retries(args.host, args.user, args.key)
         sftp = ssh.open_sftp()
         timestamp = time.strftime("%Y%m%d-%H%M%S")
         patcher_nginx_backup = f"{PATCHER_NGINX_CONF}.bak-{timestamp}"
@@ -783,10 +914,13 @@ def main() -> int:
             ).strip()
             if dialogue_current_kind == "other":
                 raise RuntimeError("existing dialogue runtime current path is not a directory or symlink")
-            dialogue_previous_target = run(
-                ssh,
-                f"readlink -f {DIALOGUE_REMOTE}/current 2>/dev/null || true",
-            ).strip()
+            if dialogue_current_kind in {"symlink", "directory"}:
+                dialogue_previous_target = run(
+                    ssh,
+                    f"readlink -f {DIALOGUE_REMOTE}/current 2>/dev/null || true",
+                ).strip()
+            else:
+                dialogue_previous_target = ""
             if dialogue_current_kind == "symlink" and not dialogue_previous_target:
                 raise RuntimeError("existing dialogue runtime symlink is broken")
             if dialogue_previous_target and not re.fullmatch(r"/[A-Za-z0-9._/-]+", dialogue_previous_target):
@@ -921,6 +1055,7 @@ def main() -> int:
             if not args.frontend.exists():
                 log(f"warning: frontend dir not found: {args.frontend}; skip frontend upload")
             else:
+                assert frontend_package is not None
                 frontend_backup = posixpath.join(backup_dir, f"frontend-source-before-community-versions-{timestamp}.tgz")
                 run(
                     ssh,
@@ -930,9 +1065,16 @@ def main() -> int:
                     f"{posixpath.basename(FRONTEND_REMOTE)}; chmod 600 {frontend_backup}; fi",
                 )
                 log(f"uploading frontend from {args.frontend} -> {FRONTEND_REMOTE}")
-                run(ssh, f"mkdir -p {FRONTEND_REMOTE}/download")
-                count = upload_dir(sftp, ssh, args.frontend, FRONTEND_REMOTE)
-                log(f"uploaded {count} frontend files")
+                remote_frontend_archive = f"/tmp/homer-frontend-{timestamp}.tgz"
+                put_file(sftp, frontend_package["path"], remote_frontend_archive, 0o600)
+                run(
+                    ssh,
+                    f"printf '%s  %s\n' '{frontend_package['sha256']}' '{remote_frontend_archive}' | sha256sum -c - && "
+                    f"mkdir -p {FRONTEND_REMOTE}/download {FRONTEND_REMOTE}/media-cache && "
+                    f"tar -xzf {remote_frontend_archive} -C {FRONTEND_REMOTE} && "
+                    f"rm -f {remote_frontend_archive}",
+                )
+                log(f"uploaded {frontend_package['files']} frontend files from verified archive")
                 run(ssh, f"chown -R www-data:www-data {FRONTEND_REMOTE} || true")
 
         # APK 上传到 download/ai-xingyue-latest.apk
@@ -1090,10 +1232,18 @@ def main() -> int:
         if ssh is not None:
             log("deployment failed; restoring dialogue runtime/Nginx pointers where backups exist")
             try:
+                rollback_ssh = ssh
+                if not ssh_connection_active(rollback_ssh):
+                    try:
+                        rollback_ssh.close()
+                    except Exception:
+                        pass
+                    log("deployment SSH session is unavailable; reconnecting for rollback")
+                    rollback_ssh = connect_with_retries(args.host, args.user, args.key)
                 if dialogue_switched:
                     if dialogue_legacy_backup:
                         run(
-                            ssh,
+                            rollback_ssh,
                             f"rm -f {DIALOGUE_REMOTE}/current && "
                             f"if [ -d {dialogue_legacy_backup} ]; then mv {dialogue_legacy_backup} {DIALOGUE_REMOTE}/current; fi",
                             check=False,
@@ -1101,53 +1251,57 @@ def main() -> int:
                     elif dialogue_previous_target:
                         rollback_link = f"{DIALOGUE_REMOTE}/current.rollback-{int(time.time())}"
                         run(
-                            ssh,
+                            rollback_ssh,
                             f"ln -s {dialogue_previous_target} {rollback_link} && "
                             f"mv -Tf {rollback_link} {DIALOGUE_REMOTE}/current",
                             check=False,
                         )
                     else:
-                        run(ssh, f"rm -f {DIALOGUE_REMOTE}/current", check=False)
+                        run(rollback_ssh, f"rm -f {DIALOGUE_REMOTE}/current", check=False)
                 elif dialogue_legacy_backup:
                     run(
-                        ssh,
+                        rollback_ssh,
                         f"if [ ! -e {DIALOGUE_REMOTE}/current ] && [ -d {dialogue_legacy_backup} ]; then "
                         f"mv {dialogue_legacy_backup} {DIALOGUE_REMOTE}/current; fi",
                         check=False,
                     )
                 if dialogue_unit_existed and dialogue_unit_backup:
                     run(
-                        ssh,
+                        rollback_ssh,
                         f"if [ -f {dialogue_unit_backup} ]; then cp {dialogue_unit_backup} {DIALOGUE_UNIT}; fi",
                         check=False,
                     )
                 else:
-                    run(ssh, "systemctl disable --now homer-dialogue.service || true", check=False)
-                    run(ssh, f"rm -f {DIALOGUE_UNIT}", check=False)
+                    run(rollback_ssh, "systemctl disable --now homer-dialogue.service || true", check=False)
+                    run(rollback_ssh, f"rm -f {DIALOGUE_UNIT}", check=False)
                 if patcher_nginx_existed and patcher_nginx_backup:
                     run(
-                        ssh,
+                        rollback_ssh,
                         f"if [ -f {patcher_nginx_backup} ]; then cp {patcher_nginx_backup} {PATCHER_NGINX_CONF}; fi",
                         check=False,
                     )
                 else:
                     run(
-                        ssh,
+                        rollback_ssh,
                         f"rm -f {PATCHER_NGINX_CONF} /etc/nginx/sites-enabled/ai-fengyue-patcher.conf",
                         check=False,
                     )
-                run(ssh, "systemctl daemon-reload", check=False)
+                run(rollback_ssh, "systemctl daemon-reload", check=False)
                 if dialogue_unit_existed and dialogue_previous_target:
-                    run(ssh, "systemctl restart homer-dialogue.service", check=False)
-                run(ssh, "nginx -t && systemctl reload nginx", check=False)
+                    run(rollback_ssh, "systemctl restart homer-dialogue.service", check=False)
+                run(rollback_ssh, "nginx -t && systemctl reload nginx", check=False)
             except Exception as rollback_error:
                 log(f"warning: automatic dialogue rollback encountered an error: {rollback_error}")
         raise
     finally:
+        if rollback_ssh is not None and rollback_ssh is not ssh:
+            rollback_ssh.close()
         if ssh is not None:
             ssh.close()
         if dialogue_temp_dir is not None:
             dialogue_temp_dir.cleanup()
+        if frontend_temp_dir is not None:
+            frontend_temp_dir.cleanup()
 
 
 if __name__ == "__main__":
