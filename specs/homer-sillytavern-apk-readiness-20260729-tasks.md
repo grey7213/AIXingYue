@@ -20,6 +20,11 @@
 | HSA12 | Chromium 桌面/移动端到端验收 | Done | `_e2e_original_sillytavern_browser.py`、`_e2e_sillytavern_runtime.py`、`_verify_homer_admin_users_browser.py` 全部通过；RoleplayHub 23 条 Regex、1 个 UI 模板、5 个媒体项，iframe sandbox 精确为 `allow-scripts`。 |
 | HSA13 | 更新 AGENTS 错误记忆与任务结果 | Done | 已记录中文路径 Junction、离线模型 stub 和 webpack 版本锁三项稳定经验；未写入密钥或临时日志。 |
 | HSA14 | 聚焦 Git 提交并推送 | Done | 主实现提交 `fae520b`（`feat: integrate Homer SillyTavern runtime`）已推送到 `origin/main`；用户 `Tavo_主题效果_14G5y(1).thm` 保持未跟踪、未修改、未提交。 |
+| HSA15 | 补齐 TavernHelper 卡内脚本查看、编辑、导入、导出和无损持久化 | Done | 专用字段 `tavern_helper_scripts`；最多 100 条/4 MiB；显式提交需高级创作权限；基础编辑不覆盖旧脚本；JSON/PNG/ST 导出无损；锁定投影同时脱敏 `extensions.tavern_helper.scripts` 正文。后端与浏览器夹具均通过。 |
+| HSA16 | 补齐生产 dialogue runtime、systemd、Nginx 和部署工具 | Done | 部署工具已实现安全包、源码/数据分离、专用用户、loopback `8091`、同源 `/module/dialogue/`、旧路径/根相对资源重定向、cookie path、独立 frame policy、webpack `5.105.4` 校验与失败回滚；本地布局/归档验证通过。 |
+| HSA17 | 完成本地静态、后端、runtime 和桌面/移动浏览器回归 | Done | `py_compile`、`node --check`、`git diff --check`、4 项卡体验自测、对话数据库/ST runtime 自测、TavernHelper 后端/浏览器、后端 readiness、原版 ST 与 Homer runtime Chromium E2E 均通过；桌面/390px 无溢出、console/page/network error 为 0，固定四扩展和 RoleplayHub sandbox 均通过。 |
+| HSA18 | 备份并部署生产，完成安全、许可和回滚验收 | In Progress | 下一步执行部署工具并做真实生产验收：backend/runtime/Nginx active，8008/8091 仅 loopback，内外 health、`CONTENT_MODE=local_only`、顶层重定向、源码入口、1440/390px 真实登录全部通过。 |
+| HSA19 | 更新项目记忆、聚焦提交并推送 | Pending | 更新真实验证结果；不提交用户 `.thm`、运行数据、截图、token、Cookie 或 secrets。 |
 
 ## 固定公共扩展
 
@@ -33,7 +38,7 @@
 ## 当前范围决定
 
 - 不恢复角色卡版本选择。
-- 不部署生产，不打 APK；当前状态为“本地真实验收通过，可进入 APK 打包下一步”。
+- 本轮在完整本地回归后部署生产内部 dialogue runtime；仍不打 APK。
 - 充值金额定义为成功在线支付金额；兑换码、积分调整和免费额度不计现金充值。
 - RoleplayHub 与角色卡脚本继续在无 `allow-same-origin` 的隔离 iframe 内运行；普通用户无任意扩展安装权限。
 
@@ -42,3 +47,4 @@
 - 本地运行数据与截图：`output/sillytavern-e2e/`（不提交 Git）。
 - 进程登记：`output/sillytavern-e2e/runtime/original-sillytavern-processes.json`；验收结束后已按 PID 和命令特征精确停止新旧两套测试栈，`18080/18081/18082/18091` 均无监听。
 - 原版 ST 浏览器结果包含：真实生成、逐消息动作、实时回溯、扩展设置持久化、关键词侧栏、普通用户 403、桌面/移动布局。
+- 2026-08-06 本地收尾：许可页真实 Chromium 桌面/390px 通过；TavernHelper 锁定投影补充确认 `extensions.tavern_helper.scripts` 不含正文；重新启动隔离栈后，原版 ST 与 Homer runtime 两套 Chromium E2E 均通过，四个端口验收后已按登记 PID 停止。

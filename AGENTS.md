@@ -749,3 +749,18 @@
   Cause: `.ws-create-mask` 嵌套在带 `backdrop-filter` 的 `.app-topbar` 内；该属性为 `position: fixed` 后代建立了顶栏包含块，fixed 定位不再相对浏览器视口。
   Fix: 用 Alpine 原生 `<template x-teleport="body">` 将弹窗挂到 `body`，保留原有 `x-data` 状态和关闭事件，不改业务样式。
   Verify: 2026-07-21 Playwright 桌面 1920×1080 遮罩为完整视口、弹窗中心误差 0；390×844 单列无横向溢出且上下不越界；关闭按钮、遮罩、Escape 均通过，page error=0；线上 `workshop.html` SHA-256 与本地一致。
+
+- Symptom: 生产 SillyTavern 模块更新后可能读到旧运行数据、webpack 版本漂移，或根相对资源/登录 Cookie 脱离 `/module/dialogue/` 前缀。
+  Cause: runtime 源码、用户数据和依赖安装目录未分离；普通 `npm install` 会重解析锁文件；原版 ST 仍会请求 `/script.js`、`/api/*` 等根路径，Cookie 默认 path 也会落到站点根目录。
+  Fix: 发布到版本化 `/opt/homer-dialogue-runtime/releases/<timestamp>` 并原子切换 `current`，数据固定在 `/var/lib/homer-dialogue`；只用 `npm ci --omit=dev --no-audit --no-fund` 并强制校验 webpack `5.105.4`；Nginx 对模块根相对请求按来源重定向到 `/module/dialogue/`，设置 `proxy_cookie_path / /module/dialogue/`，旧 `/dialogue-core/` 仅做 307 兼容跳转。
+  Verify: 2026-08-06 本地部署布局/安全归档测试通过（1407 个文件、四扩展齐全、webpack `5.105.4`）；原版 SillyTavern 与 Homer runtime 桌面/移动 E2E 均通过，外部网络请求为 0。生产部署后需再次核对 8091 loopback、模块路由和源码入口。
+
+- Symptom: 制卡页无高级权限时虽然隐藏了 TavernHelper 脚本编辑器，但收藏列表等次级角色投影仍可能返回 `extensions.tavern_helper.scripts` 正文。
+  Cause: 详情接口使用了脱敏投影，收藏列表仍复用 `local_app_to_card()` 的完整默认投影；只清空顶层专用字段不足以阻止 `extensions` 旁路。
+  Fix: 所有非作者编辑/导出/runtime 场景显式使用 `include_tavern_helper_scripts=False`，同时从顶层专用字段和 `extensions.tavern_helper` 移除 scripts，仅保留数量、来源及其他未知配置。
+  Verify: 2026-08-06 `output/verify_tavern_helper_scripts_backend.py` 同时断言锁定详情和收藏投影不含两段脚本正文，未知 extension 字段仍无损，SQLite `quick_check=ok`。
+
+- Symptom: 首次部署 `homer-dialogue.service` 可能报工作目录权限错误；首次安装失败时还可能遗留已启用的新 unit、Nginx 文件或 `current` 指针。
+  Cause: `/opt/homer-dialogue-runtime` 若为 `root:root 0750`，专用账号无法穿透父目录；旧回滚只处理“已有 runtime 指针/配置”的升级场景，没有记录文件原先是否存在，也没有处理旧 `current` 为实体目录的迁移。
+  Fix: runtime 根和 releases 使用 `root:homer-dialogue 0750`，数据目录继续归专用账号；部署前记录 unit/Nginx/current 的存在形态，实体旧目录先改名保留，首次安装失败时禁用并删除新增 unit、配置和指针，升级失败时恢复原目标。
+  Verify: 2026-08-06 `output/verify_dialogue_deploy_layout.py` 验证父目录访问策略、首次安装回滚分支、安全归档、四扩展和 webpack 锁定；生产部署后再以 systemd/8091 实际状态确认。

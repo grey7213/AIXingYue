@@ -64,7 +64,7 @@
     <section class="hero">
       <p class="eyebrow">OPEN SOURCE</p>
       <h1>开源许可与源码</h1>
-      <p class="lead">惑梦的日常对话界面由网站统一呈现。本页集中列出内部对话兼容模块所使用的开源组件、许可证和对应源码获取方式，不在普通对话操作中展示第三方宣传信息。</p>
+      <p class="lead">惑梦的日常对话界面由网站统一呈现。本页集中列出内部对话兼容模块、固定公共扩展的来源与许可状态，以及当前网络部署所对应的修改版源码。</p>
     </section>
 
     <div class="stack">
@@ -72,26 +72,29 @@
         <h2>SillyTavern 对话兼容运行时</h2>
         <p>该组件依据 GNU Affero General Public License v3.0（AGPL-3.0）许可使用和修改。</p>
         <dl class="meta">
-          <dt>导入版本</dt><dd>1.18.0（上游提交 <code>51ad27f</code>）</dd>
+          <dt>导入版本</dt><dd>1.18.0（上游提交 <code>51ad27fb86d39a3daca3adaa970375c9670c12df</code>）</dd>
           <dt>上游项目</dt><dd><a href="https://github.com/SillyTavern/SillyTavern" rel="noreferrer">github.com/SillyTavern/SillyTavern</a></dd>
           <dt>许可证</dt><dd><a href="https://www.gnu.org/licenses/agpl-3.0.html" rel="noreferrer">GNU AGPL-3.0</a></dd>
-          <dt>对应源码</dt><dd>当前本地交付版本的完整修改源码位于项目随附的 <code>sillytavern-runtime/</code> 目录；来源与校验信息见 <code>sillytavern-runtime/HOMER-UPSTREAM.md</code>。</dd>
+          <dt>修改日期</dt><dd>2026-08-06</dd>
+          <dt>对应源码</dt><dd><a href="https://github.com/grey7213/AIXingYue" rel="noreferrer">github.com/grey7213/AIXingYue</a> 的 <code>sillytavern-runtime/</code> 目录；来源、固定版本与校验信息见 <code>HOMER-UPSTREAM.md</code>。</dd>
         </dl>
       </section>
 
       <section class="card">
         <h2>网络部署时的源码提供</h2>
         <p>部署方应为每个实际运行版本提供与该版本完全对应的源码副本，包含惑梦所作修改和构建、安装所需文件，并通过本页或同等公开入口免费提供。仅链接上游原始仓库不能替代修改版对应源码。</p>
+        <p class="notice">本程序按现状提供，不附带任何明示或默示担保；在适用法律允许的范围内，作者和贡献者不对使用本程序造成的损失承担责任。完整条款以仓库内 AGPL-3.0 许可证正文为准。</p>
       </section>
 
       <section class="card">
-        <h2>第三方兼容扩展</h2>
-        <ul>
-          <li>JS-Slash-Runner / TavernHelper：用于 Slash 命令与角色卡脚本兼容。</li>
-          <li>ST-Prompt-Template：用于角色卡提示词模板兼容。</li>
-          <li>其他前端依赖的版权与许可证保留在各自源码、清单或 LICENSE 文件中。</li>
-        </ul>
-        <p class="notice">本页是法律与源码入口，不代表这些上游项目对惑梦提供背书或承担服务责任。</p>
+        <h2>固定公共扩展</h2>
+        <dl class="meta">
+          <dt>JS-Slash-Runner</dt><dd><code>4.8.19</code> · <a href="https://github.com/N0VI028/JS-Slash-Runner" rel="noreferrer">上游仓库</a>。GitHub 许可证识别为 <code>NOASSERTION</code>；随包 <code>LICENSE</code> 文本为 Aladdin Free Public License 9（AFPL 9），该许可证明确声明其不是 Open Source License。惑梦仅保留用户指定的固定兼容快照，并关闭自动更新。</dd>
+          <dt>ST-Prompt-Template</dt><dd><code>1.17.6.8</code> · <a href="https://github.com/zonde306/ST-Prompt-Template" rel="noreferrer">上游仓库</a> · 随包许可证为 AGPL-3.0。</dd>
+          <dt>st-yuzi-phone</dt><dd><code>1.4.2</code> · 固定提交 <code>00ddd047f81164e9a20abb6870dc54a72c328672</code> · <a href="https://github.com/yuzi83/st-yuzi-phone" rel="noreferrer">上游仓库</a>。当前固定发布文件未随附独立 LICENSE，许可状态未明确，不将其概括为开源组件。</dd>
+          <dt>Memory Books</dt><dd><code>8.2.2</code> · <a href="https://github.com/aikohanasaki/SillyTavern-MemoryBooks" rel="noreferrer">上游仓库</a> · manifest 与随包许可证均标注 AGPL-3.0。</dd>
+        </dl>
+        <p class="notice">四个扩展均由管理员固定版本、关闭自动更新。普通用户不能安装任意第三方扩展。本页不代表任何上游项目对惑梦提供背书或承担服务责任。</p>
       </section>
     </div>
   </main>

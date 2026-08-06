@@ -220,6 +220,9 @@ ST_RUNTIME_JSON_LIMITS = {
     "mvu_state": 2_000_000,
     "variables": 512_000,
 }
+TAVERN_HELPER_SCRIPT_MAX_ENTRIES = 100
+TAVERN_HELPER_SCRIPT_MAX_JSON_BYTES = 4 * 1024 * 1024
+TAVERN_HELPER_SCRIPT_MAX_DEPTH = 16
 DIALOGUE_EVENT_TYPES = {
     "message_send": "发送消息",
     "continue": "续写回复",
@@ -897,9 +900,15 @@ class AdvancedCreationError(PermissionError):
     pass
 
 
+class TavernHelperScriptsError(ValueError):
+    pass
+
+
 def advanced_creation_requested(data: object) -> bool:
     if not isinstance(data, dict):
         return False
+    if "tavern_helper_scripts" in data:
+        return True
     assets = data.get("media_assets")
     if isinstance(assets, list) and any(isinstance(item, dict) and item.get("id") for item in assets):
         return True
@@ -7447,6 +7456,11 @@ class Store:
                         commit=False,
                     )
                 extras = normalize_user_app_extras(prepared)
+                if "tavern_helper_scripts" in prepared:
+                    extras = merge_tavern_helper_scripts_into_extra(
+                        extras,
+                        prepared.get("tavern_helper_scripts"),
+                    )
                 extra_json = json.dumps(extras, ensure_ascii=False, separators=(",", ":")) if extras else None
                 self.conn.execute(
                     """insert into local_apps(id,display_id,source,owner_user_id,name,summary,description,cover_url,
@@ -7503,7 +7517,14 @@ class Store:
             display_id = self._next_local_app_display_id_locked()
             rich = normalize_admin_rich_app_payload(data)
             normalized = normalize_admin_app_data({**data, **rich})
-            extra_json = json.dumps(normalize_user_app_extras({**data, **rich}), ensure_ascii=False, separators=(",", ":"))
+            rich_payload = {**data, **rich}
+            extras = normalize_user_app_extras(rich_payload)
+            if "tavern_helper_scripts" in rich_payload:
+                extras = merge_tavern_helper_scripts_into_extra(
+                    extras,
+                    rich_payload.get("tavern_helper_scripts"),
+                )
+            extra_json = json.dumps(extras, ensure_ascii=False, separators=(",", ":"))
             try:
                 self.conn.execute("begin immediate")
                 self.conn.execute(
@@ -7569,7 +7590,7 @@ class Store:
                 "personality", "scenario", "mes_example", "post_history_instructions",
                 "alternate_greetings", "world_info", "creator_notes", "character_version",
                 "creator", "extensions", "prompt_blocks", "quick_replies", "regex_scripts", "TavernHelper_scripts",
-                "card_prompt_preset", "media_assets", "card_experience",
+                "card_prompt_preset", "media_assets", "card_experience", "tavern_helper_scripts",
             )
             if extras_in or any(k in rich for k in extra_trigger_keys):
                 existing = parse_json_object(dict(row).get("extra_settings"))
@@ -7577,6 +7598,11 @@ class Store:
                     existing = {}
                 for k, v in extras_in.items():
                     existing[k] = v
+                if "tavern_helper_scripts" in rich:
+                    existing = merge_tavern_helper_scripts_into_extra(
+                        existing,
+                        rich.get("tavern_helper_scripts"),
+                    )
                 updates["extra_settings"] = json.dumps(existing, ensure_ascii=False, separators=(",", ":")) if existing else None
             if not updates:
                 return row
@@ -7819,11 +7845,16 @@ class Store:
                     "personality", "scenario", "mes_example", "post_history_instructions",
                     "alternate_greetings", "world_info", "creator_notes", "character_version",
                     "creator", "extensions", "prompt_blocks", "quick_replies", "regex_scripts", "TavernHelper_scripts",
-                    "card_prompt_preset", "media_assets", "media_draft_id", "card_experience",
+                    "card_prompt_preset", "media_assets", "media_draft_id", "card_experience", "tavern_helper_scripts",
                 )
                 if extras_in or any(key in data for key in extra_trigger_keys):
                     existing = dict(existing_extra)
                     existing.update(extras_in)
+                    if "tavern_helper_scripts" in data:
+                        existing = merge_tavern_helper_scripts_into_extra(
+                            existing,
+                            data.get("tavern_helper_scripts"),
+                        )
                     updates["extra_settings"] = json.dumps(existing, ensure_ascii=False, separators=(",", ":")) if existing else None
                 if not updates:
                     self.conn.commit()
@@ -9823,7 +9854,7 @@ def normalize_admin_rich_app_payload(data: dict) -> dict:
         "personality", "scenario", "mes_example", "post_history_instructions",
         "alternate_greetings", "world_info", "creator_notes", "character_version",
         "creator", "extensions", "prompt_blocks", "quick_replies", "regex_scripts",
-        "card_prompt_preset", "media_assets", "card_experience",
+        "card_prompt_preset", "media_assets", "card_experience", "tavern_helper_scripts",
         "TavernHelper_scripts", "sampling", "bg_url", "nsfw", "protected",
         "protected_prompt", "anonymous",
     ):
@@ -11601,7 +11632,7 @@ def local_app_feature_flags(row: dict, extra: dict | None = None) -> dict[str, b
     }
 
 
-def local_app_to_card(row: dict) -> dict:
+def local_app_to_card(row: dict, *, include_tavern_helper_scripts: bool = True) -> dict:
     """把 local_apps 行转成 explore/详情 期望的角色卡格式。"""
     def _json(v, default):
         if not v:
@@ -11633,6 +11664,7 @@ def local_app_to_card(row: dict) -> dict:
     media_assets = extra.get("media_assets") if isinstance(extra.get("media_assets"), list) else []
     card_experience = extra.get("card_experience") if isinstance(extra.get("card_experience"), dict) else {}
     card_prompt_preset = normalize_card_prompt_preset(extra.get("card_prompt_preset"))
+    tavern_helper_scripts = tavern_helper_scripts_from_extra(extra)
     feature_flags = local_app_feature_flags(row, extra)
     return {
         "id": row["id"],
@@ -11687,6 +11719,15 @@ def local_app_to_card(row: dict) -> dict:
         "prompt_blocks": prompt_blocks,
         "quick_replies": quick_replies,
         "regex_scripts": regex_scripts,
+        "tavern_helper_scripts": tavern_helper_scripts if include_tavern_helper_scripts else [],
+        "tavern_helper_script_count": count_tavern_helper_script_entries(tavern_helper_scripts),
+        "tavern_helper_script_source": (
+            "extensions"
+            if has_direct_tavern_helper_scripts(extra)
+            else "sillytavern_card"
+            if isinstance(_tavern_helper_from_card_snapshot(extra.get("sillytavern_card")).get("scripts"), list)
+            else "none"
+        ),
         "media_assets": [
             {
                 "id": str(item.get("id") or ""),
@@ -11711,7 +11752,10 @@ def local_app_to_card(row: dict) -> dict:
         "creator_notes": str(extra.get("creator_notes") or ""),
         "creator": str(extra.get("creator") or ""),
         "character_version": str(extra.get("character_version") or ""),
-        "extensions": sanitize_card_extensions(extra.get("extensions")),
+        "extensions": project_card_extensions(
+            extra,
+            include_tavern_helper_scripts=include_tavern_helper_scripts,
+        ),
         "sampling": {
             "temperature": float(sampling.get("temperature")) if sampling.get("temperature") not in (None, "") else None,
             "top_p": float(sampling.get("top_p")) if sampling.get("top_p") not in (None, "") else None,
@@ -12057,6 +12101,12 @@ def app_to_silly_card(card: dict) -> dict:
             entry["extensions"] = entry_extensions
         entries.append(entry)
     extensions = sanitize_card_extensions(card.get("extensions"))
+    if "tavern_helper_scripts" in card:
+        extensions = merge_tavern_helper_scripts(
+            extensions,
+            card.get("tavern_helper_scripts"),
+            enforce_limits=False,
+        )
     regex_scripts = card.get("regex_scripts") if isinstance(card.get("regex_scripts"), list) else []
     if regex_scripts:
         extensions["regex_scripts"] = [
@@ -12193,9 +12243,31 @@ def local_app_to_silly_card(row: dict, fallback_card: dict | None = None) -> dic
                 "homer_roleplayhub",
             ):
                 original_extensions.pop(key, None)
+            rebuilt_tavern_helper = rebuilt_extensions.pop("tavern_helper", None)
             original_extensions.update(
                 json.loads(json.dumps(rebuilt_extensions, ensure_ascii=False))
             )
+            if has_direct_tavern_helper_scripts(extra):
+                current_helper = original_extensions.get("tavern_helper")
+                if not isinstance(current_helper, dict):
+                    current_helper = {}
+                else:
+                    current_helper = json.loads(json.dumps(current_helper, ensure_ascii=False))
+                if isinstance(rebuilt_tavern_helper, dict):
+                    current_helper.update(json.loads(json.dumps(rebuilt_tavern_helper, ensure_ascii=False)))
+                original_extensions["tavern_helper"] = current_helper
+                original_extensions = merge_tavern_helper_scripts(
+                    original_extensions,
+                    tavern_helper_scripts_from_extra(extra),
+                )
+            elif isinstance(rebuilt_tavern_helper, dict):
+                current_helper = original_extensions.get("tavern_helper")
+                if not isinstance(current_helper, dict):
+                    current_helper = {}
+                else:
+                    current_helper = json.loads(json.dumps(current_helper, ensure_ascii=False))
+                current_helper.update(json.loads(json.dumps(rebuilt_tavern_helper, ensure_ascii=False)))
+                original_extensions["tavern_helper"] = current_helper
             target_data["extensions"] = original_extensions
 
             if isinstance(rebuilt_data.get("character_book"), dict):
@@ -13860,6 +13932,204 @@ def sanitize_card_extensions(value: object) -> dict:
     for key in ("homer_card_prompt_preset", "homer_card_experience", "homer_media_assets", "homer_roleplayhub"):
         clean.pop(key, None)
     return clean
+
+
+def _json_clone_for_tavern_helper(value: object) -> object:
+    try:
+        return json.loads(json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False))
+    except (TypeError, ValueError) as exc:
+        raise TavernHelperScriptsError("TavernHelper 脚本包含无法序列化的字段") from exc
+
+
+def _normalize_tavern_helper_script_node(
+    value: object,
+    path: str,
+    state: dict,
+    *,
+    enforce_limits: bool,
+    depth: int,
+) -> dict:
+    if depth > TAVERN_HELPER_SCRIPT_MAX_DEPTH:
+        raise TavernHelperScriptsError("TavernHelper 脚本目录层级过深")
+    if not isinstance(value, dict):
+        raise TavernHelperScriptsError(f"TavernHelper 脚本 {path} 必须是对象")
+
+    node = _json_clone_for_tavern_helper(value)
+    if not isinstance(node, dict):
+        raise TavernHelperScriptsError(f"TavernHelper 脚本 {path} 必须是对象")
+
+    state["count"] += 1
+    if enforce_limits and state["count"] > TAVERN_HELPER_SCRIPT_MAX_ENTRIES:
+        raise TavernHelperScriptsError(
+            f"TavernHelper 脚本最多 {TAVERN_HELPER_SCRIPT_MAX_ENTRIES} 条"
+        )
+
+    raw_type = str(node.get("type") or ("folder" if isinstance(node.get("scripts"), list) else "script")).strip().lower()
+    if raw_type not in ("script", "folder"):
+        raise TavernHelperScriptsError(f"TavernHelper 脚本 {path} 的 type 只能是 script 或 folder")
+
+    ordinal = state["count"]
+    node["type"] = raw_type
+    node["id"] = str(node.get("id") or f"{raw_type}-{ordinal}").strip() or f"{raw_type}-{ordinal}"
+    node["name"] = str(node.get("name") or ("脚本" if raw_type == "script" else "脚本文件夹") + f" {ordinal}").strip()
+    node["content"] = str(node.get("content") or "")
+    if "enabled" in node:
+        enabled = bool(node.get("enabled"))
+    elif "disabled" in node:
+        enabled = not bool(node.get("disabled"))
+    else:
+        enabled = True
+    node["enabled"] = enabled
+    node["disabled"] = not enabled
+
+    if raw_type == "folder":
+        raw_children = node.get("scripts", [])
+        if not isinstance(raw_children, list):
+            raise TavernHelperScriptsError(f"TavernHelper 文件夹 {path} 的 scripts 必须是数组")
+        node["scripts"] = [
+            _normalize_tavern_helper_script_node(
+                child,
+                f"{path}.scripts[{index}]",
+                state,
+                enforce_limits=enforce_limits,
+                depth=depth + 1,
+            )
+            for index, child in enumerate(raw_children)
+        ]
+    return node
+
+
+def normalize_tavern_helper_scripts(value: object, *, enforce_limits: bool = True) -> list:
+    if not isinstance(value, list):
+        raise TavernHelperScriptsError("tavern_helper_scripts 必须是数组")
+    state = {"count": 0}
+    normalized = [
+        _normalize_tavern_helper_script_node(
+            item,
+            f"[{index}]",
+            state,
+            enforce_limits=enforce_limits,
+            depth=0,
+        )
+        for index, item in enumerate(value)
+    ]
+    if enforce_limits:
+        raw = json.dumps(normalized, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        if len(raw) > TAVERN_HELPER_SCRIPT_MAX_JSON_BYTES:
+            raise TavernHelperScriptsError(
+                f"TavernHelper 脚本总大小不能超过 {TAVERN_HELPER_SCRIPT_MAX_JSON_BYTES // 1024 // 1024} MiB"
+            )
+    return normalized
+
+
+def _tavern_helper_from_card_snapshot(snapshot: object) -> dict:
+    if not isinstance(snapshot, dict):
+        return {}
+    data = snapshot.get("data") if isinstance(snapshot.get("data"), dict) else snapshot
+    extensions = data.get("extensions") if isinstance(data, dict) else None
+    helper = extensions.get("tavern_helper") if isinstance(extensions, dict) else None
+    return helper if isinstance(helper, dict) else {}
+
+
+def has_direct_tavern_helper_scripts(extra: object) -> bool:
+    if not isinstance(extra, dict):
+        return False
+    extensions = extra.get("extensions")
+    helper = extensions.get("tavern_helper") if isinstance(extensions, dict) else None
+    return isinstance(helper, dict) and "scripts" in helper
+
+
+def tavern_helper_scripts_from_extra(extra: object) -> list:
+    if not isinstance(extra, dict):
+        return []
+    raw_scripts = None
+    if has_direct_tavern_helper_scripts(extra):
+        raw_scripts = extra.get("extensions", {}).get("tavern_helper", {}).get("scripts")
+    else:
+        raw_scripts = _tavern_helper_from_card_snapshot(extra.get("sillytavern_card")).get("scripts")
+    if not isinstance(raw_scripts, list):
+        return []
+    try:
+        return normalize_tavern_helper_scripts(raw_scripts, enforce_limits=False)
+    except TavernHelperScriptsError:
+        try:
+            cloned = _json_clone_for_tavern_helper(raw_scripts)
+        except TavernHelperScriptsError:
+            return []
+        return [item for item in cloned if isinstance(item, dict)] if isinstance(cloned, list) else []
+
+
+def project_card_extensions(extra: object, *, include_tavern_helper_scripts: bool = True) -> dict:
+    if not isinstance(extra, dict):
+        return {}
+    extensions = sanitize_card_extensions(extra.get("extensions"))
+    if include_tavern_helper_scripts:
+        return extensions
+    helper = extensions.get("tavern_helper")
+    if not isinstance(helper, dict) or "scripts" not in helper:
+        return extensions
+    redacted_helper = _json_clone_for_tavern_helper(helper)
+    if not isinstance(redacted_helper, dict):
+        redacted_helper = {}
+    redacted_helper.pop("scripts", None)
+    if redacted_helper:
+        extensions["tavern_helper"] = redacted_helper
+    else:
+        extensions.pop("tavern_helper", None)
+    return extensions
+
+
+def count_tavern_helper_script_entries(value: object) -> int:
+    if not isinstance(value, list):
+        return 0
+    total = 0
+    stack = list(value)
+    while stack:
+        item = stack.pop()
+        if not isinstance(item, dict):
+            continue
+        total += 1
+        if item.get("type") == "folder" and isinstance(item.get("scripts"), list):
+            stack.extend(item.get("scripts"))
+    return total
+
+
+def merge_tavern_helper_scripts(
+    extensions: object,
+    scripts: object,
+    *,
+    fallback_tavern_helper: object = None,
+    enforce_limits: bool = True,
+) -> dict:
+    normalized = normalize_tavern_helper_scripts(scripts, enforce_limits=enforce_limits)
+    clean_extensions = sanitize_card_extensions(extensions)
+    helper = _json_clone_for_tavern_helper(
+        fallback_tavern_helper if isinstance(fallback_tavern_helper, dict) else {}
+    )
+    if not isinstance(helper, dict):
+        helper = {}
+    current_helper = clean_extensions.get("tavern_helper")
+    if isinstance(current_helper, dict):
+        helper.update(_json_clone_for_tavern_helper(current_helper))
+    helper["scripts"] = normalized
+    clean_extensions["tavern_helper"] = helper
+    return clean_extensions
+
+
+def merge_tavern_helper_scripts_into_extra(extra: object, scripts: object) -> dict:
+    if isinstance(extra, dict):
+        cloned_extra = _json_clone_for_tavern_helper(extra)
+        out = cloned_extra if isinstance(cloned_extra, dict) else {}
+    else:
+        out = {}
+    direct_extensions = out.get("extensions") if isinstance(out.get("extensions"), dict) else {}
+    fallback_helper = _tavern_helper_from_card_snapshot(out.get("sillytavern_card"))
+    out["extensions"] = merge_tavern_helper_scripts(
+        direct_extensions,
+        scripts,
+        fallback_tavern_helper=fallback_helper,
+    )
+    return out
 
 
 def normalize_user_app_extras(data: dict) -> dict:
@@ -19367,7 +19637,12 @@ class Handler(BaseHTTPRequestHandler):
                 only_public=False,
                 only_published=False,
             )
-            payload = {"list": [local_app_to_card(r) for r in rows], "total": total, "page": page, "page_size": page_size}
+            payload = {
+                "list": [local_app_to_card(r, include_tavern_helper_scripts=False) for r in rows],
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+            }
             return go_response(payload) if normalized.startswith("go/") else ok_response(payload)
 
         if normalized in ("console/api/web/my-apps-count", "go/api/web/my-apps-count"):
@@ -19383,6 +19658,8 @@ class Handler(BaseHTTPRequestHandler):
                 row = self.store.create_user_app(user["id"], data)
             except AdvancedCreationError as exc:
                 return error_response(str(exc), 403)
+            except TavernHelperScriptsError as exc:
+                return error_response(str(exc), 400)
             except CardMediaError as exc:
                 message = str(exc)
                 return error_response(message, 404 if "not found" in message or "not owned" in message else 400)
@@ -19428,6 +19705,10 @@ class Handler(BaseHTTPRequestHandler):
                 if imported_cover_path is not None:
                     imported_cover_path.unlink(missing_ok=True)
                 return error_response(str(exc), 403)
+            except TavernHelperScriptsError as exc:
+                if imported_cover_path is not None:
+                    imported_cover_path.unlink(missing_ok=True)
+                return error_response(str(exc), 400)
             except CardMediaError as exc:
                 if imported_cover_path is not None:
                     imported_cover_path.unlink(missing_ok=True)
@@ -19477,6 +19758,8 @@ class Handler(BaseHTTPRequestHandler):
                 row = self.store.update_user_app(app_id, user["id"], data)
             except AdvancedCreationError as exc:
                 return error_response(str(exc), 403)
+            except TavernHelperScriptsError as exc:
+                return error_response(str(exc), 400)
             except CardMediaError as exc:
                 message = str(exc)
                 return error_response(message, 404 if "not found" in message or "not owned" in message else 400)
@@ -19574,7 +19857,7 @@ class Handler(BaseHTTPRequestHandler):
             rows, total = self.store.list_favorites(user["id"], page=page, page_size=page_size, search=search)
             cards = [
                 dict(
-                    local_app_to_card(r),
+                    local_app_to_card(r, include_tavern_helper_scripts=False),
                     favorited=True,
                     liked=self.store.is_liked(user["id"], r.get("id") or ""),
                     user_tags=self.store.list_user_app_tags(user["id"], r.get("id") or ""),
@@ -20154,7 +20437,19 @@ class Handler(BaseHTTPRequestHandler):
                         if draft:
                             local_data = merge_snapshot_over_row(local_data, draft)
                             local_data["has_unpublished_draft"] = True
-                    card = local_app_to_card(local_data)
+                    owns_card = bool(
+                        user
+                        and local_data.get("source") == "user"
+                        and str(local_data.get("owner_user_id") or "") == str(user["id"])
+                    )
+                    can_edit_tavern_helper = bool(
+                        owns_card
+                        and self.store.advanced_creation_access(str(user["id"])).get("allowed") is True
+                    )
+                    card = local_app_to_card(
+                        local_data,
+                        include_tavern_helper_scripts=can_edit_tavern_helper,
+                    )
                     card["favorited"] = self.store.is_favorite(user["id"] if user else None, card["id"])
                     card["liked"] = self.store.is_liked(user["id"] if user else None, card["id"])
                     card["user_tags"] = self.store.list_user_app_tags(user["id"] if user else None, card["id"])
@@ -21226,7 +21521,10 @@ class Handler(BaseHTTPRequestHandler):
                     return error_response("invalid body")
                 data = dict(body)
                 data["cover_url"] = normalize_cover_input(data.get("cover_url") or data.get("cover") or "")
-                row = self.store.create_admin_app(data)
+                try:
+                    row = self.store.create_admin_app(data)
+                except TavernHelperScriptsError as exc:
+                    return error_response(str(exc), 400)
                 return ok_response(local_app_to_card(dict(row)))
 
             if normalized == "admin/api/apps/import":
@@ -21267,7 +21565,10 @@ class Handler(BaseHTTPRequestHandler):
                 data = dict(body)
                 if "cover_url" in data or "cover" in data:
                     data["cover_url"] = normalize_cover_input(data.get("cover_url") or data.get("cover") or "")
-                row = self.store.update_admin_app(app_id, data)
+                try:
+                    row = self.store.update_admin_app(app_id, data)
+                except TavernHelperScriptsError as exc:
+                    return error_response(str(exc), 400)
                 if not row:
                     return error_response("not found", 404)
                 return ok_response(local_app_to_card(dict(row)))

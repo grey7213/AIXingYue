@@ -9,9 +9,9 @@
   <script src="/assets/vendor/tailwindcss-browser.js?v=20260713-local"></script>
   <link rel="stylesheet" href="/app/assets/css/app.css?v=20260720-community-versions">
   <link rel="stylesheet" href="/app/assets/css/worldbook-editor.css?v=20260713">
-  <link rel="stylesheet" href="/app/assets/css/card-experience-editor.css?v=20260801-stage3">
+  <link rel="stylesheet" href="/app/assets/css/card-experience-editor.css?v=20260806-tavern-helper">
   <script src="/app/assets/vendor/jszip-3.10.1.min.js?v=3.10.1"></script>
-  <script type="module" src="/app/assets/js/create.js?v=20260802-stage-shell"></script>
+  <script type="module" src="/app/assets/js/create.js?v=20260806-tavern-helper"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="min-h-screen creator-editor-page">
@@ -643,6 +643,87 @@
                 </div>
               </template>
               <button type="button" class="xy-btn xy-btn-ghost w-full justify-center" @click="addRegexScript" x-text="creatorText('add_regex_text', '＋ 添加 Regex')"></button>
+            </div>
+            <div class="editor-field tavern-helper-editor">
+              <div class="tavern-helper-editor__head">
+                <div>
+                  <label class="editor-field__label">TavernHelper 卡内脚本</label>
+                  <div class="editor-field__hint">编辑 Character Card 的 <code>extensions.tavern_helper.scripts</code>。脚本仍只在受控 SillyTavern / RoleplayHub 沙箱中运行，不会进入惑梦父页面。</div>
+                </div>
+                <div class="tavern-helper-editor__meta" x-show="tavernHelperScriptsLoaded">
+                  <span x-text="`${canUseAdvancedCreation() ? tavernHelperDraftStatus().count : tavernHelperScriptCount}/100 条`"></span>
+                  <span x-show="canUseAdvancedCreation()" x-text="tavernHelperSizeLabel()"></span>
+                  <span x-show="tavernHelperScriptsDirty" class="is-dirty">待保存</span>
+                </div>
+              </div>
+
+              <template x-if="!tavernHelperScriptsLoaded">
+                <div class="tavern-helper-lock"><strong>正在读取脚本信息…</strong></div>
+              </template>
+
+              <template x-if="tavernHelperScriptsLoaded && !canUseAdvancedCreation()">
+                <div class="tavern-helper-lock">
+                  <div class="tavern-helper-lock__summary">
+                    <strong x-text="tavernHelperScriptCount ? `已有 ${tavernHelperScriptCount} 条卡内脚本` : '当前角色没有卡内脚本'"></strong>
+                    <span x-text="`来源：${tavernHelperSourceLabel()}`"></span>
+                  </div>
+                  <p x-text="advancedCreationHint()"></p>
+                  <small>锁定状态不会加载脚本正文；保存基础字段时也不会覆盖或删除已有脚本。</small>
+                </div>
+              </template>
+
+              <template x-if="tavernHelperScriptsLoaded && canUseAdvancedCreation()">
+                <div class="tavern-helper-editor__body">
+                  <input x-ref="tavernHelperImport" type="file" accept=".json,application/json" hidden @change="onTavernHelperImport">
+                  <div class="tavern-helper-editor__toolbar">
+                    <button type="button" class="editor-toolbar__btn" @click="addTavernHelperScript('script')">＋ 脚本</button>
+                    <button type="button" class="editor-toolbar__btn" @click="addTavernHelperScript('folder')">＋ 文件夹</button>
+                    <button type="button" class="editor-toolbar__btn" @click="triggerTavernHelperImport">导入 JSON</button>
+                    <button type="button" class="editor-toolbar__btn" @click="exportTavernHelperScripts">导出 JSON</button>
+                    <button type="button" class="editor-toolbar__btn is-danger" @click="clearTavernHelperScripts" :disabled="!form.tavern_helper_scripts.length">清空</button>
+                    <span x-text="`来源：${tavernHelperSourceLabel()}`"></span>
+                  </div>
+                  <div class="tavern-helper-editor__warning" x-show="tavernHelperDraftStatus().error" x-text="tavernHelperDraftStatus().error"></div>
+                  <div class="tavern-helper-editor__empty" x-show="!form.tavern_helper_scripts.length">
+                    暂无脚本。可新建单条脚本、脚本文件夹，或导入独立脚本 JSON / SillyTavern 角色卡 JSON。
+                  </div>
+
+                  <div class="tavern-helper-list" x-show="form.tavern_helper_scripts.length">
+                    <template x-for="(s, i) in form.tavern_helper_scripts" :key="s.id || i">
+                      <article class="tavern-helper-card">
+                        <header class="tavern-helper-card__head">
+                          <div class="tavern-helper-card__identity">
+                            <span x-text="s.type === 'folder' ? '文件夹' : '脚本'"></span>
+                            <strong x-text="s.name || `未命名脚本 ${i + 1}`"></strong>
+                            <small>#<span x-text="i + 1"></span></small>
+                          </div>
+                          <div class="tavern-helper-card__actions">
+                            <label><input type="checkbox" x-model="s.enabled" @change="s.disabled = !s.enabled; markTavernHelperDirty()">启用</label>
+                            <button type="button" @click="moveTavernHelperScript(i, -1)" :disabled="i === 0" title="上移">↑</button>
+                            <button type="button" @click="moveTavernHelperScript(i, 1)" :disabled="i === form.tavern_helper_scripts.length - 1" title="下移">↓</button>
+                            <button type="button" @click="copyTavernHelperScript(i)">复制 JSON</button>
+                            <button type="button" @click="duplicateTavernHelperScript(i)">克隆</button>
+                            <button type="button" class="is-danger" @click="removeTavernHelperScript(i)">删除</button>
+                          </div>
+                        </header>
+                        <div class="tavern-helper-card__body">
+                          <div class="tavern-helper-card__grid">
+                            <label><span>名称</span><input class="xy-input text-sm" x-model="s.name" @input="markTavernHelperDirty()" placeholder="脚本名称"></label>
+                            <label><span>ID</span><input class="xy-input text-sm" x-model="s.id" @input="markTavernHelperDirty()" placeholder="稳定脚本 ID"></label>
+                            <label><span>类型</span><select class="xy-input text-sm" x-model="s.type" @change="changeTavernHelperType(i)"><option value="script">script</option><option value="folder">folder</option></select></label>
+                          </div>
+                          <template x-if="s.type === 'script'">
+                            <label class="tavern-helper-card__code"><span>脚本内容</span><textarea class="xy-input" x-model="s.content" @input="markTavernHelperDirty()" spellcheck="false" placeholder="粘贴 TavernHelper 卡内脚本内容"></textarea></label>
+                          </template>
+                          <template x-if="s.type === 'folder'">
+                            <label class="tavern-helper-card__code"><span>文件夹 scripts JSON</span><textarea class="xy-input" x-model="s.__homer_folder_scripts_json" @input.debounce.250ms="validateTavernHelperFolder(i)" @blur="validateTavernHelperFolder(i)" spellcheck="false" placeholder="[]"></textarea><small>填写子级 script / folder 对象数组；子项也计入 100 条总限制。</small><em x-show="s.__homer_folder_scripts_error" x-text="s.__homer_folder_scripts_error"></em></label>
+                          </template>
+                        </div>
+                      </article>
+                    </template>
+                  </div>
+                </div>
+              </template>
             </div>
           </div>
         </div>

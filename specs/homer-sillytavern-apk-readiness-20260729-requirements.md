@@ -4,14 +4,14 @@
 
 ## 目标
 
-基于 `E:\obs录制\惑梦-Homer-外部导入与角色卡兼容阶段备份-20260801.zip` 中的原版 SillyTavern 1.18.0 对话架构，将交接分支安全合并回当前主干，使 Web/App WebView 具备稳定、统一、可审计的对话体验，并达到后续 APK 打包前的本地验收状态。源包 SHA-256 为 `D759B34DD40C77AE28FFC01B6957414CA4C4AE2F20CD5AB48CF64DEBC2BDBABC`。
+基于 `E:\obs录制\惑梦-Homer-外部导入与角色卡兼容阶段备份-20260801.zip` 中的原版 SillyTavern 1.18.0 对话架构，将交接分支安全合并回当前主干，使 Web/App WebView 具备稳定、统一、可审计的对话体验，并把已通过本地验收的内部对话模块部署到生产。源包 SHA-256 为 `D759B34DD40C77AE28FFC01B6957414CA4C4AE2F20CD5AB48CF64DEBC2BDBABC`。
 
 ## 用户与范围
 
 - 普通用户：进入角色对话、使用逐消息操作、查看自己的操作日志。
 - 管理员：导入和管理已审计的 SillyTavern 扩展包，查看用户注册与实际充值汇总。
-- 本轮只改本地 Web 前端、SillyTavern runtime、Python 后端和验证脚本。
-- 本轮不部署生产、不重建 APK、不恢复旧“角色卡版本选择”入口。
+- 本轮修改 Web 前端、SillyTavern runtime、Python 后端、部署工具和验证脚本，并在完整本地回归后部署生产。
+- 本轮不重建 APK、不恢复旧“角色卡版本选择”入口。
 
 ## 功能要求
 
@@ -53,6 +53,21 @@
    - 不把管理员积分调整、免费积分、每日奖励、兑换码或旧测试充值额度误算为现金充值。
    - 搜索、分页和管理员权限控制保持有效。
 
+8. TavernHelper 卡内脚本创作能力
+   - 高级创作者可在制卡/编辑页查看、编辑、复制、导入和导出 `extensions.tavern_helper.scripts`。
+   - 前端使用专用字段 `tavern_helper_scripts`，不得把整份 `extensions` 作为普通用户可编辑字段回传。
+   - 最多 100 条脚本，总 JSON UTF-8 大小不超过 4 MiB；超限必须明确报错，不得静默截断。
+   - 显式提交（包括清空）要求高级创作权限；无权限用户只看到已有脚本数量和锁定说明，普通基础编辑不得覆盖或丢失原脚本。
+   - 保存时仅合并 `extensions.tavern_helper.scripts`，保留 `tavern_helper` 及其他 extension 的未知字段；JSON/PNG/SillyTavern 导出必须无损带回已编辑脚本。
+
+9. 生产内部对话模块
+   - SillyTavern runtime 源码部署到 `/opt/homer-dialogue-runtime`，运行数据部署到 `/var/lib/homer-dialogue`，以专用 `homer-dialogue` 用户运行。
+   - systemd 仅监听 `127.0.0.1:8091`，通过 `HOMER_BACKEND_BASE_URL=http://127.0.0.1:8008` 与 Homer 后端通信。
+   - Nginx 对外只暴露同源 `/module/dialogue/`；旧 `/dialogue-core/` 仅兼容重定向，运行时根相对资源/API 统一重定向到模块前缀。
+   - 顶层直接访问内部 runtime 时返回 `/app/chat.html`；只有带受控嵌入标记的 iframe 可加载。
+   - dialogue 响应单独允许 `frame-ancestors 'self'`，站点其他页面继续保持现有防嵌入策略。
+   - 安装依赖只使用 `npm ci --omit=dev --no-audit --no-fund`，部署后 webpack 必须仍为 `5.105.4`。
+
 ## 架构与安全约束
 
 - 当前主干为合并目标，禁止直接覆盖后端、后台或前端文件；以交接分支的共同基线做定向移植。
@@ -60,6 +75,8 @@
 - 普通用户 BYOK 保持关闭；模型 Key 只在服务端。
 - RoleplayHub HTML 继续使用无 `allow-same-origin` 的 sandbox iframe和随机通道令牌。
 - SillyTavern Node 端口只允许受控代理访问，不作为无认证公网服务直接暴露。
+- SillyTavern 1.18.0 为 AGPL-3.0；生产网络部署必须在可见许可页提供对应修改版源码、许可证、修改说明和无担保声明。
+- `JS-Slash-Runner` 当前上游许可证标识不明确且随包许可证为 AFPL 9；许可页必须独立标注来源与许可风险，不得把所有公共扩展概括为开源组件。
 - 保留当前主干的模型自动发现/探测、会话运行时配置、社区/版本/Spine/Open Chat Runtime 及 7 月下旬渲染修复。
 
 ## 验收标准
@@ -68,6 +85,9 @@
 - 后端测试证明扩展导入权限、日志幂等与脱敏、用户注册时间和充值聚合正确。
 - 真实 Chromium 在 1440×900 与 390×844 验证：首屏无 ST 闪露、逐消息操作有效、对话 UI 无横向溢出，console/page error 为 0。
 - 四个固定公共扩展均能被 runtime 枚举；离线验收不得因扩展产生外部网络请求。
+- TavernHelper 脚本 API 覆盖创建、读取、更新、清空、JSON/PNG 导出、未知 extension 字段保留、权限拒绝和 100 条/4 MiB 边界。
+- 生产验收证明 8091 只绑定 loopback，`/module/dialogue/` 可嵌入、顶层访问会回到站内聊天，桌面/390px 真实登录无首屏闪露且 RoleplayHub sandbox 无 `allow-same-origin`。
+- 生产 backend/runtime/Nginx 均 active，内外 health 正常，`CONTENT_MODE=local_only` 不变；部署前配置与数据有时间戳备份和可执行回滚路径。
 - Git 工作树只包含本任务文件和用户原有未跟踪 `.thm`；后者不被修改或提交。
 
 ## 非目标
@@ -75,4 +95,4 @@
 - 不在本轮恢复角色卡历史版本选择。
 - 不迁移历史接口路径、数据库名、APK 包名或服务名。
 - 不允许普通用户安装任意第三方扩展或把卡内脚本放入父页面同源 DOM。
-- 不以编译通过代替浏览器验收，也不在未验证前部署或打 APK。
+- 不以编译通过代替浏览器验收，也不在未验证前部署；本轮始终不打 APK。

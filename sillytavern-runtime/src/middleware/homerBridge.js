@@ -4,7 +4,7 @@ import { getConfigValue } from '../util.js';
 const ENABLED = getConfigValue('homerBridge.enabled', false, 'boolean');
 const BACKEND_BASE_URL = String(process.env.HOMER_BACKEND_BASE_URL || getConfigValue('homerBridge.backendBaseUrl', 'http://127.0.0.1:8000') || '').replace(/\/+$/, '');
 const AUTH_COOKIE_NAME = String(process.env.HOMER_AUTH_COOKIE_NAME || getConfigValue('homerBridge.authCookieName', 'ai_xingyue_token') || 'ai_xingyue_token');
-const LOGIN_URL = String(getConfigValue('homerBridge.loginUrl', 'http://127.0.0.1:8000/app/login.html') || '');
+const LOGIN_URL = String(process.env.HOMER_LOGIN_URL || getConfigValue('homerBridge.loginUrl', 'http://127.0.0.1:8000/app/login.html') || '');
 const VERIFY_TTL_MS = Math.max(5, Number(getConfigValue('homerBridge.verificationTtlSeconds', 60, 'number')) || 60) * 1000;
 const REQUEST_TIMEOUT_MS = Math.max(500, Number(getConfigValue('homerBridge.requestTimeoutMs', 3000, 'number')) || 3000);
 

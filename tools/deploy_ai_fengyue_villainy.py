@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 import argparse
+import hashlib
 import posixpath
 import re
 import secrets
 import sys
+import tarfile
+import tempfile
 import time
 from pathlib import Path
+from pathlib import PurePosixPath
 from urllib.parse import urlsplit
 
 import paramiko
@@ -21,11 +25,55 @@ DEFAULT_CHAT_MOD_WORKSHOP = ROOT / "tools" / "chat_mod_workshop.py"
 DEFAULT_SPINE_MEDIA_SUPPORT = ROOT / "tools" / "spine_media_support.py"
 DEFAULT_REQUIRED_WORLD_BOOK = ROOT / "tools" / "data" / "tavo_anti_scrape_worldbook.json"
 DEFAULT_FRONTEND = ROOT / "frontend"
+DEFAULT_DIALOGUE_RUNTIME = ROOT / "sillytavern-runtime"
 DEFAULT_APK = ROOT / "output" / "zip-1-repack" / "ai-xingyue-patcher-signed.apk"
 DEFAULT_KEY = Path.home() / ".ssh" / "villainy_backup_ed25519"
 NGINX_CONF = "/etc/nginx/sites-available/sub2api.conf"
 PATCHER_NGINX_CONF = "/etc/nginx/sites-available/ai-fengyue-patcher.conf"
 FRONTEND_REMOTE = "/var/www/ai-fengyue-frontend"
+DIALOGUE_REMOTE = "/opt/homer-dialogue-runtime"
+DIALOGUE_DATA_REMOTE = "/var/lib/homer-dialogue"
+DIALOGUE_UNIT = "/etc/systemd/system/homer-dialogue.service"
+DIALOGUE_EXPECTED_WEBPACK = "5.105.4"
+DIALOGUE_REQUIRED_EXTENSIONS = (
+    "js-slash-runner",
+    "ST-Prompt-Template",
+    "st-yuzi-phone",
+    "SillyTavern-MemoryBooks",
+)
+DIALOGUE_EXCLUDED_TOP_LEVEL = {
+    ".git",
+    ".gemini",
+    ".idea",
+    ".vscode",
+    "backups",
+    "data",
+    "dist",
+    "node_modules",
+    "output",
+    "test-results",
+}
+DIALOGUE_EXCLUDED_PUBLIC_PREFIXES = (
+    PurePosixPath("public/chats"),
+    PurePosixPath("public/characters"),
+    PurePosixPath("public/User Avatars"),
+    PurePosixPath("public/backgrounds"),
+    PurePosixPath("public/groups"),
+    PurePosixPath("public/group chats"),
+    PurePosixPath("public/worlds"),
+    PurePosixPath("public/user"),
+    PurePosixPath("public/themes"),
+    PurePosixPath("public/OpenAI Settings"),
+    PurePosixPath("public/KoboldAI Settings"),
+    PurePosixPath("public/NovelAI Settings"),
+    PurePosixPath("public/TextGen Settings"),
+    PurePosixPath("public/instruct"),
+    PurePosixPath("public/context"),
+    PurePosixPath("public/movingUI"),
+    PurePosixPath("public/QuickReplies"),
+    PurePosixPath("public/assets"),
+    PurePosixPath("public/error"),
+)
 DOMAIN_NAME_RE = re.compile(
     r"(?=.{1,253}\Z)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}\Z"
 )
@@ -90,9 +138,103 @@ def remote_exists(sftp: paramiko.SFTPClient, path: str) -> bool:
         return False
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def dialogue_archive_excluded(relative_path: PurePosixPath) -> bool:
+    parts = relative_path.parts
+    if not parts:
+        return False
+    if parts[0] in DIALOGUE_EXCLUDED_TOP_LEVEL:
+        return True
+    if any(part in {"node_modules", "__pycache__"} for part in parts):
+        return True
+    if any(
+        relative_path == prefix or prefix in relative_path.parents
+        for prefix in DIALOGUE_EXCLUDED_PUBLIC_PREFIXES
+    ):
+        return True
+    name = parts[-1].lower()
+    if name in {".env", "secrets.json", "whitelist.txt", "access.log", "content.log"}:
+        return True
+    if name.startswith(("cookie", "token")) and name.endswith((".txt", ".json")):
+        return True
+    if name.endswith((".sqlite", ".sqlite3", ".db", ".pem", ".key", ".p12", ".jks", ".keystore")):
+        return True
+    return False
+
+
+def build_dialogue_runtime_archive(runtime_root: Path, destination: Path) -> dict:
+    runtime_root = runtime_root.resolve()
+    required = (
+        runtime_root / "server.js",
+        runtime_root / "package.json",
+        runtime_root / "package-lock.json",
+        runtime_root / "config.yaml",
+        runtime_root / "LICENSE",
+    )
+    for path in required:
+        if not path.is_file():
+            raise FileNotFoundError(path)
+    for extension in DIALOGUE_REQUIRED_EXTENSIONS:
+        manifest = runtime_root / "public" / "scripts" / "extensions" / "third-party" / extension / "manifest.json"
+        if not manifest.is_file():
+            raise FileNotFoundError(manifest)
+
+    included_files = 0
+    included_bytes = 0
+    with tarfile.open(destination, "w:gz", format=tarfile.PAX_FORMAT) as archive:
+        for item in sorted(runtime_root.rglob("*"), key=lambda path: path.as_posix().lower()):
+            relative = PurePosixPath(item.relative_to(runtime_root).as_posix())
+            if dialogue_archive_excluded(relative):
+                continue
+            if item.is_symlink():
+                raise RuntimeError(f"dialogue runtime package refuses symlink: {relative}")
+            if not item.is_dir() and not item.is_file():
+                raise RuntimeError(f"dialogue runtime package refuses special file: {relative}")
+            archive.add(item, arcname=relative.as_posix(), recursive=False)
+            if item.is_file():
+                included_files += 1
+                included_bytes += item.stat().st_size
+
+    with tarfile.open(destination, "r:gz") as archive:
+        names = {PurePosixPath(member.name) for member in archive.getmembers()}
+        if any(member.name.startswith("/") or ".." in PurePosixPath(member.name).parts for member in archive.getmembers()):
+            raise RuntimeError("dialogue runtime archive contains an unsafe path")
+        expected = {
+            PurePosixPath("server.js"),
+            PurePosixPath("package-lock.json"),
+            *{
+                PurePosixPath(f"public/scripts/extensions/third-party/{extension}/manifest.json")
+                for extension in DIALOGUE_REQUIRED_EXTENSIONS
+            },
+        }
+        missing = sorted(str(path) for path in expected if path not in names)
+        if missing:
+            raise RuntimeError(f"dialogue runtime archive missing required files: {missing}")
+        forbidden = [str(path) for path in names if dialogue_archive_excluded(path)]
+        if forbidden:
+            raise RuntimeError(f"dialogue runtime archive contains excluded paths: {forbidden[:5]}")
+    return {
+        "path": destination,
+        "sha256": sha256_file(destination),
+        "archive_bytes": destination.stat().st_size,
+        "source_bytes": included_bytes,
+        "files": included_files,
+        "package_lock_sha256": sha256_file(runtime_root / "package-lock.json"),
+    }
+
+
 def validate_deploy_args(args: argparse.Namespace) -> None:
     if not 1 <= args.port <= 65535:
         raise ValueError("--port must be between 1 and 65535")
+    if not 1 <= args.dialogue_port <= 65535 or args.dialogue_port == args.port:
+        raise ValueError("--dialogue-port must be a distinct port between 1 and 65535")
     if not DOMAIN_NAME_RE.fullmatch(args.domain_name):
         raise ValueError("--domain-name must be a plain DNS hostname")
 
@@ -207,7 +349,101 @@ def nginx_block(port: int) -> str:
 """
 
 
-def patcher_server_config(domain_name: str, port: int) -> str:
+def dialogue_proxy_directives(port: int, upstream_path: str = "/") -> str:
+    dialogue_csp = (
+        "default-src 'self' data: blob:; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: "
+        "https://cdn.jsdelivr.net https://fastly.jsdelivr.net https://testingcf.jsdelivr.net https://raw.githubusercontent.com; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com "
+        "https://cdn.jsdelivr.net https://fastly.jsdelivr.net https://testingcf.jsdelivr.net; "
+        "img-src 'self' data: blob: https:; "
+        "media-src 'self' data: blob: https://raw.githubusercontent.com https://cdn.jsdelivr.net "
+        "https://fastly.jsdelivr.net https://testingcf.jsdelivr.net https://thumbsnap.com https://files.catbox.moe; "
+        "font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net https://fastly.jsdelivr.net https://testingcf.jsdelivr.net; "
+        "connect-src 'self' blob: https://raw.githubusercontent.com https://cdn.jsdelivr.net https://fastly.jsdelivr.net "
+        "https://testingcf.jsdelivr.net https://gitlab.com https://thumbsnap.com https://files.catbox.moe; "
+        "worker-src 'self' blob:; frame-src 'self' data: blob:; child-src 'self' blob:; "
+        "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
+    )
+    return f"""        proxy_pass http://127.0.0.1:{port}{upstream_path};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Prefix /module/dialogue;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_cookie_path / /module/dialogue/;
+        proxy_redirect http://127.0.0.1:{port}/ /module/dialogue/;
+        proxy_redirect ~^/(?!app(?:/|$)|assets(?:/|$)|console(?:/|$)|admin(?:/|$)|go(?:/|$)|health(?:/|$)|img(?:/|$)|media-cache(?:/|$)|download(?:/|$))(.*)$ /module/dialogue/$1;
+        proxy_hide_header X-Frame-Options;
+        proxy_hide_header Content-Security-Policy;
+        proxy_hide_header Referrer-Policy;
+        proxy_hide_header Permissions-Policy;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header Referrer-Policy "same-origin" always;
+        add_header Permissions-Policy "camera=(), geolocation=(), payment=(), usb=()" always;
+        add_header Content-Security-Policy "{dialogue_csp}" always;
+"""
+
+
+def dialogue_nginx_locations(port: int) -> str:
+    proxy_root = dialogue_proxy_directives(port)
+    memory_books = dialogue_proxy_directives(
+        port,
+        "/scripts/extensions/third-party/SillyTavern-MemoryBooks/",
+    )
+    return f"""    # BEGIN HOMER_DIALOGUE_RUNTIME
+    location = /dialogue-core {{
+        return 307 /module/dialogue/$is_args$args;
+    }}
+
+    location ~ ^/dialogue-core/(?<homer_dialogue_legacy_path>.*)$ {{
+        return 307 /module/dialogue/$homer_dialogue_legacy_path$is_args$args;
+    }}
+
+    location = /module/dialogue {{
+        return 308 /module/dialogue/$is_args$args;
+    }}
+
+    # The website launcher adds homer_embed=1 only to its same-origin iframe.
+    # Direct document navigation without that marker returns to the site shell.
+    location = /module/dialogue/ {{
+        if ($arg_homer_embed != "1") {{ return 302 /app/chat.html; }}
+{proxy_root}    }}
+
+    location = /module/dialogue/index.html {{
+        if ($arg_homer_embed != "1") {{ return 302 /app/chat.html; }}
+{proxy_root}    }}
+
+    location ^~ /module/dialogue/scripts/extensions/third-party/dialogue-memory-books/ {{
+{memory_books}    }}
+
+    location ^~ /module/dialogue/ {{
+{proxy_root}    }}
+
+    # SillyTavern still emits a small set of root-relative resource/API URLs.
+    # Only requests originating from the embedded module are moved under its
+    # cookie-scoped prefix; normal Homer-owned paths keep their existing role.
+    location ~ ^/(?:api(?:/|$)|csrf-token(?:/|$)|scripts(?:/|$)|lib(?:/|$)|css(?:/|$)|webfonts(?:/|$)|locales(?:/|$)|img(?:/|$)|backgrounds(?:/|$)|characters(?:/|$)|User\\ Avatars(?:/|$)|user(?:/|$)|thumbnail(?:/|$)|socket\\.io(?:/|$)|sounds(?:/|$)|script\\.js$|lib\\.js$|style\\.css$|manifest\\.json$|favicon\\.ico$|version$) {{
+        if ($http_referer ~* "^https?://[^/]+/(?:module/dialogue|dialogue-core)(?:/|$)") {{
+            return 307 /module/dialogue$request_uri;
+        }}
+        try_files $uri =404;
+    }}
+    # END HOMER_DIALOGUE_RUNTIME
+
+"""
+
+
+def patcher_server_config(domain_name: str, port: int, dialogue_port: int = 8091) -> str:
     return f"""server {{
     listen 80;
     listen [::]:80;
@@ -238,6 +474,7 @@ server {{
     add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://unpkg.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; img-src 'self' data: blob: https:; font-src 'self' data: https://cdnjs.cloudflare.com; connect-src 'self'; media-src 'self' blob: https://raw.githubusercontent.com; frame-src 'self' data: blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; worker-src 'self'" always;
 
 {proxy_locations(port)}
+{dialogue_nginx_locations(dialogue_port)}
 
     # APK 下载渠道暂时关闭。保留文件目录但不对公网发包，避免旧链接继续分发。
     location /download/ {{
@@ -335,6 +572,46 @@ WantedBy=multi-user.target
 """
 
 
+def dialogue_service_unit(port: int = 8091) -> str:
+    return f"""[Unit]
+Description=Homer SillyTavern dialogue runtime
+After=network-online.target ai-fengyue-backend.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory={DIALOGUE_REMOTE}/current
+Environment=NODE_ENV=production
+Environment=HOMER_BACKEND_BASE_URL=http://127.0.0.1:8008
+Environment=HOMER_LOGIN_URL=/app/login.html
+ExecStart=/usr/bin/node server.js --port {port} --dataRoot {DIALOGUE_DATA_REMOTE}
+Restart=on-failure
+RestartSec=3
+TimeoutStartSec=180
+TimeoutStopSec=30
+User=homer-dialogue
+Group=homer-dialogue
+UMask=0027
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths={DIALOGUE_DATA_REMOTE}
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+
 def env_template() -> str:
     return f"""# AI Xingyue backend mail settings.
 # Leave SMTP_HOST empty to use local sendmail/postfix.
@@ -395,8 +672,11 @@ def main() -> int:
     parser.add_argument("--chat-mod-workshop", type=Path, default=DEFAULT_CHAT_MOD_WORKSHOP)
     parser.add_argument("--spine-media-support", type=Path, default=DEFAULT_SPINE_MEDIA_SUPPORT)
     parser.add_argument("--frontend", type=Path, default=DEFAULT_FRONTEND, help="前端目录，会上传到 /var/www/ai-fengyue-frontend")
+    parser.add_argument("--dialogue-runtime", type=Path, default=DEFAULT_DIALOGUE_RUNTIME, help="固定 SillyTavern runtime 源码目录")
+    parser.add_argument("--dialogue-port", type=int, default=8091, help="内部 dialogue runtime loopback 端口")
     parser.add_argument("--apk", type=Path, default=DEFAULT_APK, help="要发布到 /download/ai-xingyue-latest.apk 的 APK 文件")
     parser.add_argument("--skip-frontend", action="store_true", help="跳过前端上传")
+    parser.add_argument("--skip-dialogue-runtime", action="store_true", help="跳过 SillyTavern runtime 上传与重启（Nginx 路由仍保留）")
     parser.add_argument("--skip-apk", action="store_true", help="跳过 APK 上传")
     parser.add_argument("--admin-emails", default="", help="逗号分隔的管理员邮箱列表（写入 ai-fengyue.env，会替换现有 ADMIN_EMAILS 行）")
     parser.add_argument("--domain", default="https://patcher.villainy.top")
@@ -420,13 +700,47 @@ def main() -> int:
     for _, local_path in backend_modules:
         if not local_path.is_file():
             raise FileNotFoundError(local_path)
+    if not args.skip_dialogue_runtime and not args.dialogue_runtime.is_dir():
+        raise FileNotFoundError(args.dialogue_runtime)
     if not args.key.exists():
         raise FileNotFoundError(args.key)
 
-    ssh = connect(args.host, args.user, args.key)
+    dialogue_temp_dir = None
+    dialogue_package = None
+    if not args.skip_dialogue_runtime:
+        dialogue_temp_dir = tempfile.TemporaryDirectory(prefix="homer-dialogue-deploy-")
+        archive_path = Path(dialogue_temp_dir.name) / "homer-dialogue-runtime.tgz"
+        dialogue_package = build_dialogue_runtime_archive(args.dialogue_runtime, archive_path)
+        log(
+            "prepared dialogue runtime package: "
+            f"{dialogue_package['files']} files, {dialogue_package['archive_bytes']:,} bytes, "
+            f"sha256={dialogue_package['sha256']}"
+        )
+
+    ssh = None
+    dialogue_previous_target = ""
+    dialogue_current_kind = "missing"
+    dialogue_legacy_backup = ""
+    dialogue_release_dir = ""
+    dialogue_switched = False
+    patcher_nginx_existed = False
+    dialogue_unit_existed = False
+    patcher_nginx_backup = ""
+    dialogue_unit_backup = ""
     try:
+        ssh = connect(args.host, args.user, args.key)
         sftp = ssh.open_sftp()
         timestamp = time.strftime("%Y%m%d-%H%M%S")
+        patcher_nginx_backup = f"{PATCHER_NGINX_CONF}.bak-{timestamp}"
+        dialogue_unit_backup = f"{DIALOGUE_UNIT}.bak-{timestamp}"
+        patcher_nginx_existed = run(
+            ssh,
+            f"if [ -f {PATCHER_NGINX_CONF} ]; then printf 1; else printf 0; fi",
+        ).strip() == "1"
+        dialogue_unit_existed = run(
+            ssh,
+            f"if [ -f {DIALOGUE_UNIT} ]; then printf 1; else printf 0; fi",
+        ).strip() == "1"
         run(ssh, "hostname && python3 --version && nginx -t")
         run(ssh, f"mkdir -p {args.deploy_dir}/data")
         backup_dir = posixpath.join(args.deploy_dir, "backups")
@@ -448,7 +762,45 @@ def main() -> int:
         )
         run(ssh, "id -u ai-xingyue >/dev/null 2>&1 || useradd --system --home /nonexistent --shell /usr/sbin/nologin ai-xingyue")
         run(ssh, f"cp {NGINX_CONF} {NGINX_CONF}.bak-ai-xingyue-{timestamp}")
-        run(ssh, f"[ -f {PATCHER_NGINX_CONF} ] && cp {PATCHER_NGINX_CONF} {PATCHER_NGINX_CONF}.bak-{timestamp} || true")
+        run(ssh, f"[ -f {PATCHER_NGINX_CONF} ] && cp {PATCHER_NGINX_CONF} {patcher_nginx_backup} || true")
+
+        if not args.skip_dialogue_runtime:
+            run(ssh, "node --version && npm --version && node -e \"if(Number(process.versions.node.split('.')[0])<20)process.exit(1)\"")
+            run(ssh, "id -u homer-dialogue >/dev/null 2>&1 || useradd --system --home /nonexistent --shell /usr/sbin/nologin homer-dialogue")
+            run(
+                ssh,
+                f"mkdir -p {DIALOGUE_REMOTE}/releases {DIALOGUE_REMOTE}/backups {DIALOGUE_DATA_REMOTE} && "
+                f"chown root:homer-dialogue {DIALOGUE_REMOTE} {DIALOGUE_REMOTE}/releases && "
+                f"chmod 750 {DIALOGUE_REMOTE} {DIALOGUE_REMOTE}/releases && "
+                f"chown root:root {DIALOGUE_REMOTE}/backups && chmod 700 {DIALOGUE_REMOTE}/backups && "
+                f"chown homer-dialogue:homer-dialogue {DIALOGUE_DATA_REMOTE} && chmod 750 {DIALOGUE_DATA_REMOTE}",
+            )
+            dialogue_current_kind = run(
+                ssh,
+                f"if [ -L {DIALOGUE_REMOTE}/current ]; then printf symlink; "
+                f"elif [ -d {DIALOGUE_REMOTE}/current ]; then printf directory; "
+                f"elif [ -e {DIALOGUE_REMOTE}/current ]; then printf other; else printf missing; fi",
+            ).strip()
+            if dialogue_current_kind == "other":
+                raise RuntimeError("existing dialogue runtime current path is not a directory or symlink")
+            dialogue_previous_target = run(
+                ssh,
+                f"readlink -f {DIALOGUE_REMOTE}/current 2>/dev/null || true",
+            ).strip()
+            if dialogue_current_kind == "symlink" and not dialogue_previous_target:
+                raise RuntimeError("existing dialogue runtime symlink is broken")
+            if dialogue_previous_target and not re.fullmatch(r"/[A-Za-z0-9._/-]+", dialogue_previous_target):
+                raise RuntimeError("existing dialogue runtime target has an unsafe path")
+            run(ssh, f"[ -f {DIALOGUE_UNIT} ] && cp {DIALOGUE_UNIT} {dialogue_unit_backup} || true")
+            dialogue_data_backup = f"{DIALOGUE_REMOTE}/backups/homer-dialogue-data-{timestamp}.tgz"
+            run(
+                ssh,
+                f"if [ -d {DIALOGUE_DATA_REMOTE} ] && "
+                f"[ -n \"$(find {DIALOGUE_DATA_REMOTE} -mindepth 1 -print -quit)\" ]; then "
+                f"tar -C {posixpath.dirname(DIALOGUE_DATA_REMOTE)} -czf {dialogue_data_backup} "
+                f"--exclude='{posixpath.basename(DIALOGUE_DATA_REMOTE)}/_webpack' "
+                f"{posixpath.basename(DIALOGUE_DATA_REMOTE)} && chmod 600 {dialogue_data_backup}; fi",
+            )
 
         remote_backend_modules = []
         for remote_name, local_path in backend_modules:
@@ -510,9 +862,59 @@ def main() -> int:
         upload_text(sftp, unit_path, service_unit(args.deploy_dir, args.port))
 
         log(f"writing patcher nginx site: {PATCHER_NGINX_CONF}")
-        upload_text(sftp, PATCHER_NGINX_CONF, patcher_server_config(args.domain_name, args.port))
+        upload_text(sftp, PATCHER_NGINX_CONF, patcher_server_config(args.domain_name, args.port, args.dialogue_port))
         run(ssh, f"[ -L /etc/nginx/sites-enabled/patcher.conf ] && rm -f /etc/nginx/sites-enabled/patcher.conf || true")
         run(ssh, f"ln -sf {PATCHER_NGINX_CONF} /etc/nginx/sites-enabled/ai-fengyue-patcher.conf")
+
+        if not args.skip_dialogue_runtime:
+            assert dialogue_package is not None
+            remote_dialogue_archive = f"/tmp/homer-dialogue-runtime-{timestamp}.tgz"
+            dialogue_release_dir = f"{DIALOGUE_REMOTE}/releases/{timestamp}"
+            log(f"uploading dialogue runtime package -> {remote_dialogue_archive}")
+            put_file(sftp, dialogue_package["path"], remote_dialogue_archive, 0o600)
+            run(
+                ssh,
+                f"printf '%s  %s\n' '{dialogue_package['sha256']}' '{remote_dialogue_archive}' | sha256sum -c -",
+            )
+            run(
+                ssh,
+                f"test ! -e {dialogue_release_dir} && mkdir -p {dialogue_release_dir} && "
+                f"tar -xzf {remote_dialogue_archive} -C {dialogue_release_dir} && "
+                f"rm -f {remote_dialogue_archive} && "
+                f"test -f {dialogue_release_dir}/server.js && "
+                f"test -f {dialogue_release_dir}/package-lock.json",
+            )
+            run(
+                ssh,
+                f"cd {dialogue_release_dir} && "
+                f"printf '%s  package-lock.json\n' '{dialogue_package['package_lock_sha256']}' | sha256sum -c - && "
+                "npm ci --omit=dev --no-audit --no-fund",
+            )
+            run(
+                ssh,
+                f"cd {dialogue_release_dir} && node -e \"const v=require('./node_modules/webpack/package.json').version;"
+                f"console.log('webpack='+v);if(v!=='{DIALOGUE_EXPECTED_WEBPACK}')process.exit(1)\"",
+            )
+            run(
+                ssh,
+                f"chown -R root:root {dialogue_release_dir} && chmod -R u=rwX,go=rX {dialogue_release_dir} && "
+                f"chown -R homer-dialogue:homer-dialogue {DIALOGUE_DATA_REMOTE} && chmod 750 {DIALOGUE_DATA_REMOTE}",
+            )
+            log(f"writing dialogue systemd unit: {DIALOGUE_UNIT}")
+            upload_text(sftp, DIALOGUE_UNIT, dialogue_service_unit(args.dialogue_port), 0o644)
+            next_link = f"{DIALOGUE_REMOTE}/current.next-{timestamp}"
+            if dialogue_current_kind == "directory":
+                dialogue_legacy_backup = f"{DIALOGUE_REMOTE}/current.legacy-{timestamp}"
+                run(
+                    ssh,
+                    f"test ! -e {dialogue_legacy_backup} && mv {DIALOGUE_REMOTE}/current {dialogue_legacy_backup}",
+                )
+                dialogue_previous_target = dialogue_legacy_backup
+            run(
+                ssh,
+                f"ln -s releases/{timestamp} {next_link} && mv -Tf {next_link} {DIALOGUE_REMOTE}/current",
+            )
+            dialogue_switched = True
 
         # 前端上传
         if not args.skip_frontend:
@@ -600,7 +1002,37 @@ def main() -> int:
             "result=db.execute(\"pragma quick_check\").fetchone()[0]; print(\"live sqlite quick_check:\",result); "
             "assert result==\"ok\"; db.close()'",
         )
-        run(ssh, "nginx -t")
+        if not args.skip_dialogue_runtime:
+            run(ssh, "systemctl enable --now homer-dialogue.service")
+            run(ssh, "systemctl restart homer-dialogue.service")
+            run(
+                ssh,
+                f"ok=0; for i in $(seq 1 180); do "
+                f"if curl -fsS -o /dev/null http://127.0.0.1:{args.dialogue_port}/csrf-token 2>/dev/null; then "
+                'echo "dialogue health: ok"; ok=1; break; fi; sleep 1; done; '
+                "if [ \"$ok\" -ne 1 ]; then "
+                "systemctl --no-pager --full status homer-dialogue.service | sed -n '1,50p'; "
+                "journalctl -u homer-dialogue.service -n 120 --no-pager; "
+                f"ss -ltnp | grep ':{args.dialogue_port} ' || true; exit 1; fi",
+            )
+            run(ssh, "systemctl --no-pager --full status homer-dialogue.service | sed -n '1,22p'")
+            run(
+                ssh,
+                f"listeners=\"$(ss -H -ltn | awk '$4 ~ /:{args.dialogue_port}$/ {{print $4}}')\"; "
+                "printf 'dialogue listeners: %s\\n' \"$listeners\"; "
+                f"[ \"$listeners\" = \"127.0.0.1:{args.dialogue_port}\" ]",
+            )
+            run(
+                ssh,
+                f"cd {DIALOGUE_REMOTE}/current && node -e \"const v=require('./node_modules/webpack/package.json').version;"
+                f"console.log('runtime webpack='+v);if(v!=='{DIALOGUE_EXPECTED_WEBPACK}')process.exit(1)\"",
+            )
+        run(
+            ssh,
+            f"if ! nginx -t; then "
+            f"if [ -f {patcher_nginx_backup} ]; then cp {patcher_nginx_backup} {PATCHER_NGINX_CONF}; fi; "
+            "nginx -t || true; exit 1; fi",
+        )
         if not args.skip_certbot:
             run(ssh, f"certbot --nginx -d {args.domain_name} --non-interactive --agree-tos -m admin@{args.domain_name} --redirect", check=False)
             run(ssh, "nginx -t")
@@ -608,6 +1040,26 @@ def main() -> int:
         run(ssh, f"curl -k -sS http://127.0.0.1:{args.port}/health")
         run(ssh, f"curl -k -sS {args.domain}/health")
         run(ssh, f"grep -qx 'CONTENT_MODE=local_only' {env_path}")
+        run(
+            ssh,
+            f"curl -k -fsSI {args.domain}/module/dialogue/ | tr -d '\\r' | "
+            "grep -iE '^location: /app/chat.html$'",
+        )
+        run(
+            ssh,
+            f"curl -k -fsSI {args.domain}/dialogue-core/version | tr -d '\\r' | "
+            "grep -iE '^location: /module/dialogue/version$'",
+        )
+        run(
+            ssh,
+            f"curl -k -fsSI -H 'Referer: {args.domain}/module/dialogue/' {args.domain}/script.js | tr -d '\\r' | "
+            "grep -iE '^location: /module/dialogue/script.js$'",
+        )
+        run(
+            ssh,
+            f"curl -k -sSI '{args.domain}/module/dialogue/?homer_embed=1' | tr -d '\\r' | "
+            "grep -iE '^(content-security-policy: .*frame-ancestors .self.|x-frame-options: SAMEORIGIN|location: /app/login.html)$'",
+        )
         # 验证前端
         if not args.skip_frontend:
             run(ssh, f"curl -k -sI {args.domain}/ | head -n 5", check=False)
@@ -624,13 +1076,78 @@ def main() -> int:
                 "tr -d '\\r' | grep -iE '^content-type: (text|application)/(javascript|x-javascript)'",
             )
             run(ssh, f"curl -k -fsSI {args.domain}/app/assets/vendor/SPINE-RUNTIMES-LICENSE.txt | head -n 5")
+            run(
+                ssh,
+                f"curl -k -fsS {args.domain}/app/open-source.html | "
+                "grep -F 'https://github.com/grey7213/AIXingYue' >/dev/null",
+            )
         # Keep deploy verification read-only. Registration/email probes send real
         # messages and consume abuse-control quotas, so they belong in an explicit
         # post-deploy acceptance test rather than the deploy helper.
         log("deployment complete")
         return 0
+    except Exception:
+        if ssh is not None:
+            log("deployment failed; restoring dialogue runtime/Nginx pointers where backups exist")
+            try:
+                if dialogue_switched:
+                    if dialogue_legacy_backup:
+                        run(
+                            ssh,
+                            f"rm -f {DIALOGUE_REMOTE}/current && "
+                            f"if [ -d {dialogue_legacy_backup} ]; then mv {dialogue_legacy_backup} {DIALOGUE_REMOTE}/current; fi",
+                            check=False,
+                        )
+                    elif dialogue_previous_target:
+                        rollback_link = f"{DIALOGUE_REMOTE}/current.rollback-{int(time.time())}"
+                        run(
+                            ssh,
+                            f"ln -s {dialogue_previous_target} {rollback_link} && "
+                            f"mv -Tf {rollback_link} {DIALOGUE_REMOTE}/current",
+                            check=False,
+                        )
+                    else:
+                        run(ssh, f"rm -f {DIALOGUE_REMOTE}/current", check=False)
+                elif dialogue_legacy_backup:
+                    run(
+                        ssh,
+                        f"if [ ! -e {DIALOGUE_REMOTE}/current ] && [ -d {dialogue_legacy_backup} ]; then "
+                        f"mv {dialogue_legacy_backup} {DIALOGUE_REMOTE}/current; fi",
+                        check=False,
+                    )
+                if dialogue_unit_existed and dialogue_unit_backup:
+                    run(
+                        ssh,
+                        f"if [ -f {dialogue_unit_backup} ]; then cp {dialogue_unit_backup} {DIALOGUE_UNIT}; fi",
+                        check=False,
+                    )
+                else:
+                    run(ssh, "systemctl disable --now homer-dialogue.service || true", check=False)
+                    run(ssh, f"rm -f {DIALOGUE_UNIT}", check=False)
+                if patcher_nginx_existed and patcher_nginx_backup:
+                    run(
+                        ssh,
+                        f"if [ -f {patcher_nginx_backup} ]; then cp {patcher_nginx_backup} {PATCHER_NGINX_CONF}; fi",
+                        check=False,
+                    )
+                else:
+                    run(
+                        ssh,
+                        f"rm -f {PATCHER_NGINX_CONF} /etc/nginx/sites-enabled/ai-fengyue-patcher.conf",
+                        check=False,
+                    )
+                run(ssh, "systemctl daemon-reload", check=False)
+                if dialogue_unit_existed and dialogue_previous_target:
+                    run(ssh, "systemctl restart homer-dialogue.service", check=False)
+                run(ssh, "nginx -t && systemctl reload nginx", check=False)
+            except Exception as rollback_error:
+                log(f"warning: automatic dialogue rollback encountered an error: {rollback_error}")
+        raise
     finally:
-        ssh.close()
+        if ssh is not None:
+            ssh.close()
+        if dialogue_temp_dir is not None:
+            dialogue_temp_dir.cleanup()
 
 
 if __name__ == "__main__":

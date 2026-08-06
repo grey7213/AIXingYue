@@ -23,6 +23,86 @@ import {
 } from '/app/assets/js/card-pack-import.mjs?v=20260720-community-versions';
 
 const emptyCardPromptPreset = () => ({ version: 1, enabled: false, name: '', format: 'sillytavern', source_file: '', prompts: [], prompt_order: [], blocks: [], stats: { entry_count: 0, enabled_count: 0 } });
+const TAVERN_HELPER_SCRIPT_MAX_ENTRIES = 100;
+const TAVERN_HELPER_SCRIPT_MAX_JSON_BYTES = 4 * 1024 * 1024;
+const TAVERN_HELPER_FOLDER_DRAFT_KEY = '__homer_folder_scripts_json';
+const TAVERN_HELPER_FOLDER_ERROR_KEY = '__homer_folder_scripts_error';
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function prepareTavernHelperEditorItem(value, index = 0) {
+  const item = value && typeof value === 'object' && !Array.isArray(value) ? cloneJson(value) : {};
+  item.type = String(item.type || (Array.isArray(item.scripts) ? 'folder' : 'script')).toLowerCase() === 'folder' ? 'folder' : 'script';
+  item.id = String(item.id || `${item.type}-${index + 1}`);
+  item.name = String(item.name || (item.type === 'folder' ? `脚本文件夹 ${index + 1}` : `脚本 ${index + 1}`));
+  item.content = String(item.content || '');
+  item.enabled = 'enabled' in item ? item.enabled !== false : !item.disabled;
+  item.disabled = !item.enabled;
+  if (item.type === 'folder') {
+    item.scripts = Array.isArray(item.scripts) ? item.scripts : [];
+    item[TAVERN_HELPER_FOLDER_DRAFT_KEY] = JSON.stringify(item.scripts, null, 2);
+    item[TAVERN_HELPER_FOLDER_ERROR_KEY] = '';
+  }
+  return item;
+}
+
+function normalizeTavernHelperNode(value, path, state, enforceLimits = true) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`TavernHelper 脚本 ${path} 必须是对象`);
+  const item = cloneJson(value);
+  const folderDraft = item[TAVERN_HELPER_FOLDER_DRAFT_KEY];
+  delete item[TAVERN_HELPER_FOLDER_DRAFT_KEY];
+  delete item[TAVERN_HELPER_FOLDER_ERROR_KEY];
+  state.count += 1;
+  if (enforceLimits && state.count > TAVERN_HELPER_SCRIPT_MAX_ENTRIES) {
+    throw new Error(`TavernHelper 脚本最多 ${TAVERN_HELPER_SCRIPT_MAX_ENTRIES} 条`);
+  }
+  const type = String(item.type || (Array.isArray(item.scripts) ? 'folder' : 'script')).trim().toLowerCase();
+  if (!['script', 'folder'].includes(type)) throw new Error(`TavernHelper 脚本 ${path} 的类型只能是 script 或 folder`);
+  item.type = type;
+  item.id = String(item.id || `${type}-${state.count}`).trim() || `${type}-${state.count}`;
+  item.name = String(item.name || (type === 'folder' ? `脚本文件夹 ${state.count}` : `脚本 ${state.count}`)).trim();
+  item.content = String(item.content || '');
+  item.enabled = 'enabled' in item ? item.enabled !== false : !item.disabled;
+  item.disabled = !item.enabled;
+  if (type === 'folder') {
+    let children = item.scripts;
+    if (typeof folderDraft === 'string') {
+      try { children = JSON.parse(folderDraft); }
+      catch { throw new Error(`TavernHelper 文件夹「${item.name || path}」中的脚本 JSON 无效`); }
+    }
+    if (!Array.isArray(children)) throw new Error(`TavernHelper 文件夹「${item.name || path}」的 scripts 必须是数组`);
+    item.scripts = children.map((child, index) => normalizeTavernHelperNode(child, `${path}.scripts[${index}]`, state, enforceLimits));
+  }
+  return item;
+}
+
+function normalizeTavernHelperScripts(value, enforceLimits = true) {
+  if (!Array.isArray(value)) throw new Error('TavernHelper 脚本必须是数组');
+  const state = { count: 0 };
+  const scripts = value.map((item, index) => normalizeTavernHelperNode(item, `[${index}]`, state, enforceLimits));
+  const bytes = new TextEncoder().encode(JSON.stringify(scripts)).byteLength;
+  if (enforceLimits && bytes > TAVERN_HELPER_SCRIPT_MAX_JSON_BYTES) throw new Error('TavernHelper 脚本总大小不能超过 4 MiB');
+  return { scripts, count: state.count, bytes };
+}
+
+function extractTavernHelperScripts(value) {
+  if (Array.isArray(value)) return value;
+  if (!value || typeof value !== 'object') throw new Error('导入文件不包含 TavernHelper 脚本数组');
+  if (Array.isArray(value.scripts)) return value.scripts;
+  if (value.type === 'script' || value.type === 'folder') return [value];
+  const data = value.data && typeof value.data === 'object' ? value.data : value;
+  const extensions = data.extensions && typeof data.extensions === 'object' ? data.extensions : value.extensions;
+  if (extensions?.tavern_helper && Array.isArray(extensions.tavern_helper.scripts)) return extensions.tavern_helper.scripts;
+  throw new Error('导入文件不包含 extensions.tavern_helper.scripts');
+}
+
+function formatByteSize(bytes) {
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(2)} MiB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${bytes} B`;
+}
 
 const emptyForm = () => ({
   name: '',
@@ -37,6 +117,7 @@ const emptyForm = () => ({
   prompt_blocks: [],
   quick_replies: [],
   regex_scripts: [],
+  tavern_helper_scripts: [],
   alternate_greetings: [],
   world_info: [],
   media_assets: [],
@@ -105,6 +186,10 @@ function createPage() {
     activeSection: 'creator-basic',
     platformWorldbookApplied: true,
     advancedCreationAccess: { allowed: false, source: 'none', farm_unlocked: false, admin_override: false, streak_days: 0, unlocked_plots: 0, required_days: 49 },
+    tavernHelperScriptsLoaded: false,
+    tavernHelperScriptsDirty: false,
+    tavernHelperScriptCount: 0,
+    tavernHelperScriptSource: 'none',
 
     async init() {
       injectLayout('workshop');
@@ -122,6 +207,7 @@ function createPage() {
         const p = await api.points();
         this.points = parseInt(p.points || p.data?.points || 0, 10);
         await this.loadCreatorAccess();
+        if (!this.editingId) this.tavernHelperScriptsLoaded = true;
         await this.loadModelPresets();
         await this.loadTtsVoices();
         await this.loadCommunityFavorites();
@@ -319,6 +405,16 @@ function createPage() {
               order: typeof s.order === 'number' ? s.order : idx + 1,
             }))
           : [];
+        const tavernHelperScripts = Array.isArray(app.tavern_helper_scripts) ? app.tavern_helper_scripts : [];
+        this.tavernHelperScriptCount = Number.isFinite(Number(app.tavern_helper_script_count))
+          ? Number(app.tavern_helper_script_count)
+          : normalizeTavernHelperScripts(tavernHelperScripts, false).count;
+        this.tavernHelperScriptSource = String(app.tavern_helper_script_source || (tavernHelperScripts.length ? 'sillytavern_card' : 'none'));
+        this.form.tavern_helper_scripts = this.canUseAdvancedCreation()
+          ? tavernHelperScripts.map((item, index) => prepareTavernHelperEditorItem(item, index))
+          : [];
+        this.tavernHelperScriptsLoaded = true;
+        this.tavernHelperScriptsDirty = false;
         this.form.alternate_greetings = Array.isArray(app.alternate_greetings) ? [...app.alternate_greetings] : [];
         this.form.world_info = Array.isArray(app.world_info)
           ? app.world_info.map(e => ({
@@ -757,6 +853,9 @@ function createPage() {
         status: 'published',
         sampling: { ...this.form.sampling },
       };
+      if (this.canUseAdvancedCreation() && this.tavernHelperScriptsDirty) {
+        payload.tavern_helper_scripts = normalizeTavernHelperScripts(this.form.tavern_helper_scripts).scripts;
+      }
       if (!this.canUseAdvancedCreation()) {
         const spineAssets = normalizeMediaAssets(this.form.media_assets).filter(asset => asset.kind === 'spine');
         if (spineAssets.length) payload.media_assets = spineAssets;
@@ -865,6 +964,149 @@ function createPage() {
       this.expand.advanced = true;
     },
     removeRegexScript(i) { this.form.regex_scripts.splice(i, 1); },
+
+    // ---- TavernHelper 卡内脚本（高级创作） ----
+    tavernHelperSourceLabel() {
+      if (this.tavernHelperScriptSource === 'extensions') return '当前角色扩展';
+      if (this.tavernHelperScriptSource === 'sillytavern_card') return '原始 SillyTavern 卡片快照';
+      return '未配置';
+    },
+    tavernHelperDraftStatus() {
+      if (!this.canUseAdvancedCreation()) return { count: this.tavernHelperScriptCount, bytes: 0, error: '' };
+      try {
+        const value = normalizeTavernHelperScripts(this.form.tavern_helper_scripts, false);
+        let error = '';
+        if (value.count > TAVERN_HELPER_SCRIPT_MAX_ENTRIES) error = `超过 ${TAVERN_HELPER_SCRIPT_MAX_ENTRIES} 条限制`;
+        else if (value.bytes > TAVERN_HELPER_SCRIPT_MAX_JSON_BYTES) error = '超过 4 MiB 限制';
+        return { count: value.count, bytes: value.bytes, error };
+      } catch (err) {
+        return { count: this.tavernHelperScriptCount, bytes: 0, error: err.message || '脚本数据无效' };
+      }
+    },
+    tavernHelperSizeLabel() {
+      return formatByteSize(this.tavernHelperDraftStatus().bytes || 0);
+    },
+    markTavernHelperDirty(recount = false) {
+      if (!this.canUseAdvancedCreation()) return;
+      this.tavernHelperScriptsDirty = true;
+      if (recount) this.tavernHelperScriptCount = this.tavernHelperDraftStatus().count;
+    },
+    addTavernHelperScript(type = 'script') {
+      if (!this.canUseAdvancedCreation()) { this.showToast(this.advancedCreationHint(), 'error'); return; }
+      const next = this.form.tavern_helper_scripts.length + 1;
+      const item = prepareTavernHelperEditorItem({
+        type: type === 'folder' ? 'folder' : 'script',
+        id: newStableId(type === 'folder' ? 'th-folder' : 'th-script'),
+        name: type === 'folder' ? `脚本文件夹 ${next}` : `脚本 ${next}`,
+        content: '',
+        enabled: true,
+        scripts: type === 'folder' ? [] : undefined,
+      }, next - 1);
+      this.form.tavern_helper_scripts.push(item);
+      this.markTavernHelperDirty(true);
+      this.expand.advanced = true;
+    },
+    changeTavernHelperType(index) {
+      const item = this.form.tavern_helper_scripts[index];
+      if (!item) return;
+      item.type = item.type === 'folder' ? 'folder' : 'script';
+      if (item.type === 'folder') {
+        item.scripts = Array.isArray(item.scripts) ? item.scripts : [];
+        item[TAVERN_HELPER_FOLDER_DRAFT_KEY] = JSON.stringify(item.scripts, null, 2);
+        item[TAVERN_HELPER_FOLDER_ERROR_KEY] = '';
+      } else {
+        delete item.scripts;
+        delete item[TAVERN_HELPER_FOLDER_DRAFT_KEY];
+        delete item[TAVERN_HELPER_FOLDER_ERROR_KEY];
+      }
+      this.markTavernHelperDirty(true);
+    },
+    validateTavernHelperFolder(index) {
+      const item = this.form.tavern_helper_scripts[index];
+      if (!item || item.type !== 'folder') return true;
+      try {
+        const parsed = JSON.parse(String(item[TAVERN_HELPER_FOLDER_DRAFT_KEY] || '[]'));
+        if (!Array.isArray(parsed)) throw new Error('scripts 必须是数组');
+        item.scripts = parsed;
+        item[TAVERN_HELPER_FOLDER_ERROR_KEY] = '';
+        this.markTavernHelperDirty(true);
+        return true;
+      } catch (err) {
+        item[TAVERN_HELPER_FOLDER_ERROR_KEY] = err.message || '脚本 JSON 无效';
+        this.tavernHelperScriptsDirty = true;
+        return false;
+      }
+    },
+    removeTavernHelperScript(index) {
+      this.form.tavern_helper_scripts.splice(index, 1);
+      this.markTavernHelperDirty(true);
+    },
+    moveTavernHelperScript(index, delta) {
+      const next = index + delta;
+      if (next < 0 || next >= this.form.tavern_helper_scripts.length) return;
+      const [item] = this.form.tavern_helper_scripts.splice(index, 1);
+      this.form.tavern_helper_scripts.splice(next, 0, item);
+      this.markTavernHelperDirty();
+    },
+    duplicateTavernHelperScript(index) {
+      const source = this.form.tavern_helper_scripts[index];
+      if (!source) return;
+      let normalized;
+      try { normalized = normalizeTavernHelperScripts([source], false).scripts[0]; }
+      catch (err) { this.showToast(err.message || '请先修正脚本 JSON', 'error'); return; }
+      const copy = prepareTavernHelperEditorItem(normalized, index + 1);
+      copy.id = newStableId(copy.type === 'folder' ? 'th-folder' : 'th-script');
+      copy.name = `${copy.name || '脚本'} 副本`;
+      this.form.tavern_helper_scripts.splice(index + 1, 0, copy);
+      this.markTavernHelperDirty(true);
+    },
+    async copyTavernHelperScript(index) {
+      const item = this.form.tavern_helper_scripts[index];
+      if (!item) return;
+      try {
+        const normalized = normalizeTavernHelperScripts([item], false).scripts[0];
+        await copyText(JSON.stringify(normalized, null, 2));
+        this.showToast('脚本 JSON 已复制', 'success', 1000);
+      } catch (err) {
+        this.showToast(err.message || '复制失败', 'error');
+      }
+    },
+    triggerTavernHelperImport() {
+      if (!this.canUseAdvancedCreation()) { this.showToast(this.advancedCreationHint(), 'error'); return; }
+      this.$refs.tavernHelperImport?.click();
+    },
+    async onTavernHelperImport(event) {
+      const file = event.target.files?.[0];
+      event.target.value = '';
+      if (!file) return;
+      try {
+        const parsed = JSON.parse(await file.text());
+        const imported = normalizeTavernHelperScripts(extractTavernHelperScripts(parsed));
+        if (this.form.tavern_helper_scripts.length && !confirm('导入会替换当前 TavernHelper 脚本，是否继续？')) return;
+        this.form.tavern_helper_scripts = imported.scripts.map((item, index) => prepareTavernHelperEditorItem(item, index));
+        this.tavernHelperScriptsDirty = true;
+        this.tavernHelperScriptCount = imported.count;
+        this.showToast(`已导入 ${imported.count} 条 TavernHelper 脚本`, 'success', 1400);
+      } catch (err) {
+        this.showToast(err.message || 'TavernHelper 脚本导入失败', 'error', 4000);
+      }
+    },
+    exportTavernHelperScripts() {
+      if (!this.canUseAdvancedCreation()) { this.showToast(this.advancedCreationHint(), 'error'); return; }
+      try {
+        const normalized = normalizeTavernHelperScripts(this.form.tavern_helper_scripts);
+        downloadJson({ format: 'homer-tavern-helper-scripts-v1', scripts: normalized.scripts }, `${this.form.name || 'character'}-tavern-helper-scripts.json`);
+        this.showToast(`已导出 ${normalized.count} 条脚本`, 'success', 1200);
+      } catch (err) {
+        this.showToast(err.message || 'TavernHelper 脚本导出失败', 'error');
+      }
+    },
+    clearTavernHelperScripts() {
+      if (!this.form.tavern_helper_scripts.length || confirm('确定清空本角色的 TavernHelper 脚本？保存角色后生效。')) {
+        this.form.tavern_helper_scripts = [];
+        this.markTavernHelperDirty(true);
+      }
+    },
 
     addUiRule(action = 'open_popup') {
       this.form.card_experience.ui_rules.push(createUiRuleTemplate(action, this.form.card_experience.ui_rules.length));
@@ -1183,7 +1425,9 @@ function createPage() {
 
     async submit() {
       if (!this.validateCardExperience()) return;
-      const payload = this.payload();
+      let payload;
+      try { payload = this.payload(); }
+      catch (err) { this.showToast(err.message || '角色数据校验失败', 'error', 4000); return; }
       if (!this.validatePayload(payload)) return;
       if (this.editingId) {
         this.publishDialogOpen = true;
@@ -1207,7 +1451,9 @@ function createPage() {
 
     async publishEditedVersion() {
       if (!this.validateCardExperience()) return;
-      const payload = this.payload();
+      let payload;
+      try { payload = this.payload(); }
+      catch (err) { this.showToast(err.message || '角色数据校验失败', 'error', 4000); return; }
       if (!this.validatePayload(payload)) return;
       const versionName = String(this.versionName || '').trim();
       const versionDescription = String(this.versionDescription || '').trim();
@@ -1269,6 +1515,34 @@ async function sha256File(file) {
   if (!globalThis.crypto?.subtle) throw new Error('当前浏览器不支持安全文件校验，请升级浏览器后重试');
   const hash = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
   return [...new Uint8Array(hash)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function copyText(value) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(String(value || ''));
+    return;
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = String(value || '');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand('copy');
+  textarea.remove();
+  if (!copied) throw new Error('浏览器不允许复制到剪贴板');
+}
+
+function downloadJson(value, filename) {
+  const blob = new Blob([JSON.stringify(value, null, 2)], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = String(filename || 'tavern-helper-scripts.json').replace(/[\\/:*?"<>|]+/g, '_');
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
 }
 
 window.createPage = createPage;
