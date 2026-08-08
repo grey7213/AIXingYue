@@ -209,6 +209,22 @@ function bridgeSource(token) {
 `;
 }
 
+export function repairRoleplayHubInlineScripts(source) {
+    return String(source || '').replace(
+        /(<script\b([^>]*)>)([\s\S]*?)(<\/script\s*>)/gi,
+        (match, openTag, attributes, scriptBody, closeTag) => {
+            if (/\bsrc\s*=/i.test(attributes)) {
+                return match;
+            }
+            const repairedBody = scriptBody.replace(
+                /(<[a-z][^<>]*\sstyle=)"([^"]*)"/gi,
+                '$1&quot;$2&quot;',
+            );
+            return `${openTag}${repairedBody}${closeTag}`;
+        },
+    );
+}
+
 function buildSandboxDocument(source, token) {
     const policy = [
         'default-src \'none\'',
@@ -229,7 +245,7 @@ function buildSandboxDocument(source, token) {
         '<style>html,body{max-width:100%;margin:0;overflow-x:hidden}*,*::before,*::after{box-sizing:border-box}img,video,canvas,svg{max-width:100%;height:auto}</style>',
         `<script>${bridgeSource(token)}</script>`,
     ].join('');
-    const html = String(source || '');
+    const html = repairRoleplayHubInlineScripts(source);
     if (/<head(?:\s[^>]*)?>/i.test(html)) {
         return html.replace(/<head(?:\s[^>]*)?>/i, match => `${match}${injected}`);
     }

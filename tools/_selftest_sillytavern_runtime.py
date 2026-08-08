@@ -10,6 +10,7 @@ import base64
 import io
 import json
 import os
+import re
 import tempfile
 import zipfile
 from pathlib import Path
@@ -61,6 +62,158 @@ def test_internal_dialogue_mount_rewrite() -> None:
     )
     assert "https://testingcf.jsdelivr.net" in style_policy
     print("PASS neutral internal dialogue mount/root-path rewrite")
+
+
+def test_embedded_dialogue_request_mount_shim() -> None:
+    index_source = (ROOT / "sillytavern-runtime" / "public" / "index.html").read_text(encoding="utf-8")
+    assert "const dialogueMount = '/module/dialogue';" in index_source
+    assert "params.get('homer_embed') !== '1'" in index_source
+    assert "window.location.pathname === dialogueMount" in index_source
+    assert "baseElement?.setAttribute('href', `${dialogueMount}/`);" in index_source
+    assert "const runtimeRootPaths = ['/api', '/csrf-token'];" in index_source
+    assert "url.origin !== window.location.origin" in index_source
+    assert "window.fetch = (input, init) =>" in index_source
+    assert "new Request(rewrittenUrl, input)" in index_source
+    assert "XMLHttpRequest.prototype.open = function" in index_source
+    assert "'/console'" not in index_source[index_source.index("const runtimeRootPaths"):index_source.index("const nativeFetch")]
+
+    rewritten = offline_dev_proxy.rewrite_dialogue_payload(
+        index_source.encode("utf-8"),
+        "text/html; charset=utf-8",
+    )
+    assert b'<base href="/module/dialogue/">' in rewritten
+    assert b"/module/dialogue/module/dialogue" not in rewritten
+    print("PASS embedded dialogue requests use the cookie-scoped module mount")
+
+
+def test_extension_prompt_constant_cycle_guard() -> None:
+    public_root = ROOT / "sillytavern-runtime" / "public"
+    constants = (public_root / "scripts" / "constants.js").read_text(encoding="utf-8")
+    core = (public_root / "script.js").read_text(encoding="utf-8")
+    assert "export const extension_prompt_types" in constants
+    assert "export const extension_prompt_roles" in constants
+    assert "extension_prompt_types," in core
+    assert "extension_prompt_roles," in core
+
+    script_import = re.compile(
+        r"import\s*\{(?P<body>.*?)\}\s*from\s*['\"](?:\.\./)+script\.js['\"]",
+        re.DOTALL,
+    )
+    offenders: list[str] = []
+    for path in (public_root / "scripts").rglob("*.js"):
+        if "extensions/third-party" in path.as_posix():
+            continue
+        source = path.read_text(encoding="utf-8")
+        for match in script_import.finditer(source):
+            if "extension_prompt_types" in match.group("body") or "extension_prompt_roles" in match.group("body"):
+                offenders.append(path.relative_to(public_root).as_posix())
+    assert offenders == [], f"extension prompt constants still cross the script.js cycle: {offenders}"
+    print("PASS extension prompt constants avoid script.js startup cycle")
+
+
+def test_slash_command_parser_cycle_guard() -> None:
+    scripts_root = ROOT / "sillytavern-runtime" / "public" / "scripts"
+    parser_source = (scripts_root / "slash-commands" / "SlashCommandParser.js").read_text(encoding="utf-8")
+    enums_source = (scripts_root / "slash-commands" / "SlashCommandCommonEnumsProvider.js").read_text(encoding="utf-8")
+    power_user_source = (scripts_root / "power-user.js").read_text(encoding="utf-8")
+    state_source = (scripts_root / "power-user-state.js").read_text(encoding="utf-8")
+    slash_commands_source = (scripts_root / "slash-commands.js").read_text(encoding="utf-8")
+
+    assert "../power-user.js" not in parser_source
+    assert "./SlashCommandCommonEnumsProvider.js" not in parser_source
+    assert "../power-user.js" not in enums_source
+    assert "getPowerUserState" in parser_source
+    assert "getPowerUserState" in enums_source
+    assert "registerPowerUserState(power_user);" in power_user_source
+    assert "export function registerPowerUserState" in state_source
+    assert "export function getPowerUserState" in state_source
+    assert "export const parser = new SlashCommandParser();" not in slash_commands_source
+    assert "SlashCommandParser.addCommand.bind(SlashCommandParser)" not in slash_commands_source
+    assert "export const parser = new Proxy" in slash_commands_source
+    assert "function getParserInstance()" in slash_commands_source
+    assert "getParserInstance().parse(" in slash_commands_source
+    print("PASS slash-command parser avoids power-user/common-enum startup cycles")
+
+
+def test_macro_engine_cycle_guard() -> None:
+    scripts_root = ROOT / "sillytavern-runtime" / "public" / "scripts"
+    diagnostics_source = (scripts_root / "macros" / "engine" / "MacroDiagnostics.js").read_text(encoding="utf-8")
+    macro_system_source = (scripts_root / "macros" / "macro-system.js").read_text(encoding="utf-8")
+
+    assert "from '/scripts/power-user.js'" not in diagnostics_source
+    assert "from '/scripts/i18n.js'" not in diagnostics_source
+    assert "from '/scripts/popup.js'" not in diagnostics_source
+    assert "getPowerUserState" in diagnostics_source
+    assert "import('../../i18n.js')" in diagnostics_source
+    assert "import('../../popup.js')" in diagnostics_source
+    assert "get engine() { return MacroEngine; }" in macro_system_source
+    assert "engine: MacroEngine" not in macro_system_source
+    assert "MacroRegistry.registerMacro.bind(MacroRegistry)" not in macro_system_source
+    assert "register(...args) { return MacroRegistry.registerMacro(...args); }" in macro_system_source
+    print("PASS macro engine diagnostics and facade avoid eager startup-cycle reads")
+
+
+def test_embedded_dialogue_module_namespace_guard() -> None:
+    public_root = ROOT / "sillytavern-runtime" / "public"
+    absolute_import = re.compile(r"(?:from\s*|import\s*\()\s*['\"]/(?:script\.js|lib\.js|scripts/)")
+    offenders: list[str] = []
+    for path in public_root.rglob("*.js"):
+        relative = path.relative_to(public_root).as_posix()
+        if relative.startswith("scripts/extensions/third-party/"):
+            continue
+        source = path.read_text(encoding="utf-8")
+        if absolute_import.search(source):
+            offenders.append(relative)
+    assert offenders == [], f"core modules still split across root/module URLs: {offenders}"
+
+    tts_source = (public_root / "scripts" / "extensions" / "tts" / "index.js").read_text(encoding="utf-8")
+    assert "get Edge() { return EdgeTtsProvider; }" in tts_source
+    assert "Edge: EdgeTtsProvider" not in tts_source
+    print("PASS embedded dialogue modules keep one URL namespace and lazy TTS providers")
+
+
+def test_roleplayhub_inline_script_repair_guard() -> None:
+    source = (
+        ROOT
+        / "sillytavern-runtime"
+        / "public"
+        / "scripts"
+        / "extensions"
+        / "homer-bridge"
+        / "roleplayhub-compat.js"
+    ).read_text(encoding="utf-8")
+    assert "export function repairRoleplayHubInlineScripts" in source
+    assert "(<[a-z][^<>]*\\sstyle=)\"([^\"]*)\"" in source
+    assert "const html = repairRoleplayHubInlineScripts(source);" in source
+    print("PASS RoleplayHub sandbox repairs malformed inline HTML attributes")
+
+
+def test_dialogue_csrf_cache_guard() -> None:
+    runtime_root = ROOT / "sillytavern-runtime"
+    client_source = (runtime_root / "public" / "script.js").read_text(encoding="utf-8")
+    server_source = (runtime_root / "src" / "server-main.js").read_text(encoding="utf-8")
+
+    assert "fetch('/csrf-token', { cache: 'no-store' })" in client_source
+    assert server_source.count("res.set('Cache-Control', 'no-store, max-age=0');") == 2
+    assert server_source.count("res.set('Pragma', 'no-cache');") == 2
+    print("PASS dialogue CSRF bootstrap responses cannot reuse stale cached tokens")
+
+
+def test_dialogue_deploy_runtime_safety_contract() -> None:
+    runtime_config = (ROOT / "sillytavern-runtime" / "config.yaml").read_text(encoding="utf-8")
+    deploy_source = (ROOT / "tools" / "deploy_ai_fengyue_villainy.py").read_text(encoding="utf-8")
+
+    assert "enableForwardedWhitelist: false" in runtime_config
+    assert "enableForwardedWhitelist: true" not in runtime_config
+    assert "if [ -s {DIALOGUE_UNIT} ]; then" in deploy_source
+    assert "[ -s {DIALOGUE_UNIT} ] && cp {DIALOGUE_UNIT}" in deploy_source
+    assert "mkdir -p {DIALOGUE_DATA_REMOTE}/backups" in deploy_source
+    assert "ln -s {DIALOGUE_DATA_REMOTE}/backups {dialogue_release_dir}/backups" in deploy_source
+    assert "test -L {dialogue_release_dir}/backups" in deploy_source
+    assert "nginx_location_header_pattern('/app/chat.html')" in deploy_source
+    assert "nginx_location_header_pattern('/module/dialogue/version')" in deploy_source
+    assert "nginx_location_header_pattern('/module/dialogue/script.js')" in deploy_source
+    print("PASS dialogue deploy forwarded-whitelist, backup mapping, and rollback guards")
 
 
 def test_card_stage_protocol_v2() -> None:
@@ -826,6 +979,14 @@ def test_conversation_character_rebinding(store: homer.Store) -> None:
 
 def main() -> int:
     test_internal_dialogue_mount_rewrite()
+    test_embedded_dialogue_request_mount_shim()
+    test_extension_prompt_constant_cycle_guard()
+    test_slash_command_parser_cycle_guard()
+    test_macro_engine_cycle_guard()
+    test_embedded_dialogue_module_namespace_guard()
+    test_roleplayhub_inline_script_repair_guard()
+    test_dialogue_csrf_cache_guard()
+    test_dialogue_deploy_runtime_safety_contract()
     test_card_stage_protocol_v2()
     test_original_runtime_extension_settings_bridge_contract()
     test_product_owned_dialogue_surface_contract()

@@ -55,6 +55,34 @@ export const inject_ids = {
     CUSTOM_WI_OUTLET: (key) => `customWIOutlet_${key}`,
 };
 
+/**
+ * Extension prompt placement values.
+ *
+ * Keep these dependency-free: several startup modules need the defaults while
+ * `script.js` is still being evaluated. Defining them in `script.js` creates a
+ * temporal-dead-zone failure when the runtime is mounted behind redirects and
+ * the browser evaluates the circular module graph in a different order.
+ * @readonly
+ * @enum {number}
+ */
+export const extension_prompt_types = {
+    NONE: -1,
+    IN_PROMPT: 0,
+    IN_CHAT: 1,
+    BEFORE_PROMPT: 2,
+};
+
+/**
+ * Extension prompt message roles.
+ * @readonly
+ * @enum {number}
+ */
+export const extension_prompt_roles = {
+    SYSTEM: 0,
+    USER: 1,
+    ASSISTANT: 2,
+};
+
 export const COMETAPI_IGNORE_PATTERNS = [
     // Image generation models
     'dall-e', 'dalle', 'midjourney', 'mj_', 'stable-diffusion', 'sd-',

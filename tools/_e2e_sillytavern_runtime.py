@@ -491,6 +491,27 @@ def verify_roleplayhub_runtime(
             "RoleplayHub compatibility did not activate: "
             + json.dumps(diagnostic, ensure_ascii=False)
         ) from error
+    inline_repair = runtime.evaluate(
+        """async () => {
+          const module = await import('./scripts/extensions/homer-bridge/roleplayhub-compat.js');
+          const source = '<html><body><script>const value = "<span style="color:red">x</span>";</' + 'script></body></html>';
+          const repaired = module.repairRoleplayHubInlineScripts(source);
+          const parsed = new DOMParser().parseFromString(repaired, 'text/html');
+          const script = parsed.querySelector('script')?.textContent || '';
+          let parseable = true;
+          try {
+            new Function(script);
+          } catch {
+            parseable = false;
+          }
+          return {
+            encodedStyle: repaired.includes('style=&quot;color:red&quot;'),
+            parseable,
+          };
+        }"""
+    )
+    if not inline_repair["encodedStyle"] or not inline_repair["parseable"]:
+        raise AssertionError(f"RoleplayHub malformed inline script repair failed: {inline_repair}")
     frame_element = runtime.locator("iframe.homer-roleplayhub-frame").first
     frame_element.wait_for(state="visible", timeout=30_000)
     runtime.wait_for_function(

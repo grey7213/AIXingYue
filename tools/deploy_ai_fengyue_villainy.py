@@ -187,6 +187,12 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def nginx_location_header_pattern(path: str) -> str:
+    if not path.startswith("/"):
+        raise ValueError("redirect path must be absolute")
+    return rf"^location: (https?://[^/]+)?{re.escape(path)}$"
+
+
 def dialogue_archive_excluded(relative_path: PurePosixPath) -> bool:
     parts = relative_path.parts
     if not parts:
@@ -870,7 +876,7 @@ def main() -> int:
         ).strip() == "1"
         dialogue_unit_existed = run(
             ssh,
-            f"if [ -f {DIALOGUE_UNIT} ]; then printf 1; else printf 0; fi",
+            f"if [ -s {DIALOGUE_UNIT} ]; then printf 1; else printf 0; fi",
         ).strip() == "1"
         run(ssh, "hostname && python3 --version && nginx -t")
         run(ssh, f"mkdir -p {args.deploy_dir}/data")
@@ -900,11 +906,14 @@ def main() -> int:
             run(ssh, "id -u homer-dialogue >/dev/null 2>&1 || useradd --system --home /nonexistent --shell /usr/sbin/nologin homer-dialogue")
             run(
                 ssh,
-                f"mkdir -p {DIALOGUE_REMOTE}/releases {DIALOGUE_REMOTE}/backups {DIALOGUE_DATA_REMOTE} && "
+                f"mkdir -p {DIALOGUE_REMOTE}/releases {DIALOGUE_REMOTE}/backups "
+                f"{DIALOGUE_DATA_REMOTE} {DIALOGUE_DATA_REMOTE}/backups && "
                 f"chown root:homer-dialogue {DIALOGUE_REMOTE} {DIALOGUE_REMOTE}/releases && "
                 f"chmod 750 {DIALOGUE_REMOTE} {DIALOGUE_REMOTE}/releases && "
                 f"chown root:root {DIALOGUE_REMOTE}/backups && chmod 700 {DIALOGUE_REMOTE}/backups && "
-                f"chown homer-dialogue:homer-dialogue {DIALOGUE_DATA_REMOTE} && chmod 750 {DIALOGUE_DATA_REMOTE}",
+                f"chown homer-dialogue:homer-dialogue {DIALOGUE_DATA_REMOTE} "
+                f"{DIALOGUE_DATA_REMOTE}/backups && "
+                f"chmod 750 {DIALOGUE_DATA_REMOTE} {DIALOGUE_DATA_REMOTE}/backups",
             )
             dialogue_current_kind = run(
                 ssh,
@@ -925,7 +934,7 @@ def main() -> int:
                 raise RuntimeError("existing dialogue runtime symlink is broken")
             if dialogue_previous_target and not re.fullmatch(r"/[A-Za-z0-9._/-]+", dialogue_previous_target):
                 raise RuntimeError("existing dialogue runtime target has an unsafe path")
-            run(ssh, f"[ -f {DIALOGUE_UNIT} ] && cp {DIALOGUE_UNIT} {dialogue_unit_backup} || true")
+            run(ssh, f"[ -s {DIALOGUE_UNIT} ] && cp {DIALOGUE_UNIT} {dialogue_unit_backup} || true")
             dialogue_data_backup = f"{DIALOGUE_REMOTE}/backups/homer-dialogue-data-{timestamp}.tgz"
             run(
                 ssh,
@@ -1032,7 +1041,13 @@ def main() -> int:
             run(
                 ssh,
                 f"chown -R root:root {dialogue_release_dir} && chmod -R u=rwX,go=rX {dialogue_release_dir} && "
-                f"chown -R homer-dialogue:homer-dialogue {DIALOGUE_DATA_REMOTE} && chmod 750 {DIALOGUE_DATA_REMOTE}",
+                f"mkdir -p {DIALOGUE_DATA_REMOTE}/backups && "
+                f"chown -R homer-dialogue:homer-dialogue {DIALOGUE_DATA_REMOTE} && "
+                f"chmod 750 {DIALOGUE_DATA_REMOTE} {DIALOGUE_DATA_REMOTE}/backups && "
+                f"test ! -e {dialogue_release_dir}/backups && "
+                f"ln -s {DIALOGUE_DATA_REMOTE}/backups {dialogue_release_dir}/backups && "
+                f"test -L {dialogue_release_dir}/backups && "
+                f"test \"$(readlink {dialogue_release_dir}/backups)\" = \"{DIALOGUE_DATA_REMOTE}/backups\"",
             )
             log(f"writing dialogue systemd unit: {DIALOGUE_UNIT}")
             upload_text(sftp, DIALOGUE_UNIT, dialogue_service_unit(args.dialogue_port), 0o644)
@@ -1185,17 +1200,17 @@ def main() -> int:
         run(
             ssh,
             f"curl -k -fsSI {args.domain}/module/dialogue/ | tr -d '\\r' | "
-            "grep -iE '^location: /app/chat.html$'",
+            f"grep -iE '{nginx_location_header_pattern('/app/chat.html')}'",
         )
         run(
             ssh,
             f"curl -k -fsSI {args.domain}/dialogue-core/version | tr -d '\\r' | "
-            "grep -iE '^location: /module/dialogue/version$'",
+            f"grep -iE '{nginx_location_header_pattern('/module/dialogue/version')}'",
         )
         run(
             ssh,
             f"curl -k -fsSI -H 'Referer: {args.domain}/module/dialogue/' {args.domain}/script.js | tr -d '\\r' | "
-            "grep -iE '^location: /module/dialogue/script.js$'",
+            f"grep -iE '{nginx_location_header_pattern('/module/dialogue/script.js')}'",
         )
         run(
             ssh,

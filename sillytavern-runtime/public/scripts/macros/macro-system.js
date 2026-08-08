@@ -43,19 +43,19 @@ export { MacroCategory, MacroValueType };
 
 export const macros = {
     // engine singletons
-    engine: MacroEngine,
-    registry: MacroRegistry,
-    envBuilder: MacroEnvBuilder,
-    lexer: MacroLexer,
-    parser: MacroParser,
-    cstWalker: MacroCstWalker,
+    get engine() { return MacroEngine; },
+    get registry() { return MacroRegistry; },
+    get envBuilder() { return MacroEnvBuilder; },
+    get lexer() { return MacroLexer; },
+    get parser() { return MacroParser; },
+    get cstWalker() { return MacroCstWalker; },
 
     // enums
-    category: MacroCategory,
+    get category() { return MacroCategory; },
 
     // shorthand functions
-    register: MacroRegistry.registerMacro.bind(MacroRegistry),
-    registerAlias: MacroRegistry.registerMacroAlias.bind(MacroRegistry),
+    register(...args) { return MacroRegistry.registerMacro(...args); },
+    registerAlias(...args) { return MacroRegistry.registerMacroAlias(...args); },
 };
 
 /**

@@ -1,8 +1,6 @@
 import {
     eventSource,
     event_types,
-    extension_prompt_types,
-    extension_prompt_roles,
     getCurrentChatId,
     getRequestHeaders,
     is_send_press,
@@ -25,7 +23,7 @@ import { collapseNewlines, registerDebugFunction } from '../../power-user.js';
 import { SECRET_KEYS, secret_state } from '../../secrets.js';
 import { getDataBankAttachments, getDataBankAttachmentsForSource, getFileAttachment } from '../../chats.js';
 import { debounce, getStringHash as calculateHash, waitUntilCondition, onlyUnique, splitRecursive, trimToStartSentence, trimToEndSentence, escapeHtml, isTrueBoolean } from '../../utils.js';
-import { debounce_timeout } from '../../constants.js';
+import { debounce_timeout, extension_prompt_roles, extension_prompt_types } from '../../constants.js';
 import { getSortedEntries } from '../../world-info.js';
 import { textgen_types, textgenerationwebui_settings } from '../../textgen-settings.js';
 import { SlashCommandParser } from '../../slash-commands/SlashCommandParser.js';

@@ -193,6 +193,8 @@ if (!cliArgs.disableCsrf) {
     });
 
     app.get('/csrf-token', (req, res) => {
+        res.set('Cache-Control', 'no-store, max-age=0');
+        res.set('Pragma', 'no-cache');
         res.json({
             'token': csrfSyncProtection.generateToken(req),
         });
@@ -206,6 +208,8 @@ if (!cliArgs.disableCsrf) {
 } else {
     console.warn('\nCSRF protection is disabled. This will make your server vulnerable to CSRF attacks.\n');
     app.get('/csrf-token', (req, res) => {
+        res.set('Cache-Control', 'no-store, max-age=0');
+        res.set('Pragma', 'no-cache');
         res.json({
             'token': 'disabled',
         });

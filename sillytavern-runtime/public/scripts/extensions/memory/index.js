@@ -6,8 +6,6 @@ import {
     animation_duration,
     eventSource,
     event_types,
-    extension_prompt_roles,
-    extension_prompt_types,
     generateQuietPrompt,
     is_send_press,
     saveSettingsDebounced,
@@ -22,7 +20,7 @@ import { is_group_generating, selected_group } from '../../group-chats.js';
 import { loadMovingUIState, power_user } from '../../power-user.js';
 import { dragElement } from '../../RossAscends-mods.js';
 import { getTextTokens, getTokenCountAsync, tokenizers } from '../../tokenizers.js';
-import { debounce_timeout } from '../../constants.js';
+import { debounce_timeout, extension_prompt_roles, extension_prompt_types } from '../../constants.js';
 import { SlashCommandParser } from '../../slash-commands/SlashCommandParser.js';
 import { SlashCommand } from '../../slash-commands/SlashCommand.js';
 import { ARGUMENT_TYPE, SlashCommandArgument, SlashCommandNamedArgument } from '../../slash-commands/SlashCommandArgument.js';
@@ -30,7 +28,7 @@ import { macros, MacroCategory } from '../../macros/macro-system.js';
 import { countWebLlmTokens, generateWebLlmChatPrompt, getWebLlmContextSize, isWebLlmSupported } from '../shared.js';
 import { commonEnumProviders } from '../../slash-commands/SlashCommandCommonEnumsProvider.js';
 import { removeReasoningFromString } from '../../reasoning.js';
-import { MacrosParser } from '/scripts/macros.js';
+import { MacrosParser } from '../../macros.js';
 export { MODULE_NAME };
 
 const MODULE_NAME = '1_memory';

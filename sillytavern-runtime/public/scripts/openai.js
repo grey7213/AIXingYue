@@ -11,8 +11,6 @@ import {
     characters,
     event_types,
     eventSource,
-    extension_prompt_roles,
-    extension_prompt_types,
     Generate,
     getExtensionPrompt,
     getExtensionPromptMaxDepth,
@@ -79,7 +77,7 @@ import { callGenericPopup, Popup, POPUP_RESULT, POPUP_TYPE } from './popup.js';
 import { t } from './i18n.js';
 import { ToolManager } from './tool-calling.js';
 import { accountStorage } from './util/AccountStorage.js';
-import { COMETAPI_IGNORE_PATTERNS, IGNORE_SYMBOL, MEDIA_DISPLAY, MEDIA_TYPE } from './constants.js';
+import { COMETAPI_IGNORE_PATTERNS, extension_prompt_roles, extension_prompt_types, IGNORE_SYMBOL, MEDIA_DISPLAY, MEDIA_TYPE } from './constants.js';
 import { syncNanoGptProvidersForModel, syncOpenRouterProvidersForModel, updateNanoGptProvidersWarning, updateOpenRouterProvidersWarning } from './textgen-models.js';
 
 export {

@@ -38,7 +38,7 @@ import { MiniMaxTtsProvider } from './minimax.js';
 import { ElectronHubTtsProvider } from './electronhub.js';
 import { ChutesTtsProvider } from './chutes.js';
 import { VolcengineTtsProvider } from './volcengine.js';
-import { applyLocale, t } from '/scripts/i18n.js';
+import { applyLocale, t } from '../../i18n.js';
 
 const UPDATE_INTERVAL = 1000;
 const wrapper = new ModuleWorkerWrapper(moduleWorker);
@@ -122,34 +122,34 @@ export function registerTtsProvider(name, provider) {
 }
 
 const ttsProviders = {
-    AllTalk: AllTalkTtsProvider,
-    Azure: AzureTtsProvider,
-    Chatterbox: ChatterboxTtsProvider,
-    Chutes: ChutesTtsProvider,
-    Coqui: CoquiTtsProvider,
-    'CosyVoice (Unofficial)': CosyVoiceProvider,
-    Edge: EdgeTtsProvider,
-    ElevenLabs: ElevenLabsTtsProvider,
-    'Electron Hub': ElectronHubTtsProvider,
-    'Google Translate': GoogleTranslateTtsProvider,
-    'Google Gemini TTS': GoogleNativeTtsProvider,
-    GSVI: GSVITtsProvider,
-    'GPT-SoVITS-Adapter': GptSoVITSAdapterProvider,
-    'GPT-SoVITS-V2 (Unofficial)': GptSovitsV2Provider,
-    Kokoro: KokoroTtsProvider,
-    MiniMax: MiniMaxTtsProvider,
-    Novel: NovelTtsProvider,
-    OpenAI: OpenAITtsProvider,
-    'OpenAI Compatible': OpenAICompatibleTtsProvider,
-    Pollinations: PollinationsTtsProvider,
-    SBVits2: SBVits2TtsProvider,
-    Silero: SileroTtsProvider,
-    SpeechT5: SpeechT5TtsProvider,
-    System: SystemTtsProvider,
-    'TTS WebUI': TtsWebuiProvider,
-    VITS: VITSTtsProvider,
-    XTTSv2: XTTSTtsProvider,
-    Volcengine: VolcengineTtsProvider,
+    get AllTalk() { return AllTalkTtsProvider; },
+    get Azure() { return AzureTtsProvider; },
+    get Chatterbox() { return ChatterboxTtsProvider; },
+    get Chutes() { return ChutesTtsProvider; },
+    get Coqui() { return CoquiTtsProvider; },
+    get 'CosyVoice (Unofficial)'() { return CosyVoiceProvider; },
+    get Edge() { return EdgeTtsProvider; },
+    get ElevenLabs() { return ElevenLabsTtsProvider; },
+    get 'Electron Hub'() { return ElectronHubTtsProvider; },
+    get 'Google Translate'() { return GoogleTranslateTtsProvider; },
+    get 'Google Gemini TTS'() { return GoogleNativeTtsProvider; },
+    get GSVI() { return GSVITtsProvider; },
+    get 'GPT-SoVITS-Adapter'() { return GptSoVITSAdapterProvider; },
+    get 'GPT-SoVITS-V2 (Unofficial)'() { return GptSovitsV2Provider; },
+    get Kokoro() { return KokoroTtsProvider; },
+    get MiniMax() { return MiniMaxTtsProvider; },
+    get Novel() { return NovelTtsProvider; },
+    get OpenAI() { return OpenAITtsProvider; },
+    get 'OpenAI Compatible'() { return OpenAICompatibleTtsProvider; },
+    get Pollinations() { return PollinationsTtsProvider; },
+    get SBVits2() { return SBVits2TtsProvider; },
+    get Silero() { return SileroTtsProvider; },
+    get SpeechT5() { return SpeechT5TtsProvider; },
+    get System() { return SystemTtsProvider; },
+    get 'TTS WebUI'() { return TtsWebuiProvider; },
+    get VITS() { return VITSTtsProvider; },
+    get XTTSv2() { return XTTSTtsProvider; },
+    get Volcengine() { return VolcengineTtsProvider; },
 };
 let ttsProvider;
 let ttsProviderName;

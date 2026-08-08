@@ -4,8 +4,6 @@ import {
     chat_metadata,
     eventSource,
     event_types,
-    extension_prompt_roles,
-    extension_prompt_types,
     saveSettingsDebounced,
     this_chid,
 } from '../script.js';
@@ -13,7 +11,7 @@ import { selected_group } from './group-chats.js';
 import { extension_settings, getContext, saveMetadataDebounced } from './extensions.js';
 import { getCharaFilename, debounce, delay } from './utils.js';
 import { getTokenCountAsync } from './tokenizers.js';
-import { debounce_timeout } from './constants.js';
+import { debounce_timeout, extension_prompt_roles, extension_prompt_types } from './constants.js';
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
 import { SlashCommand } from './slash-commands/SlashCommand.js';
 import { ARGUMENT_TYPE, SlashCommandArgument } from './slash-commands/SlashCommandArgument.js';

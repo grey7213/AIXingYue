@@ -185,7 +185,7 @@ import {
     shakeElement,
     createTimeout,
 } from './scripts/utils.js';
-import { debounce_timeout, GENERATION_TYPE_TRIGGERS, IGNORE_SYMBOL, inject_ids, MEDIA_DISPLAY, MEDIA_SOURCE, MEDIA_TYPE, OVERSWIPE_BEHAVIOR, SCROLL_BEHAVIOR, SWIPE_DIRECTION, SWIPE_SOURCE, SWIPE_STATE } from './scripts/constants.js';
+import { debounce_timeout, extension_prompt_roles, extension_prompt_types, GENERATION_TYPE_TRIGGERS, IGNORE_SYMBOL, inject_ids, MEDIA_DISPLAY, MEDIA_SOURCE, MEDIA_TYPE, OVERSWIPE_BEHAVIOR, SCROLL_BEHAVIOR, SWIPE_DIRECTION, SWIPE_SOURCE, SWIPE_STATE } from './scripts/constants.js';
 
 import { cancelDebouncedMetadataSave, doDailyExtensionUpdatesCheck, extension_settings, initExtensions, loadExtensionSettings, runGenerationInterceptors } from './scripts/extensions.js';
 import { COMMENT_NAME_DEFAULT, CONNECT_API_MAP, executeSlashCommandsOnChatInput, initDefaultSlashCommands, initSlashCommandAutoComplete, isExecutingCommandsFromChatInput, pauseScriptExecution, stopScriptExecution, UNIQUE_APIS } from './scripts/slash-commands.js';
@@ -325,6 +325,8 @@ export {
     getSystemMessageByType,
     event_types,
     eventSource,
+    extension_prompt_roles,
+    extension_prompt_types,
     /** @deprecated Use setCharacterSettingsOverrides instead. */
     setCharacterSettingsOverrides as setScenarioOverride,
     /** @deprecated Use appendMediaToMessage instead. */
@@ -477,25 +479,6 @@ export const saveCharacterDebounced = debounce(() => $('#create_button').trigger
  * The printing will also always reprint all filter options of the global list, to keep them up to date.
  */
 export const printCharactersDebounced = debounce(() => { printCharacters(false); }, DEFAULT_PRINT_TIMEOUT);
-
-/**
- * @enum {number} Extension prompt types
- */
-export const extension_prompt_types = {
-    NONE: -1,
-    IN_PROMPT: 0,
-    IN_CHAT: 1,
-    BEFORE_PROMPT: 2,
-};
-
-/**
- * @enum {number} Extension prompt roles
- */
-export const extension_prompt_roles = {
-    SYSTEM: 0,
-    USER: 1,
-    ASSISTANT: 2,
-};
 
 export const MAX_INJECTION_DEPTH = 10000;
 
@@ -694,7 +677,7 @@ export async function pingServer() {
 async function firstLoadInit() {
     performance.mark('homer-native-init-start');
     try {
-        const tokenResponse = await fetch('/csrf-token');
+        const tokenResponse = await fetch('/csrf-token', { cache: 'no-store' });
         const tokenData = await tokenResponse.json();
         token = tokenData.token;
     } catch {

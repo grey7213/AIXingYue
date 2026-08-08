@@ -18,6 +18,46 @@
             const params = new URLSearchParams(window.location.search);
             if (params.get('homer_embed') !== '1') return;
             document.documentElement.classList.add('homer-embedded-runtime', 'homer-runtime-pending');
+
+            const dialogueMount = '/module/dialogue';
+            const mountedPath = window.location.pathname === dialogueMount
+                || window.location.pathname.startsWith(`${dialogueMount}/`);
+            if (!mountedPath) return;
+
+            // Production serves the runtime below a cookie-scoped module path.
+            // Resolve relative assets there and send stateful runtime requests
+            // directly to the mounted endpoint so POST requests never cross a
+            // redirect without the matching session cookie.
+            const baseElement = document.querySelector('base');
+            baseElement?.setAttribute('href', `${dialogueMount}/`);
+
+            const runtimeRootPaths = ['/api', '/csrf-token'];
+            const mountedRuntimeUrl = (value) => {
+                try {
+                    const url = new URL(String(value), window.location.href);
+                    if (url.origin !== window.location.origin) return null;
+                    if (url.pathname === dialogueMount || url.pathname.startsWith(`${dialogueMount}/`)) return null;
+                    if (!runtimeRootPaths.some(path => url.pathname === path || url.pathname.startsWith(`${path}/`))) return null;
+                    url.pathname = `${dialogueMount}${url.pathname}`;
+                    return url.href;
+                } catch {
+                    return null;
+                }
+            };
+
+            const nativeFetch = window.fetch.bind(window);
+            window.fetch = (input, init) => {
+                if (typeof Request !== 'undefined' && input instanceof Request) {
+                    const rewrittenUrl = mountedRuntimeUrl(input.url);
+                    return nativeFetch(rewrittenUrl ? new Request(rewrittenUrl, input) : input, init);
+                }
+                return nativeFetch(mountedRuntimeUrl(input) || input, init);
+            };
+
+            const nativeXhrOpen = XMLHttpRequest.prototype.open;
+            XMLHttpRequest.prototype.open = function (method, url, ...args) {
+                return nativeXhrOpen.call(this, method, mountedRuntimeUrl(url) || url, ...args);
+            };
         })();
     </script>
     <style>

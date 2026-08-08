@@ -1,5 +1,5 @@
 import { hljs } from '../../lib.js';
-import { power_user } from '../power-user.js';
+import { getPowerUserState } from '../power-user-state.js';
 import { isFalseBoolean, isTrueBoolean, uuidv4 } from '../utils.js';
 import { SlashCommand } from './SlashCommand.js';
 import { ARGUMENT_TYPE, SlashCommandArgument } from './SlashCommandArgument.js';
@@ -21,7 +21,6 @@ import {
 } from '../autocomplete/MacroAutoCompleteHelper.js';
 import { SlashCommandBreakPoint } from './SlashCommandBreakPoint.js';
 import { SlashCommandDebugController } from './SlashCommandDebugController.js';
-import { commonEnumProviders } from './SlashCommandCommonEnumsProvider.js';
 import { SlashCommandBreak } from './SlashCommandBreak.js';
 import { parseMacroContext } from '../autocomplete/EnhancedMacroAutoCompleteOption.js';
 
@@ -159,7 +158,10 @@ export class SlashCommandParser {
                         description: 'The state of the parser flag to set.',
                         typeList: [ARGUMENT_TYPE.BOOLEAN],
                         defaultValue: 'on',
-                        enumList: commonEnumProviders.boolean('onOff')(),
+                        enumList: [
+                            new SlashCommandEnumValue('on', null, 'macro', '✔️'),
+                            new SlashCommandEnumValue('off', null, 'macro', '❌'),
+                        ],
                     }),
                 ],
                 splitUnnamedArgument: true,
@@ -646,7 +648,7 @@ export class SlashCommandParser {
 
     replaceGetvar(value) {
         // Not needed with the new parser.
-        if (power_user.experimental_macro_engine) {
+        if (getPowerUserState().experimental_macro_engine) {
             return value;
         }
         return value.replace(/{{(get(?:global)?var)::([^}]+)}}/gi, (match, cmd, name, idx) => {
@@ -707,8 +709,9 @@ export class SlashCommandParser {
 
     parse(text, verifyCommandNames = true, flags = null, abortController = null, debugController = null) {
         this.verifyCommandNames = verifyCommandNames;
+        const powerUserState = getPowerUserState();
         for (const key of Object.keys(PARSER_FLAG)) {
-            this.flags[PARSER_FLAG[key]] = flags?.[PARSER_FLAG[key]] ?? power_user.stscript.parser.flags[PARSER_FLAG[key]] ?? false;
+            this.flags[PARSER_FLAG[key]] = flags?.[PARSER_FLAG[key]] ?? powerUserState.stscript?.parser?.flags?.[PARSER_FLAG[key]] ?? false;
         }
         this.abortController = abortController;
         this.debugController = debugController;

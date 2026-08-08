@@ -3,11 +3,8 @@
 /** @typedef {import('chevrotain').ILexingError} ILexingError */
 /** @typedef {import('chevrotain').IRecognitionException} IRecognitionException */
 
-import { t } from '/scripts/i18n.js';
-import { Popup, POPUP_RESULT } from '/scripts/popup.js';
-import { power_user } from '/scripts/power-user.js';
-import { accountStorage } from '/scripts/util/AccountStorage.js';
-import { SimpleMutex } from '/scripts/util/SimpleMutex.js';
+import { getPowerUserState } from '../../power-user-state.js';
+import { SimpleMutex } from '../../util/SimpleMutex.js';
 
 /**
  * @typedef {Object} MacroErrorContext
@@ -42,9 +39,24 @@ export const onboardingExperimentalMacroEngineMutex = new SimpleMutex(onboarding
 export const onboardingExperimentalMacroEngine = onboardingExperimentalMacroEngineMutex.update.bind(onboardingExperimentalMacroEngineMutex);
 
 async function onboardingExperimentalMacroEngineUnsafe(feature = null) {
+    const powerUserState = getPowerUserState();
+
     // Show a popup once telling a user that they are using experimental features that only work with the new engine.
     // Ask them if they want to turn the experimental engine on.
-    if (power_user.experimental_macro_engine) return;
+    if (powerUserState.experimental_macro_engine) return;
+
+    // These UI modules depend on script.js / power-user.js. Loading them at
+    // module evaluation time closes a startup cycle back through MacroEngine.
+    // The onboarding prompt is user-triggered, so load its UI dependencies only
+    // when the prompt is actually needed.
+    const [i18nModule, popupModule, storageModule] = await Promise.all([
+        import('../../i18n.js'),
+        import('../../popup.js'),
+        import('../../util/AccountStorage.js'),
+    ]);
+    const { t } = i18nModule;
+    const { Popup, POPUP_RESULT } = popupModule;
+    const { accountStorage } = storageModule;
 
     // If already shown, do not show again
     const shown = accountStorage.getItem('slash_command_experimental_engine_warning_shown');
@@ -59,8 +71,8 @@ async function onboardingExperimentalMacroEngineUnsafe(feature = null) {
         <p>${t`You can enable the engine any time under:<br />${t`User Settings`} → ${t`Experimental Macro Engine`}`}</p>
         <p>${t`Would you like to enable it now?`}</p>`);
     if (result == POPUP_RESULT.AFFIRMATIVE) {
-        power_user.experimental_macro_engine = true;
-        $('#experimental_macro_engine').prop('checked', power_user.experimental_macro_engine).trigger('input');
+        powerUserState.experimental_macro_engine = true;
+        $('#experimental_macro_engine').prop('checked', powerUserState.experimental_macro_engine).trigger('input');
     }
 
     // Only show this once

@@ -769,3 +769,13 @@
   Cause: 大包安装、数十次目录命令和逐文件 SFTP 共用一个长连接；上传前没有完整归档校验与切换边界，回滚没有独立重连；缺失路径的 GNU `readlink -f` 行为被误当成已存在目标。
   Fix: 前端改为排除 `download/media-cache` 的单一校验 tar 包，上传并核对 SHA-256 后才在远端解包；SSH 启用 keepalive 和有限重试，失效会话时以新连接执行回滚；只有 `current` 实际为 symlink/directory 时才读取旧目标。
   Verify: 2026-08-06 `py_compile`、`git diff --check`、前端归档安全/权限断言和 `output/verify_dialogue_deploy_layout.py` 通过；生产主机当时从全球探测节点均连接超时，恢复后必须重新完整部署并核对服务/路由/数据库，不把首次中断视为成功。
+
+- Symptom: 原版 SillyTavern 嵌入生产后一直停在惑梦加载层，控制台可出现 `Cannot access 'MacroEngine' before initialization`、`Cannot access 'SlashCommandParser' before initialization`、`Cannot access 'power_user' before initialization` 或 `Cannot access 'EdgeTtsProvider' before initialization`。
+  Cause: SillyTavern 1.18.0 的 ESM 图中存在多组循环依赖，宏 facade、Slash parser singleton、power-user/common-enum 和 TTS provider map 在模块求值阶段立即读取尚处于 TDZ 的 binding；生产子路径改变模块求值顺序后把隐含循环稳定触发出来。
+  Fix: extension prompt 常量下沉到无依赖 `constants.js`；增加 dependency-free `power-user-state.js`；Slash parser 改为惰性实例代理，Macro diagnostics 的 UI 依赖改为按需 dynamic import，macro/TTS facade 改为 getter 或转发函数，禁止在模块顶层急切读取循环 binding。
+  Verify: 2026-08-08 `_selftest_sillytavern_runtime.py` 的 cycle guards 与完整本地桌面/390px E2E 通过；生产 release `20260808-182614` 的真实登录探针均进入 `homer-runtime-ready`、可见 5 条消息，page/console/network error 为 0。
+
+- Symptom: `/module/dialogue/` 中同一核心模块同时以 `/script.js` 和 `/module/dialogue/script.js` 加载，页面重复初始化、CSRF token 相互覆盖，POST 403 或加载层永久不退出。
+  Cause: runtime Cookie 被限定到 `/module/dialogue/`，但原版根相对 `fetch('/csrf-token')`、`/api/*` 与绝对 ESM import 先请求站点根；Nginx 307 虽能跳回模块路径，浏览器仍把重定向前后 URL 视为两套模块身份，且根路径请求不携带模块 Cookie，缓存的旧 CSRF 响应还会覆盖当前 token。
+  Fix: embedded runtime 启动前设置 mounted base，并重写同源 `/csrf-token`、`/api/*` 的 fetch/XHR 到 `/module/dialogue/`；核心绝对 ESM import 全部改为相对 import，CSRF bootstrap 使用 `cache:no-store` 且服务端响应禁止缓存。保留 `proxy_cookie_path / /module/dialogue/`，不要恢复根路径双命名空间。
+  Verify: 2026-08-08 生产内外 `/module/dialogue/csrf-token` 均为 200，自 release 启动后 journal 中 CSRF 403 为 0；桌面和 390px 探针 launcher hidden、iframe opacity=1、runtime 无 pending，RoleplayHub 仍为无 same-origin 的 `allow-scripts` 沙箱。

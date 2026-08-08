@@ -22,7 +22,7 @@ ssl:
   keyPath: ./certs/privkey.pem
   keyPassphrase: ""
 whitelistMode: true
-enableForwardedWhitelist: true
+enableForwardedWhitelist: false
 whitelist:
   - ::1
   - 127.0.0.1

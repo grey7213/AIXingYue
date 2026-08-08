@@ -27,8 +27,6 @@ import {
     doNewChat,
     online_status,
     messageFormatting,
-    extension_prompt_types,
-    extension_prompt_roles,
     deleteMessage,
     settingsReady,
 } from '../script.js';
@@ -65,10 +63,11 @@ import { accountStorage } from './util/AccountStorage.js';
 import { extractDominantColor, generateThemePalette, deriveBackgroundName } from './util/ThemeGenerator.js';
 import { DEFAULT_REASONING_TEMPLATE, loadReasoningTemplates } from './reasoning.js';
 import { bindModelTemplates } from './chat-templates.js';
-import { IMAGE_OVERSWIPE, MEDIA_DISPLAY } from './constants.js';
+import { extension_prompt_roles, extension_prompt_types, IMAGE_OVERSWIPE, MEDIA_DISPLAY } from './constants.js';
 import { t } from './i18n.js';
 import { getBackgroundPath, isCustomBackgroundUrl } from './backgrounds.js';
 import { persona_description_positions as _persona_description_positions } from './personas.js';
+import { registerPowerUserState } from './power-user-state.js';
 
 export const toastPositionClasses = [
     'toast-top-left',
@@ -341,6 +340,8 @@ export const power_user = {
     media_display: MEDIA_DISPLAY.LIST,
     image_overswipe: IMAGE_OVERSWIPE.GENERATE,
 };
+
+registerPowerUserState(power_user);
 
 let themes = [];
 let movingUIPresets = [];

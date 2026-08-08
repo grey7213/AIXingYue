@@ -1,7 +1,7 @@
 import { saveTtsProviderSettings } from './index.js';
-import { event_types, eventSource, getRequestHeaders } from '/script.js';
-import { SECRET_KEYS, secret_state, writeSecret } from '/scripts/secrets.js';
-import { getBase64Async } from '/scripts/utils.js';
+import { event_types, eventSource, getRequestHeaders } from '../../../script.js';
+import { SECRET_KEYS, secret_state, writeSecret } from '../../secrets.js';
+import { getBase64Async } from '../../utils.js';
 export { ElevenLabsTtsProvider };
 
 class ElevenLabsTtsProvider {

@@ -18,8 +18,6 @@ import {
     duplicateCharacter,
     eventSource,
     event_types,
-    extension_prompt_roles,
-    extension_prompt_types,
     extractMessageBias,
     generateQuietPrompt,
     generateRaw,
@@ -98,17 +96,42 @@ import { SlashCommandScope } from './slash-commands/SlashCommandScope.js';
 import { t } from './i18n.js';
 import { kai_settings } from './kai-settings.js';
 import { instruct_presets, selectContextPreset, selectInstructPreset } from './instruct-mode.js';
-import { debounce_timeout, SWIPE_DIRECTION, SWIPE_SOURCE } from './constants.js';
+import { debounce_timeout, extension_prompt_roles, extension_prompt_types, SWIPE_DIRECTION, SWIPE_SOURCE } from './constants.js';
 export {
     executeSlashCommands, executeSlashCommandsWithOptions, getSlashCommandsHelp, registerSlashCommand,
 };
 
-export const parser = new SlashCommandParser();
+/** @type {SlashCommandParser | null} */
+let parserInstance = null;
+
+function getParserInstance() {
+    parserInstance ??= new SlashCommandParser();
+    return parserInstance;
+}
+
+// Preserve the historical exported parser surface without touching the
+// SlashCommandParser binding while the circular startup graph is evaluating.
+export const parser = new Proxy({}, {
+    get(_target, property) {
+        const instance = getParserInstance();
+        const value = Reflect.get(instance, property, instance);
+        return typeof value === 'function' ? value.bind(instance) : value;
+    },
+    set(_target, property, value) {
+        return Reflect.set(getParserInstance(), property, value);
+    },
+    has(_target, property) {
+        return Reflect.has(getParserInstance(), property);
+    },
+    getPrototypeOf() {
+        return Reflect.getPrototypeOf(getParserInstance());
+    },
+});
 /**
  * @deprecated Use SlashCommandParser.addCommandObject() instead
  */
-const registerSlashCommand = SlashCommandParser.addCommand.bind(SlashCommandParser);
-const getSlashCommandsHelp = parser.getHelpString.bind(parser);
+const registerSlashCommand = (...args) => SlashCommandParser.addCommand(...args);
+const getSlashCommandsHelp = (...args) => getParserInstance().getHelpString(...args);
 
 /**
  * Converts a SlashCommandClosure to a filter function that returns a boolean.
@@ -6975,7 +6998,7 @@ async function executeSlashCommandsWithOptions(text, options = {}) {
 
     let closure;
     try {
-        closure = parser.parse(text, true, options.parserFlags, options.abortController ?? new SlashCommandAbortController());
+        closure = getParserInstance().parse(text, true, options.parserFlags, options.abortController ?? new SlashCommandAbortController());
         closure.scope.parent = options.scope;
         closure.onProgress = options.onProgress;
         closure.debugController = options.debugController;

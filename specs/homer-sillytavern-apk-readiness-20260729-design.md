@@ -111,6 +111,14 @@ systemd homer-dialogue.service
 - 修改远端 Nginx、systemd、runtime 前建立时间戳备份；SSH 使用 keepalive/有限重试，健康检查或传输失败时以独立重连恢复配置/源码链接并重启旧服务，不迁移或删除 SQLite。
 - `/app/open-source.html` 提供 SillyTavern 上游、固定提交、AGPL 文本、修改日期、公开源码仓库和第三方扩展逐项来源/许可证说明。
 
+### 子路径启动稳定性
+
+- `/module/dialogue/` 是浏览器内唯一的 runtime URL namespace。核心模块不得再用 `/script.js`、`/lib.js` 或 `/scripts/*` 绝对 import；否则 307 前后的 URL 会被 ESM loader 当成不同模块实例并重复执行启动图。
+- embedded bootstrap 在加载主模块前设置 mounted `<base>`，并把同源 `/csrf-token`、`/api/*` 的 fetch/XHR 直接改写到 `/module/dialogue/`，使请求从第一次发送起就携带模块路径 Cookie，不依赖 POST 重定向纠正。
+- CSRF bootstrap 请求和响应均禁止缓存，避免旧 token 覆盖当前会话。
+- SillyTavern 上游启动图中的循环 binding 不在模块顶层急切读取：公共常量放入无依赖模块，power-user 使用轻量状态注册桥，Slash parser、macro facade 和 TTS provider 使用惰性实例/getter，只有用户触发时才 dynamic import 弹窗等 UI 依赖。
+- 自测必须扫描核心绝对 import，并对 extension prompt、Slash/power-user、MacroEngine 和 TTS 的 cycle guard 做静态断言；真实 Chromium 仍以 `homer-runtime-ready`、无 pending/console/page/network error 为最终标准。
+
 ## 用户充值聚合
 
 后台用户列表 SQL 使用相关子查询或聚合 CTE：
