@@ -10,7 +10,7 @@
 | HDY4 | 隐藏消息头像并释放消息布局空间 | Done | bridge CSS 隐藏 `#chat .mes > .mesAvatarWrapper`、清零正文 inline padding；桌面/390px wrapper 可见数均为 0 |
 | HDY5 | 修复随卡脚本同步或运行兼容 | Done | 从备份恢复 `tavern_helper` 到两张卡、4 个版本和 3 个锁定会话可用的版本快照；不覆盖现有世界书/Regex/Prompt |
 | HDY6 | 完成静态、自测和真实 Chromium 回归 | Done | py_compile、Node syntax、repair selftest、原版 ST E2E 桌面/390px、生产两张卡真实浏览器均通过；助手面板可交互、Yuzi 请求 0、console/page/http error=0 |
-| HDY7 | 更新 AGENTS、部署、核对哈希、提交并推送 | In Progress | runtime 已发布 release `20260809-000127`，backend/dialogue/Nginx active、8008/8091/public health OK；待提交本地改动并推送；本轮不构建 APK |
+| HDY7 | 更新 AGENTS、部署、核对哈希、提交并推送 | Done | runtime release `20260809-000127` 已发布；backend/dialogue/Nginx active、8008/8091/public health OK；提交 `3219787` 已推送 `origin/main`；本轮未构建 APK |
 
 ## 2026-08-09 验收记录
 
