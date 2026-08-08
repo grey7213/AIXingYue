@@ -13,7 +13,7 @@
 | HDP7 | 修复 OpenAI/Anthropic/ST bridge 真实生成覆盖 | Completed | 普通 OpenAI、普通 Anthropic、ST OpenAI、ST Anthropic 四类 payload 哨兵均通过 |
 | HDP8 | 改造 Homer bridge 分组面板与切换 API | Completed | 角色卡/官方分组、锁定原因、会话持久化和 A/B 隔离通过 |
 | HDP9 | 完成静态、后端和真实浏览器回归 | Completed | Python/Node/Git、自带两组 selftest、安全夹具、1440×900/390×844 Chromium、截图与反扒哈希均通过 |
-| HDP10 | 更新 AGENTS、提交并推送 | In progress | 生产 release `20260808-213614` 已部署；待本地 commit/push，继续排除用户 `.thm` 与运行产物 |
+| HDP10 | 更新 AGENTS、提交并推送 | Completed | 生产 release `20260808-213614` 已部署；实现提交 `dd48f18` 已推送，用户 `.thm` 与运行产物均未纳入 |
 
 ## 当前约束
 
