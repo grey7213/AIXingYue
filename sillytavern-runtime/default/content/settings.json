@@ -209,7 +209,9 @@
         "apiUrl": "http://localhost:5100",
         "apiKey": "",
         "autoConnect": false,
-        "disabledExtensions": [],
+        "disabledExtensions": [
+            "third-party/st-yuzi-phone"
+        ],
         "expressionOverrides": [],
         "memory": {
             "minLongMemory": 16,

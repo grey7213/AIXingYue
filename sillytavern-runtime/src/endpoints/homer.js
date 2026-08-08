@@ -99,6 +99,24 @@ router.get('/conversations', (request, response) => {
     return forwardToHomer(request, response, '/console/api/web/conversations');
 });
 
+router.get('/conversations/:conversationId/runtime-config', (request, response) => {
+    const conversationId = encodeURIComponent(String(request.params.conversationId || '').trim());
+    return forwardToHomer(
+        request,
+        response,
+        `/console/api/web/conversations/${conversationId}/runtime-config`,
+    );
+});
+
+router.post('/conversations/:conversationId/preset-overrides', (request, response) => {
+    const conversationId = encodeURIComponent(String(request.params.conversationId || '').trim());
+    return forwardToHomer(
+        request,
+        response,
+        `/console/api/web/conversations/${conversationId}/preset-overrides`,
+    );
+});
+
 router.get('/models', (request, response) => {
     return forwardToHomer(request, response, '/console/api/web/model-presets');
 });

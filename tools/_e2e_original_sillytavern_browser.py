@@ -15,7 +15,13 @@ RUNTIME_DIR = STATE_DIR / "runtime"
 
 
 def monitor_page(page: Page, allowed_origins: set[str]) -> dict[str, list[str]]:
-    failures: dict[str, list[str]] = {"console": [], "page": [], "request": [], "http": []}
+    failures: dict[str, list[str]] = {
+        "console": [],
+        "page": [],
+        "request": [],
+        "http": [],
+        "yuzi": [],
+    }
     page.on(
         "console",
         lambda message: failures["console"].append(message.text)
@@ -43,6 +49,13 @@ def monitor_page(page: Page, allowed_origins: set[str]) -> dict[str, list[str]]:
         )
         if any(response.url.startswith(origin) for origin in allowed_origins)
         and response.status >= 400
+        else None,
+    )
+    page.on(
+        "request",
+        lambda request: failures["yuzi"].append(request.url)
+        if "st-yuzi-phone" in request.url.lower()
+        and urlsplit(request.url).path.lower().endswith((".js", ".css"))
         else None,
     )
     return failures
@@ -653,53 +666,213 @@ def exercise_preset_ui(page: Page, failures: dict[str, list[str]]) -> dict:
     page.locator("#homer-preset-ball").click()
     panel = page.locator("#homer-preset-panel")
     panel.wait_for(state="visible")
-    rows = panel.locator(".homer-preset-row")
-    if rows.count() < 1:
-        raise AssertionError("preset assistant did not expose any SillyTavern prompt entries")
-    first = rows.first
-    label = first.locator(".homer-preset-row__name").inner_text()
-    toggle = first.locator('input[type="checkbox"]')
-    before = toggle.is_checked()
-    # The visible track is the intended pointer target; the native checkbox is
-    # visually hidden underneath it for keyboard/accessibility semantics.
-    first.locator(".homer-switch__track").click()
-    page.wait_for_timeout(800)
-    state = page.evaluate(
-        """async () => {
-          const query = new URLSearchParams(location.search);
-          const appId = query.get('homer_app_id');
-          const conversationId = query.get('homer_conversation_id');
-          const response = await fetch('/api/homer/runtime-state?' + new URLSearchParams({
-            app_id: appId,
-            conversation_id: conversationId,
-          }));
-          return { status: response.status, body: await response.json() };
-        }"""
-    )
-    if state["status"] != 200:
-        raise AssertionError(f"preset state read failed: {state}")
-    variables = state["body"].get("data", state["body"]).get("variables", {})
-    overrides = variables.get("homer_preset_overrides", {})
-    if len(overrides) != 1:
-        raise AssertionError(
-            "expected one conversation override: "
-            + json.dumps(
-                {
-                    "overrides": overrides,
-                    "runtime_state": state["body"],
-                    "browser": failures,
-                },
-                ensure_ascii=False,
-            )
-        )
+    group_labels = panel.locator(".homer-preset-group__copy strong").all_inner_texts()
+    if group_labels != ["角色卡预设", "官方公开预设"]:
+        raise AssertionError(f"preset groups are wrong: {group_labels}")
     page.get_by_role("button", name="展开全部条目").click()
     dialog = page.locator("#homer-preset-dialog")
     dialog.wait_for(state="visible")
-    full_rows = dialog.locator(".homer-preset-row").count()
-    if full_rows < rows.count():
-        raise AssertionError("expanded preset dialog contains fewer rows than the quick panel")
+
+    card_group = dialog.locator(".homer-preset-group").filter(has_text="角色卡预设")
+    global_group = dialog.locator(".homer-preset-group").filter(has_text="官方公开预设")
+    card_rows = card_group.locator(".homer-preset-row")
+    global_rows = global_group.locator(".homer-preset-row")
+    if card_rows.count() != 5:
+        raise AssertionError(f"card preset did not show all entries: {card_rows.count()}")
+    if global_rows.count() != 3:
+        raise AssertionError(f"global preset visibility filter is wrong: {global_rows.count()}")
+    visible_text = dialog.inner_text()
+    if "官方后台隐藏条目" in visible_text:
+        raise AssertionError("hidden official prompt entry leaked into the user panel")
+    if "HOMER_CARD_" in visible_text or "HOMER_GLOBAL_" in visible_text:
+        raise AssertionError("prompt body sentinel leaked into the user panel")
+
+    card_marker = card_rows.filter(has_text="卡片结构条目")
+    card_unlisted = card_rows.filter(has_text="卡片未进顺序条目")
+    global_marker = global_rows.filter(has_text="官方公开结构条目")
+    for label, row in (
+        ("card marker", card_marker),
+        ("card unlisted", card_unlisted),
+        ("global marker", global_marker),
+    ):
+        if row.locator('input[type="checkbox"]').count() != 0:
+            raise AssertionError(f"{label} unexpectedly remained toggleable")
+
+    def read_config() -> dict:
+        state = page.evaluate(
+            """async () => {
+              const query = new URLSearchParams(location.search);
+              const conversationId = query.get('homer_conversation_id');
+              const response = await fetch(
+                `/api/homer/conversations/${encodeURIComponent(conversationId)}/runtime-config`,
+              );
+              return { status: response.status, body: await response.json() };
+            }"""
+        )
+        if state["status"] != 200:
+            raise AssertionError(f"preset runtime config read failed: {state}")
+        return state["body"].get("data", state["body"])
+
+    before_config = read_config()
+    prompt_projection = before_config.get("preset", {})
+    prompt_entries = (
+        prompt_projection.get("card_prompt", {}).get("entries", [])
+        + prompt_projection.get("global_prompt", {}).get("entries", [])
+    )
+    if any("content" in entry for entry in prompt_entries):
+        raise AssertionError("runtime prompt projection exposed prompt content")
+    serialized_projection = json.dumps(prompt_projection, ensure_ascii=False)
+    if "HOMER_CARD_" in serialized_projection or "HOMER_GLOBAL_" in serialized_projection:
+        raise AssertionError("runtime prompt projection exposed prompt sentinels")
+
+    card_target = card_rows.filter(has_text="卡片条目默认关闭")
+    global_target = global_rows.filter(has_text="官方公开默认开启")
+    card_before = card_target.locator('input[type="checkbox"]').is_checked()
+    global_before = global_target.locator('input[type="checkbox"]').is_checked()
+    if card_before is not False or global_before is not True:
+        raise AssertionError(
+            f"unexpected preset defaults: card={card_before}, global={global_before}"
+        )
+    card_target.locator(".homer-switch__track").click()
+    page.wait_for_function(
+        """async () => {
+          const query = new URLSearchParams(location.search);
+          const conversationId = query.get('homer_conversation_id');
+          const response = await fetch(
+            `/api/homer/conversations/${encodeURIComponent(conversationId)}/runtime-config`,
+          );
+          if (!response.ok) return false;
+          const body = await response.json();
+          const config = body?.data || body;
+          const card = config?.preset?.card_prompt?.entries || [];
+          return card.find(item => item.id === 'card-visible-off')?.enabled === true;
+        }""",
+        timeout=15_000,
+    )
+    global_target = dialog.locator(".homer-preset-group").filter(
+        has_text="官方公开预设"
+    ).locator(".homer-preset-row").filter(has_text="官方公开默认开启")
+    global_target.locator(".homer-switch__track").click()
+    page.wait_for_function(
+        """async () => {
+          const query = new URLSearchParams(location.search);
+          const conversationId = query.get('homer_conversation_id');
+          const response = await fetch(
+            `/api/homer/conversations/${encodeURIComponent(conversationId)}/runtime-config`,
+          );
+          if (!response.ok) return false;
+          const body = await response.json();
+          const config = body?.data || body;
+          const global = config?.preset?.global_prompt?.entries || [];
+          return global.find(item => item.id === 'global-visible-on')?.enabled === false;
+        }""",
+        timeout=15_000,
+    )
+    after_config = read_config()
+    after_card = next(
+        item
+        for item in after_config["preset"]["card_prompt"]["entries"]
+        if item["id"] == "card-visible-off"
+    )
+    after_global = next(
+        item
+        for item in after_config["preset"]["global_prompt"]["entries"]
+        if item["id"] == "global-visible-on"
+    )
+    if not after_card.get("overridden") or not after_global.get("overridden"):
+        raise AssertionError(
+            "preset override status did not refresh: "
+            + json.dumps({"card": after_card, "global": after_global}, ensure_ascii=False)
+        )
     page.get_by_role("button", name="关闭全部条目").click()
-    return {"label": label, "before": before, "override_count": len(overrides), "full_rows": full_rows}
+    return {
+        "card_rows": card_rows.count(),
+        "global_rows": global_rows.count(),
+        "locked_rows": 3,
+        "prompt_body_redacted": True,
+        "card_toggle": {"before": card_before, "after": after_card["enabled"]},
+        "global_toggle": {"before": global_before, "after": after_global["enabled"]},
+    }
+
+
+def exercise_admin_prompt_visibility_control(
+    page: Page,
+    base_url: str,
+    artifact_dir: Path,
+) -> dict:
+    page.goto(base_url + "/admin.html", wait_until="domcontentloaded", timeout=30_000)
+    page.get_by_role("button", name="全局预设").wait_for(state="visible", timeout=30_000)
+    page.get_by_role("button", name="全局预设").click()
+    page.get_by_role("heading", name="全局预设").wait_for(state="visible", timeout=30_000)
+    page.get_by_text("惑梦 E2E 官方公开预设", exact=True).first.wait_for(
+        state="visible",
+        timeout=30_000,
+    )
+
+    def hidden_entry():
+        return page.locator("details").filter(has_text="官方后台隐藏条目")
+
+    def open_hidden_entry():
+        entry = hidden_entry()
+        entry.wait_for(state="visible", timeout=15_000)
+        if not entry.evaluate("element => element.open"):
+            entry.locator(":scope > summary").click()
+        return entry
+
+    def hidden_checkbox():
+        return open_hidden_entry().locator("label").filter(
+            has_text="向用户显示并允许开关"
+        ).locator('input[type="checkbox"]')
+
+    controls = page.locator("label").filter(has_text="向用户显示并允许开关")
+    if controls.count() != 5:
+        raise AssertionError(f"admin prompt visibility controls are incomplete: {controls.count()}")
+    checkbox = hidden_checkbox()
+    if checkbox.is_checked():
+        raise AssertionError("historically hidden prompt unexpectedly defaulted to user-visible")
+
+    checkbox.check()
+    page.get_by_role("button", name="保存全部修改").click()
+    page.wait_for_function(
+        """async () => {
+          const response = await fetch('/admin/api/global-presets');
+          if (!response.ok) return false;
+          const body = await response.json();
+          const data = body?.data || body;
+          const activeId = data?.prompt?.active_id;
+          const preset = (data?.prompt?.items || []).find(item => item.id === activeId);
+          return preset?.prompts?.find(item => item.identifier === 'global-hidden')?.user_toggleable === true;
+        }""",
+        timeout=15_000,
+    )
+    if not hidden_checkbox().is_checked():
+        raise AssertionError("admin visibility checkbox did not survive the save/reload round trip")
+    page.screenshot(
+        path=str(artifact_dir / "admin-global-preset-user-toggleable.png"),
+        full_page=True,
+    )
+
+    hidden_checkbox().uncheck()
+    page.get_by_role("button", name="保存全部修改").click()
+    page.wait_for_function(
+        """async () => {
+          const response = await fetch('/admin/api/global-presets');
+          if (!response.ok) return false;
+          const body = await response.json();
+          const data = body?.data || body;
+          const activeId = data?.prompt?.active_id;
+          const preset = (data?.prompt?.items || []).find(item => item.id === activeId);
+          return preset?.prompts?.find(item => item.identifier === 'global-hidden')?.user_toggleable === false;
+        }""",
+        timeout=15_000,
+    )
+    assert_no_overflow(page, "admin global preset")
+    return {
+        "prompt_entries": controls.count(),
+        "default_hidden": True,
+        "save_round_trip": True,
+        "restored_hidden": True,
+    }
 
 
 def persist_extension_settings_probe(page: Page) -> dict:
@@ -1013,47 +1186,16 @@ def exercise_generation_and_actions(
             raise AssertionError(f"message actions are incomplete: {binding}")
 
     action_results: list[dict] = []
-    before_message_continue = signature()
-    page.locator(
-        '#chat .mes:not([is_user="true"]):not([is_system="true"]) '
-        '[data-homer-message-action="continue"]'
-    ).last.click()
-    page.wait_for_function(
-        """before => {
-          const context = window.SillyTavern.getContext();
-          const last = context.chat.at(-1);
-          const current = {
-            length: context.chat.length,
-            text: String(last?.mes || ''),
-            sendDate: String(last?.send_date || ''),
-            genStarted: String(last?.gen_started || ''),
-            genFinished: String(last?.gen_finished || ''),
-            swipes: Array.isArray(last?.swipes) ? last.swipes.length : 0,
-            swipe: Number(last?.swipe_id || 0),
-          };
-          return JSON.stringify(current) !== JSON.stringify({
-            length: before.length,
-            text: before.text,
-            sendDate: before.sendDate,
-            genStarted: before.genStarted,
-            genFinished: before.genFinished,
-            swipes: before.swipes,
-            swipe: before.swipe,
-          }) && last && !last.is_user && !last.is_system
-            && !document.body.classList.contains('homer-generating');
-        }""",
-        arg=before_message_continue,
-        timeout=45_000,
-    )
-    action_results.append({"action": "message-continue", "result": "generated"})
-
-    for index, label in enumerate(("continue", "regenerate", "next")):
+    for action in ("continue", "regenerate", "next"):
         before = signature()
         for _ in range(3):
             if not dismiss_extension_notice(page):
                 break
             page.wait_for_timeout(200)
-        page.locator(".homer-action-button").nth(index).click()
+        page.locator(
+            '#chat .mes:not([is_user="true"]):not([is_system="true"]) '
+            f'[data-homer-message-action="{action}"]'
+        ).last.click()
         try:
             page.wait_for_function(
                 """before => {
@@ -1089,13 +1231,15 @@ def exercise_generation_and_actions(
                 "body => body.classList.contains('homer-generating')"
             )
             raise AssertionError(
-                f"{label} did not settle: before={before}, after={state}"
+                f"message {action} did not settle: before={before}, after={state}"
             ) from error
         page.wait_for_timeout(500)
         after = signature()
         if not after["isAssistant"] or not after["text"].strip():
-            raise AssertionError(f"{label} did not finish with an assistant message: {after}")
-        action_results.append({"action": label, "result": "generated"})
+            raise AssertionError(
+                f"message {action} did not finish with an assistant message: {after}"
+            )
+        action_results.append({"action": f"message-{action}", "result": "generated"})
 
     page.wait_for_function(
         "() => document.querySelector('#homer-runtime-status')?.textContent?.includes('云端已同步')",
@@ -1262,9 +1406,8 @@ def main() -> int:
             desktop_runtime = launch_chat(desktop_page, base_url, app_id, first_conversation)
             assert_extension_settings_probe_restored(desktop_runtime)
             assert_keyword_injector_restored(desktop_runtime)
-            global_actions = desktop_runtime.locator(".homer-action-button")
-            for label in ("续写", "重写", "下回续"):
-                global_actions.filter(has_text=label).wait_for(state="visible")
+            if desktop_runtime.locator(".homer-action-dock, .homer-action-button").count():
+                raise AssertionError("removed global action dock is still present")
             verify_current_tokenizer(desktop_runtime)
             generation = exercise_generation_and_actions(
                 desktop_runtime,
@@ -1283,13 +1426,15 @@ def main() -> int:
             second_state = second_runtime.evaluate(
                 """async () => {
                   const query = new URLSearchParams(location.search);
-                  const response = await fetch('/api/homer/runtime-state?' + new URLSearchParams({
-                    app_id: query.get('homer_app_id'),
-                    conversation_id: query.get('homer_conversation_id'),
-                  }));
+                  const conversationId = query.get('homer_conversation_id');
+                  const response = await fetch(
+                    `/api/homer/conversations/${encodeURIComponent(conversationId)}/runtime-config`,
+                  );
                   const body = await response.json();
+                  const runtimeConfig = body?.data || body;
                   return {
-                    presetOverrides: body?.data?.variables?.homer_preset_overrides || {},
+                    status: response.status,
+                    preset: runtimeConfig?.preset || {},
                     extensionProbe: window.SillyTavern.getContext()
                       .extensionSettings?.['homer-e2e-persistence-probe'] || null,
                     keywordInjector: window.SillyTavern.getContext()
@@ -1297,9 +1442,32 @@ def main() -> int:
                   };
                 }"""
             )
-            if second_state["presetOverrides"]:
+            if second_state["status"] != 200:
                 raise AssertionError(
-                    f"preset overrides leaked into a new conversation: {second_state['presetOverrides']}"
+                    f"second conversation runtime config failed: {second_state}"
+                )
+            second_card = next(
+                item
+                for item in second_state["preset"]["card_prompt"]["entries"]
+                if item["id"] == "card-visible-off"
+            )
+            second_global = next(
+                item
+                for item in second_state["preset"]["global_prompt"]["entries"]
+                if item["id"] == "global-visible-on"
+            )
+            if (
+                second_card.get("enabled") is not False
+                or second_card.get("overridden")
+                or second_global.get("enabled") is not True
+                or second_global.get("overridden")
+            ):
+                raise AssertionError(
+                    "preset overrides leaked into a new conversation: "
+                    + json.dumps(
+                        {"card": second_card, "global": second_global},
+                        ensure_ascii=False,
+                    )
                 )
             if second_state["extensionProbe"] is not None:
                 raise AssertionError(
@@ -1336,7 +1504,8 @@ def main() -> int:
                     "extension_settings_scope": "conversation-only",
                     "keyword_injector": keyword_injector,
                     "keyword_injector_scope": "conversation-only",
-                    "action_dock": "pass",
+                    "action_dock": "removed",
+                    "yuzi_phone_asset_requests": len(desktop_failures["yuzi"]),
                     "generation": generation,
                     "realtime_rollback": realtime_rollback,
                     "extension_notice": bool(extension_notice),
@@ -1376,6 +1545,8 @@ def main() -> int:
             mobile_failures = monitor_page(mobile_page, allowed_origins)
             login(mobile_page, base_url, credentials)
             mobile_runtime = launch_chat(mobile_page, base_url, app_id, first_conversation)
+            if mobile_runtime.locator(".homer-action-dock, .homer-action-button").count():
+                raise AssertionError("removed global action dock is visible on mobile")
             mobile_runtime.locator("#homer-preset-ball").click()
             mobile_runtime.locator("#homer-preset-panel").wait_for(state="visible")
             mobile_runtime.locator("#homer-preset-ball").click()
@@ -1395,6 +1566,7 @@ def main() -> int:
                     "chat_runtime": "pass",
                     "preset_panel": "pass",
                     "keyword_injector_panel": "pass",
+                    "yuzi_phone_asset_requests": len(mobile_failures["yuzi"]),
                     "horizontal_overflow": False,
                 }
             )
@@ -1427,6 +1599,26 @@ def main() -> int:
                 }
             )
             regular.close()
+
+            admin = browser.new_context(viewport={"width": 1440, "height": 900})
+            admin_page = admin.new_page()
+            admin_failures = monitor_page(admin_page, allowed_origins)
+            login(admin_page, base_url, credentials)
+            admin_visibility = exercise_admin_prompt_visibility_control(
+                admin_page,
+                base_url,
+                artifact_dir,
+            )
+            assert_clean(admin_failures, "admin prompt visibility")
+            results.append(
+                {
+                    "viewport": "desktop",
+                    "role": "admin",
+                    "prompt_user_visibility_control": "pass",
+                    **admin_visibility,
+                }
+            )
+            admin.close()
         finally:
             browser.close()
 

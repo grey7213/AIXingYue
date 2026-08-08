@@ -65,6 +65,11 @@
 
 ## Reusable Pitfalls
 
+- Symptom: 删除旧预设助手/全局操作坞后，对话页一直停在加载层；或明明已把 `st-yuzi-phone` 写进默认 disabled，存量账号仍会加载手机弹窗资源。
+  Cause: Homer bridge 启动链仍引用已删除的 `presetOverrides`、`restorePresetDefaults()`、`applyPresetOverrides()`，初始化异常发生在 ready class 设置前；同时 SillyTavern 的用户级 `extension_settings.disabledExtensions` 和会话快照会覆盖默认 settings，单改默认 JSON 不能约束存量账号。
+  Fix: 清除旧预设变量/函数的全部启动与事件引用，面板只使用服务端 `runtime_config.preset`；在原版 `loadExtensionSettings()` 的 discover/activate 前和 Homer 会话 settings overlay 中都强制加入 `third-party/st-yuzi-phone`，保留扩展源码目录但不执行 bundle。
+  Verify: 2026-08-08 隔离 SillyTavern 1.18.0 在 1440×900/390×844 均完成 ready；全局 dock DOM/CSS 为 0，逐消息 continue/regenerate/next 真实生成，Yuzi JS/CSS 请求为 0，console/page error=0。生产 release `20260808-213614` 的关键文件哈希与本地一致，backend/dialogue/Nginx active、8008/8091 health OK。
+
 - Symptom: APK 的 `DefaultServerNodes` 已全部绑定新域名，但最终二进制仍能扫到旧上游域名；构建报告还可能在没有 ADB 设备时写成“安装成功”，签名命令日志也可能直接显示密码参数。
   Cause: 历史支付协程在 `PayViewModel$toPay$1.smali` 单独硬编码 `return_url`，不属于节点列表补丁；旧报告使用固定运行结果文本，命令日志未脱敏敏感参数。
   Fix: APK 流水线按绑定服务器同步把支付返回地址改为其 `/app/`，对 `--ks-pass/--key-pass/--storepass` 后续值脱敏；ADB 验证返回真实状态，报告只记录实际执行结果。

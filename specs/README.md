@@ -4,6 +4,7 @@
 
 ## 当前主要入口
 
+- 惑梦对话预设可见性与操作收敛：`homer-dialogue-preset-controls-20260808-requirements.md`、`homer-dialogue-preset-controls-20260808-design.md`、`homer-dialogue-preset-controls-20260808-tasks.md`
 - 惑梦反扒卡分享包与 APK 构建：`homer-share-and-apk-20260806-requirements.md`、`homer-share-and-apk-20260806-design.md`、`homer-share-and-apk-20260806-tasks.md`
 - 惑梦原版 SillyTavern APK 打包前主线：`homer-sillytavern-apk-readiness-20260729-requirements.md`、`homer-sillytavern-apk-readiness-20260729-design.md`、`homer-sillytavern-apk-readiness-20260729-tasks.md`
 - Web 聊天与长期能力：`web-chat-requirements.md`、`web-chat-design.md`、`web-chat-tasks.md`

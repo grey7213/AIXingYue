@@ -973,7 +973,7 @@
                             <summary class="cursor-pointer px-4 py-3 flex items-center justify-between gap-3">
                               <span class="min-w-0">
                                 <span class="block text-sm text-slate-100 break-all" x-text="entry.name || entry.scriptName || entry.identifier || entry.id"></span>
-                                <span class="block text-[11px] text-slate-500 mt-1 break-all" x-text="globalPresetKind === 'prompt' ? ((entry.in_order ? ('顺序 ' + entry.order) : '未进顺序表') + (entry.marker ? ' · Marker' : '') + (entry.role ? (' · ' + entry.role) : '')) : ('顺序 ' + entry.order + ' · placement ' + JSON.stringify(entry.placement || []))"></span>
+                                <span class="block text-[11px] text-slate-500 mt-1 break-all" x-text="globalPresetKind === 'prompt' ? ((entry.in_order === false ? '未进顺序表' : ('顺序 ' + (entry.order ?? 0))) + (entry.marker ? ' · Marker' : '') + (entry.role ? (' · ' + entry.role) : '') + (entry.user_toggleable ? ' · 用户可见' : '')) : ('顺序 ' + entry.order + ' · placement ' + JSON.stringify(entry.placement || []))"></span>
                               </span>
                               <span class="text-[10px] rounded-full px-2 py-1 shrink-0" :class="isGlobalPresetEntryEnabled(entry) ? 'bg-emerald-400/15 text-emerald-300' : 'bg-slate-400/10 text-slate-400'" x-text="isGlobalPresetEntryEnabled(entry) ? '启用' : '停用'"></span>
                             </summary>
@@ -987,7 +987,9 @@
                                     <label class="flex items-center gap-2"><input type="checkbox" x-model="entry.marker" class="accent-amber-500">Marker</label>
                                     <label class="flex items-center gap-2"><input type="checkbox" x-model="entry.system_prompt" class="accent-sky-500">System Prompt</label>
                                     <label class="flex items-center gap-2"><input type="checkbox" x-model="entry.forbid_overrides" class="accent-red-500">禁止覆盖</label>
+                                    <label class="flex items-center gap-2"><input type="checkbox" x-model="entry.user_toggleable" class="accent-fuchsia-500">向用户显示并允许开关</label>
                                   </div>
+                                  <div class="rounded-lg border border-fuchsia-400/20 bg-fuchsia-400/5 px-3 py-2 text-xs text-fuchsia-100/80">默认不向用户公开。即使勾选，Marker、空正文、未进顺序表或“禁止覆盖”的条目也只会以锁定状态显示。</div>
                                   <div class="grid md:grid-cols-2 gap-3">
                                     <div><label class="xy-label">名称</label><input class="xy-input" x-model="entry.name"></div>
                                     <div><label class="xy-label">Identifier</label><input class="xy-input" x-model="entry.identifier"></div>

@@ -88,6 +88,61 @@ def main() -> int:
         store.set_user_admin(user_id, True)
         store.set_advanced_creator_override(user_id, True)
         store.add_credit_points(user_id, 500, "free")
+        store.import_global_prompt_preset(
+            {
+                "id": "homer-e2e-global-prompt",
+                "name": "惑梦 E2E 官方公开预设",
+                "prompts": [
+                    {
+                        "identifier": "global-visible-on",
+                        "name": "官方公开默认开启",
+                        "role": "system",
+                        "content": "HOMER_GLOBAL_VISIBLE_ON_SENTINEL",
+                        "user_toggleable": True,
+                    },
+                    {
+                        "identifier": "global-visible-off",
+                        "name": "官方公开默认关闭",
+                        "role": "system",
+                        "content": "HOMER_GLOBAL_VISIBLE_OFF_SENTINEL",
+                        "user_toggleable": True,
+                    },
+                    {
+                        "identifier": "global-visible-marker",
+                        "name": "官方公开结构条目",
+                        "role": "system",
+                        "content": "",
+                        "marker": True,
+                        "user_toggleable": True,
+                    },
+                    {
+                        "identifier": "global-hidden",
+                        "name": "官方后台隐藏条目",
+                        "role": "system",
+                        "content": "HOMER_GLOBAL_HIDDEN_SENTINEL",
+                        "user_toggleable": False,
+                    },
+                    {
+                        "identifier": "chatHistory",
+                        "name": "聊天历史",
+                        "role": "system",
+                        "content": "",
+                        "marker": True,
+                    },
+                ],
+                "prompt_order": [{
+                    "character_id": 100001,
+                    "order": [
+                        {"identifier": "global-visible-on", "enabled": True},
+                        {"identifier": "global-visible-off", "enabled": False},
+                        {"identifier": "global-visible-marker", "enabled": True},
+                        {"identifier": "global-hidden", "enabled": True},
+                        {"identifier": "chatHistory", "enabled": True},
+                    ],
+                }],
+            },
+            "homer-e2e-global-prompt.json",
+        )
         generic_card = {
             "spec": "chara_card_v3",
             "spec_version": "3.0",
@@ -119,6 +174,53 @@ def main() -> int:
                     ],
                 },
                 "extensions": {
+                    "homer_card_prompt_preset": {
+                        "enabled": True,
+                        "name": "惑梦 E2E 角色卡预设",
+                        "prompts": [
+                            {
+                                "identifier": "card-visible-on",
+                                "name": "卡片条目默认开启",
+                                "role": "system",
+                                "content": "HOMER_CARD_VISIBLE_ON_SENTINEL",
+                            },
+                            {
+                                "identifier": "card-visible-off",
+                                "name": "卡片条目默认关闭",
+                                "role": "system",
+                                "content": "HOMER_CARD_VISIBLE_OFF_SENTINEL",
+                            },
+                            {
+                                "identifier": "card-marker",
+                                "name": "卡片结构条目",
+                                "role": "system",
+                                "content": "",
+                                "marker": True,
+                            },
+                            {
+                                "identifier": "card-unlisted",
+                                "name": "卡片未进顺序条目",
+                                "role": "system",
+                                "content": "HOMER_CARD_UNLISTED_SENTINEL",
+                            },
+                            {
+                                "identifier": "chatHistory",
+                                "name": "聊天历史",
+                                "role": "system",
+                                "content": "",
+                                "marker": True,
+                            },
+                        ],
+                        "prompt_order": [{
+                            "character_id": 100001,
+                            "order": [
+                                {"identifier": "card-visible-on", "enabled": True},
+                                {"identifier": "card-visible-off", "enabled": False},
+                                {"identifier": "card-marker", "enabled": True},
+                                {"identifier": "chatHistory", "enabled": True},
+                            ],
+                        }],
+                    },
                     "regex_scripts": [
                         {
                             "id": "e2e-regex-1",

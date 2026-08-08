@@ -1070,6 +1070,79 @@ body.homer-runtime .openai_prompt_manager_popup_entry_form {
     overflow: auto;
 }
 
+.homer-preset-group {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+    padding: 11px;
+    border: 1px solid var(--homer-line);
+    border-radius: 17px;
+    background: color-mix(in srgb, var(--homer-panel-soft) 86%, transparent);
+}
+
+.homer-preset-group + .homer-preset-group {
+    margin-top: 3px;
+}
+
+.homer-preset-group__head {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 1px 2px 3px;
+}
+
+.homer-preset-group__copy {
+    display: grid;
+    min-width: 0;
+    gap: 2px;
+}
+
+.homer-preset-group__copy strong,
+.homer-preset-group__copy small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.homer-preset-group__copy strong {
+    color: var(--homer-ink);
+    font-size: 12px;
+    font-weight: 800;
+}
+
+.homer-preset-group__copy small,
+.homer-preset-group__more {
+    color: var(--homer-muted);
+    font-size: 10px;
+}
+
+.homer-preset-group__count,
+.homer-preset-row__state {
+    flex: 0 0 auto;
+    border: 1px solid color-mix(in srgb, var(--homer-accent) 18%, var(--homer-line));
+    border-radius: 999px;
+    color: var(--homer-accent);
+    background: var(--homer-accent-soft);
+    font-size: 10px;
+    font-weight: 750;
+}
+
+.homer-preset-group__count {
+    padding: 4px 8px;
+}
+
+.homer-preset-group__list {
+    display: grid;
+    gap: 7px;
+}
+
+.homer-preset-group__more {
+    padding: 2px 4px 0;
+    text-align: right;
+}
+
 .homer-preset-row {
     display: flex;
     min-height: 58px;
@@ -1086,6 +1159,16 @@ body.homer-runtime .openai_prompt_manager_popup_entry_form {
 .homer-preset-row:hover {
     border-color: rgba(223, 190, 120, 0.22);
     background: rgba(223, 190, 120, 0.055);
+}
+
+.homer-preset-row.is-locked {
+    cursor: default;
+    opacity: 0.78;
+}
+
+.homer-preset-row.is-locked:hover {
+    border-color: var(--homer-line);
+    background: color-mix(in srgb, var(--homer-panel-soft) 92%, transparent);
 }
 
 .homer-preset-row__copy {
@@ -1109,6 +1192,12 @@ body.homer-runtime .openai_prompt_manager_popup_entry_form {
     font-size: 10px;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.homer-preset-row__state {
+    padding: 5px 8px;
+    color: var(--homer-muted);
+    background: color-mix(in srgb, var(--homer-panel-soft) 92%, transparent);
 }
 
 .homer-switch {
@@ -1227,48 +1316,6 @@ body.homer-runtime .openai_prompt_manager_popup_entry_form {
     font-size: 12px;
 }
 
-.homer-action-dock {
-    position: absolute;
-    z-index: 29999;
-    left: 50%;
-    bottom: calc(18px + env(safe-area-inset-bottom));
-    display: flex;
-    gap: 4px;
-    padding: 5px;
-    border: 1px solid rgba(223, 190, 120, 0.2);
-    border-radius: 18px;
-    background: rgba(14, 13, 12, 0.88);
-    box-shadow: 0 14px 40px rgba(0, 0, 0, 0.48);
-    backdrop-filter: blur(18px);
-    transform: translateX(-50%);
-}
-
-.homer-action-button {
-    min-width: 72px;
-    height: 38px;
-    padding: 0 15px;
-    cursor: pointer;
-    border: 0;
-    border-radius: 13px;
-    color: #d9cdbd;
-    background: transparent;
-    font-size: 12px;
-    font-weight: 700;
-    transition: color 140ms ease, background 140ms ease;
-}
-
-.homer-action-button:hover,
-.homer-action-button:focus-visible {
-    color: #231b10;
-    background: var(--homer-gold);
-}
-
-.homer-generating .homer-action-button {
-    cursor: progress;
-    opacity: 0.46;
-    pointer-events: none;
-}
-
 @media (max-width: 640px) {
     .homer-preset-ball {
         right: 13px;
@@ -1310,16 +1357,16 @@ body.homer-runtime .openai_prompt_manager_popup_entry_form {
         max-height: calc(100dvh - 190px);
     }
 
-    .homer-action-dock {
-        bottom: calc(10px + env(safe-area-inset-bottom));
-        width: max-content;
-        max-width: calc(100vw - 86px);
+    .homer-preset-group {
+        padding: 9px;
     }
 
-    .homer-action-button {
-        min-width: 63px;
-        height: 36px;
-        padding: 0 10px;
+    .homer-preset-row {
+        gap: 10px;
+    }
+
+    .homer-preset-row__meta {
+        white-space: normal;
     }
 }
 
@@ -2188,10 +2235,6 @@ body.homer-runtime #send_but:hover {
     opacity: 0.46;
 }
 
-.homer-action-dock {
-    bottom: calc(86px + env(safe-area-inset-bottom));
-}
-
 .homer-preset-ball {
     bottom: calc(96px + env(safe-area-inset-bottom));
 }
@@ -2281,11 +2324,6 @@ body.homer-runtime #send_but:hover {
 
     .homer-sheet-dialog__actions > :last-child {
         grid-column: 1 / -1;
-    }
-
-    .homer-action-dock {
-        bottom: calc(76px + env(safe-area-inset-bottom));
-        max-width: calc(100vw - 78px);
     }
 
     .homer-preset-ball {
@@ -2680,17 +2718,14 @@ body.homer-runtime #send_but {
     background: linear-gradient(135deg, var(--homer-accent), var(--homer-gold-bright));
 }
 
-.homer-secondary-button,
-.homer-action-button {
+.homer-secondary-button {
     border-color: var(--homer-line);
     color: var(--homer-ink);
     background: var(--homer-panel-soft);
 }
 
 .homer-secondary-button:hover,
-.homer-secondary-button:focus-visible,
-.homer-action-button:hover,
-.homer-action-button:focus-visible {
+.homer-secondary-button:focus-visible {
     border-color: #dfad99;
     color: var(--homer-accent);
     background: #fff0e7;

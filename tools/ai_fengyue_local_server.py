@@ -5828,7 +5828,7 @@ class Store:
                 """,
                 (conv_id, user_id),
             ).fetchall()
-        out = {"prompt": {}, "regex": {}}
+        out = {"prompt": {}, "global_prompt": {}, "card_prompt": {}, "regex": {}}
         for row in rows:
             kind = str(row["preset_kind"] or "")
             if kind not in out:
@@ -5853,28 +5853,41 @@ class Store:
         conversation = self.get_conversation(conv_id, user_id)
         if not conversation:
             raise PermissionError("conversation not found")
-        kind = str(preset_kind or "").strip().lower()
-        if kind not in {"prompt", "regex"}:
+        requested_kind = str(preset_kind or "").strip().lower()
+        kind = "global_prompt" if requested_kind == "prompt" else requested_kind
+        if kind not in {"global_prompt", "card_prompt", "regex"}:
             raise ValueError("invalid preset kind")
-        preset = self.global_prompt_preset() if kind == "prompt" else self.global_regex_preset()
-        active_id = str(preset.get("id") or "")
-        requested_id = str(preset_id or active_id).strip()
-        if requested_id != active_id:
-            raise ValueError("active preset changed; reload current conversation settings")
-        if kind == "prompt":
-            normalized = normalize_full_prompt_preset(preset)
+        if kind == "card_prompt":
+            config = _conversation_card_prompt_config(self, conv_id, user_id)
+            active_id = str(config.get("preset_id") or "")
             base_entries = {
-                str(item.get("identifier") or ""): bool(item.get("in_order") and item.get("order_enabled"))
-                for item in normalized.get("prompts") or []
-                if isinstance(item, dict) and str(item.get("identifier") or "")
+                str(item.get("id") or ""): bool(item.get("inherited_enabled"))
+                for item in config.get("entries") or []
+                if isinstance(item, dict) and item.get("toggleable") and str(item.get("id") or "")
+            }
+        elif kind == "global_prompt":
+            config = _conversation_prompt_config(self, conv_id, user_id)
+            active_id = str(config.get("preset_id") or "")
+            base_entries = {
+                str(item.get("id") or ""): bool(item.get("inherited_enabled"))
+                for item in config.get("entries") or []
+                if isinstance(item, dict) and item.get("toggleable") and str(item.get("id") or "")
             }
         else:
-            normalized = normalize_full_regex_preset(preset)
+            runtime_profile = self.get_conversation_runtime_profile(conv_id, user_id)
+            selected = self.selected_conversation_presets(runtime_profile).get("regex") or {}
+            normalized = normalize_full_regex_preset(selected)
+            active_id = str(normalized.get("id") or "")
             base_entries = {
                 str(item.get("id") or ""): not bool(item.get("disabled"))
                 for item in normalized.get("scripts") or []
-                if isinstance(item, dict) and str(item.get("id") or "")
+                if isinstance(item, dict)
+                and str(item.get("id") or "")
+                and bool(str(item.get("findRegex") or "").strip())
             }
+        requested_id = str(preset_id or active_id).strip()
+        if requested_id != active_id:
+            raise ValueError("preset changed; reload current conversation settings")
         if not active_id:
             if reset:
                 return {"conversation_id": conv_id, "preset_kind": kind, "preset_id": "", "items": []}
@@ -5897,10 +5910,16 @@ class Store:
             self.conn.execute("begin immediate")
             try:
                 if reset:
-                    self.conn.execute(
-                        "delete from conversation_preset_overrides where user_id=? and conversation_id=? and preset_kind=?",
-                        (user_id, conv_id, kind),
-                    )
+                    if kind == "global_prompt":
+                        self.conn.execute(
+                            "delete from conversation_preset_overrides where user_id=? and conversation_id=? and preset_kind in ('prompt','global_prompt')",
+                            (user_id, conv_id),
+                        )
+                    else:
+                        self.conn.execute(
+                            "delete from conversation_preset_overrides where user_id=? and conversation_id=? and preset_kind=?",
+                            (user_id, conv_id, kind),
+                        )
                 else:
                     for entry_id, enabled in clean_items:
                         if enabled == base_entries[entry_id]:
@@ -5908,6 +5927,11 @@ class Store:
                                 "delete from conversation_preset_overrides where user_id=? and conversation_id=? and preset_kind=? and preset_id=? and entry_id=?",
                                 (user_id, conv_id, kind, active_id, entry_id),
                             )
+                            if kind == "global_prompt":
+                                self.conn.execute(
+                                    "delete from conversation_preset_overrides where user_id=? and conversation_id=? and preset_kind='prompt' and preset_id=? and entry_id=?",
+                                    (user_id, conv_id, active_id, entry_id),
+                                )
                             continue
                         self.conn.execute(
                             """
@@ -5918,6 +5942,11 @@ class Store:
                             """,
                             (user_id, conv_id, kind, active_id, entry_id, 1 if enabled else 0, ts),
                         )
+                        if kind == "global_prompt":
+                            self.conn.execute(
+                                "delete from conversation_preset_overrides where user_id=? and conversation_id=? and preset_kind='prompt' and preset_id=? and entry_id=?",
+                                (user_id, conv_id, active_id, entry_id),
+                            )
                 self.conn.commit()
             except Exception:
                 self.conn.rollback()
@@ -7171,6 +7200,7 @@ class Store:
             selected_presets = self.selected_conversation_presets(runtime_profile)
             conversation_settings = {
                 "global_preset_enabled": bool(conversation.get("global_preset_enabled", 1)),
+                "version_id": str(conversation.get("version_id") or ""),
                 "preset_overrides": self.conversation_preset_override_map(conv_id, user_id),
                 "runtime_profile": runtime_profile or {},
                 "prompt_preset": selected_presets.get("prompt") or {},
@@ -12899,47 +12929,217 @@ def _conversation_worldbook_books(entries: list[dict], app_name: str, mod_labels
     return books
 
 
-def _conversation_prompt_config(store: "Store", conv_id: str, user_id: str) -> dict:
-    preset = normalize_full_prompt_preset(store.global_prompt_preset())
-    preset_id = str(preset.get("id") or "")
-    override_map = store.conversation_preset_override_map(conv_id, user_id).get("prompt", {}).get(preset_id, {})
+def _prompt_entry_locked_reason(*, marker: bool, in_order: bool, has_content: bool, forbid_overrides: bool) -> str:
+    if forbid_overrides:
+        return "此条目禁止会话覆盖"
+    if marker:
+        return "结构或 Marker 条目"
+    if not in_order:
+        return "未进入预设顺序表"
+    if not has_content:
+        return "条目没有可执行正文"
+    return ""
+
+
+def _prompt_preset_public_entries(
+    preset: dict,
+    override_map: dict | None = None,
+    *,
+    require_user_toggleable: bool = False,
+    source: str = "global_prompt",
+) -> list[dict]:
+    overrides = override_map if isinstance(override_map, dict) else {}
     entries: list[dict] = []
-    after_history = False
-    for raw in preset.get("prompts") or []:
+    prompts = preset.get("prompts") if isinstance(preset.get("prompts"), list) else []
+    if prompts:
+        after_history = False
+        for raw in prompts:
+            if not isinstance(raw, dict):
+                continue
+            entry_id = str(raw.get("identifier") or "").strip()
+            if not entry_id:
+                continue
+            if entry_id == "chatHistory":
+                after_history = True
+            user_toggleable = _preset_bool(raw.get("user_toggleable"), False)
+            if require_user_toggleable and not user_toggleable:
+                continue
+            has_content = bool(str(raw.get("content") or "").strip())
+            marker = _preset_bool(raw.get("marker"), False) or not has_content
+            in_order = bool(raw.get("in_order"))
+            forbid_overrides = _preset_bool(raw.get("forbid_overrides"), False)
+            toggleable = bool(has_content and in_order and not marker and not forbid_overrides)
+            inherited = bool(in_order and raw.get("order_enabled"))
+            overridden = bool(toggleable and entry_id in overrides)
+            enabled = bool(overrides.get(entry_id, inherited)) if toggleable else inherited
+            entries.append({
+                "id": entry_id,
+                "name": str(raw.get("name") or entry_id)[:200],
+                "role": str(raw.get("role") or "system")[:20],
+                "position": "post_history" if after_history else "system_before",
+                "order": int(raw.get("order") or 0),
+                "enabled": enabled,
+                "inherited_enabled": inherited,
+                "overridden": overridden,
+                "locked": not toggleable,
+                "toggleable": toggleable,
+                "locked_reason": _prompt_entry_locked_reason(
+                    marker=marker,
+                    in_order=in_order,
+                    has_content=has_content,
+                    forbid_overrides=forbid_overrides,
+                ),
+                "marker": marker,
+                "in_order": in_order,
+                "user_toggleable": user_toggleable,
+                "source": source,
+            })
+        return entries
+
+    blocks = preset.get("blocks") if isinstance(preset.get("blocks"), list) else []
+    for raw in blocks:
         if not isinstance(raw, dict):
             continue
-        entry_id = str(raw.get("identifier") or "")
+        entry_id = str(raw.get("id") or raw.get("identifier") or "").strip()
         if not entry_id:
             continue
-        if entry_id == "chatHistory":
-            after_history = True
-        inherited = bool(raw.get("in_order") and raw.get("order_enabled"))
-        marker = _preset_bool(raw.get("marker"), False) or not str(raw.get("content") or "").strip()
-        enabled = bool(override_map.get(entry_id, inherited))
+        user_toggleable = _preset_bool(raw.get("user_toggleable"), False)
+        if require_user_toggleable and not user_toggleable:
+            continue
+        has_content = bool(str(raw.get("content") or "").strip())
+        marker = not has_content
+        forbid_overrides = _preset_bool(raw.get("forbid_overrides"), False)
+        toggleable = bool(has_content and not marker and not forbid_overrides)
+        inherited = _preset_bool(raw.get("enabled"), True)
+        overridden = bool(toggleable and entry_id in overrides)
         entries.append({
             "id": entry_id,
-            "name": str(raw.get("name") or entry_id),
-            "role": str(raw.get("role") or "system"),
-            "position": "post_history" if after_history else "system_before",
+            "name": str(raw.get("name") or entry_id)[:200],
+            "role": str(raw.get("role") or "system")[:20],
+            "position": str(raw.get("position") or "system_before")[:40],
             "order": int(raw.get("order") or 0),
-            "enabled": enabled,
+            "enabled": bool(overrides.get(entry_id, inherited)) if toggleable else inherited,
             "inherited_enabled": inherited,
-            "overridden": entry_id in override_map,
-            "locked": bool(marker or not raw.get("in_order")),
+            "overridden": overridden,
+            "locked": not toggleable,
+            "toggleable": toggleable,
+            "locked_reason": _prompt_entry_locked_reason(
+                marker=marker,
+                in_order=True,
+                has_content=has_content,
+                forbid_overrides=forbid_overrides,
+            ),
             "marker": marker,
+            "in_order": True,
+            "user_toggleable": user_toggleable,
+            "source": source,
         })
+    return entries
+
+
+def _card_prompt_preset_id(preset: dict, version_id: str = "") -> str:
+    prompts = preset.get("prompts") if isinstance(preset.get("prompts"), list) else []
+    blocks = preset.get("blocks") if isinstance(preset.get("blocks"), list) else []
+    if not prompts and not blocks:
+        return ""
+    canonical = json.dumps(
+        {"prompts": prompts, "blocks": blocks, "enabled": bool(preset.get("enabled"))},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+    version_key = _global_preset_id(version_id, "unversioned")[:100]
+    return f"card-prompt:{version_key}:{digest}"[:160]
+
+
+def _conversation_card_prompt_config(
+    store: "Store",
+    conv_id: str,
+    user_id: str,
+    *,
+    conversation: dict | None = None,
+    app: dict | None = None,
+) -> dict:
+    if not isinstance(conversation, dict) or not isinstance(app, dict):
+        runtime = store.conversation_runtime_card(conv_id, user_id)
+        if not runtime:
+            raise PermissionError("conversation not found")
+        conversation, app = runtime
+    preset = normalize_card_prompt_preset(app_extras(app).get("card_prompt_preset"))
+    preset_id = _card_prompt_preset_id(preset, str(conversation.get("version_id") or ""))
+    override_map = (
+        store.conversation_preset_override_map(conv_id, user_id)
+        .get("card_prompt", {})
+        .get(preset_id, {})
+        if preset_id else {}
+    )
+    entries = _prompt_preset_public_entries(preset, override_map, source="card_prompt")
     return {
         "preset_id": preset_id,
-        "name": str(preset.get("name") or "未启用 Prompt 预设"),
+        "name": str(preset.get("name") or "当前角色未绑定预设"),
+        "enabled": bool(preset_id and preset.get("enabled")),
+        "entries": entries,
+        "total": len(entries),
+        "toggleable_count": sum(1 for item in entries if item.get("toggleable")),
+        "enabled_count": sum(1 for item in entries if item.get("enabled") and item.get("toggleable")),
+    }
+
+
+def _conversation_prompt_config(store: "Store", conv_id: str, user_id: str) -> dict:
+    runtime_profile = store.get_conversation_runtime_profile(conv_id, user_id)
+    selected = store.selected_conversation_presets(runtime_profile).get("prompt") or {}
+    selected_id = str(selected.get("id") or "")
+    if not selected_id:
+        return {
+            "preset_id": "",
+            "name": "未选择官方 Prompt 预设",
+            "enabled": False,
+            "entries": [],
+            "total": 0,
+            "toggleable_count": 0,
+            "enabled_count": 0,
+        }
+    preset = normalize_full_prompt_preset(selected)
+    preset_id = str(preset.get("id") or selected_id)
+    all_overrides = store.conversation_preset_override_map(conv_id, user_id)
+    override_map: dict = {}
+    legacy = all_overrides.get("prompt", {}).get(preset_id, {})
+    current = all_overrides.get("global_prompt", {}).get(preset_id, {})
+    if isinstance(legacy, dict):
+        override_map.update(legacy)
+    if isinstance(current, dict):
+        override_map.update(current)
+    entries = _prompt_preset_public_entries(
+        preset,
+        override_map,
+        require_user_toggleable=True,
+        source="global_prompt",
+    )
+    return {
+        "preset_id": preset_id,
+        "name": str(preset.get("name") or "官方 Prompt 预设"),
         "enabled": bool(preset.get("enabled")),
         "entries": entries,
         "total": len(entries),
-        "enabled_count": sum(1 for item in entries if item.get("enabled") and not item.get("locked")),
+        "toggleable_count": sum(1 for item in entries if item.get("toggleable")),
+        "enabled_count": sum(1 for item in entries if item.get("enabled") and item.get("toggleable")),
     }
 
 
 def _conversation_regex_config(store: "Store", conv_id: str, user_id: str) -> dict:
-    preset = normalize_full_regex_preset(store.global_regex_preset())
+    runtime_profile = store.get_conversation_runtime_profile(conv_id, user_id)
+    selected = store.selected_conversation_presets(runtime_profile).get("regex") or {}
+    if not str(selected.get("id") or ""):
+        return {
+            "preset_id": "",
+            "name": "未选择 Regex 预设",
+            "enabled": False,
+            "entries": [],
+            "total": 0,
+            "enabled_count": 0,
+        }
+    preset = normalize_full_regex_preset(selected)
     preset_id = str(preset.get("id") or "")
     override_map = store.conversation_preset_override_map(conv_id, user_id).get("regex", {}).get(preset_id, {})
     entries: list[dict] = []
@@ -13013,11 +13213,21 @@ def build_conversation_runtime_config(store: "Store", conv_id: str, user_id: str
     books = _conversation_worldbook_books(public_entries, str(app.get("name") or conversation.get("app_name") or ""), mod_labels)
     character_book = next((item for item in books if item.get("kind") == "character"), None)
     additional_books = [item.get("name") for item in books if item.get("kind") == "mod"]
+    card_prompt_config = _conversation_card_prompt_config(
+        store,
+        conv_id,
+        user_id,
+        conversation=conversation,
+        app=app,
+    )
+    global_prompt_config = _conversation_prompt_config(store, conv_id, user_id)
     return {
         "conversation_id": conv_id,
         "global_preset_enabled": bool(conversation.get("global_preset_enabled", 1)),
         "preset": {
-            "prompt": _conversation_prompt_config(store, conv_id, user_id),
+            "card_prompt": card_prompt_config,
+            "global_prompt": global_prompt_config,
+            "prompt": global_prompt_config,
             "regex": _conversation_regex_config(store, conv_id, user_id),
         },
         "worldbook": {
@@ -13247,6 +13457,8 @@ def normalize_global_prompt_blocks(value: object) -> list:
             "role": role,
             "order": max(0, min(order, 9999)),
             "enabled": raw.get("enabled", True) is not False and str(raw.get("enabled", "true")).strip().lower() not in ("0", "false", "no", "off", "disabled"),
+            "user_toggleable": _preset_bool(raw.get("user_toggleable"), False),
+            "forbid_overrides": _preset_bool(raw.get("forbid_overrides"), False),
             "content": content,
         })
     out.sort(key=lambda item: (item.get("position", ""), item.get("order", 0), item.get("name", "")))
@@ -13433,6 +13645,8 @@ def normalize_full_prompt_preset(value: object, index: int = 0) -> dict:
         except Exception:
             prompt["order"] = int(ordered[0] if ordered is not None else len(order_lookup) + prompt_index)
         prompt["order_enabled"] = _preset_bool(prompt.get("order_enabled"), bool(ordered[1]) if ordered is not None else False) if has_editor_order else (bool(ordered[1]) if ordered is not None else False)
+        prompt["user_toggleable"] = _preset_bool(prompt.get("user_toggleable"), False)
+        prompt["forbid_overrides"] = _preset_bool(prompt.get("forbid_overrides"), False)
         clean_prompts.append(prompt)
     clean_prompts.sort(key=lambda item: (0 if item.get("in_order") else 1, int(item.get("order") or 0)))
     raw["id"] = preset_id
@@ -13536,6 +13750,53 @@ def prompt_preset_runtime_blocks(value: object, *, galgame_enabled: bool | None 
     return blocks
 
 
+def normalize_card_prompt_blocks(value: object) -> list[dict]:
+    """Keep author-owned legacy block metadata, including empty read-only rows."""
+    if not isinstance(value, list):
+        return []
+    allowed_positions = {"system_before", "system_after", "post_history"}
+    allowed_roles = {"system", "user", "assistant"}
+    out: list[dict] = []
+    seen_ids: set[str] = set()
+    total_chars = 0
+    for index, raw in enumerate(value[:160]):
+        if not isinstance(raw, dict):
+            continue
+        block_id = _global_preset_id(
+            raw.get("id") or raw.get("identifier"),
+            f"card-prompt-{index + 1}",
+        )
+        if block_id in seen_ids:
+            block_id = f"{block_id}-{index + 1}"[:120]
+        seen_ids.add(block_id)
+        position = str(raw.get("position") or "system_before").strip()
+        if position not in allowed_positions:
+            position = "system_before"
+        role = str(raw.get("role") or "system").strip().lower()
+        if role not in allowed_roles:
+            role = "system"
+        try:
+            order = int(raw.get("order") if raw.get("order") is not None else index + 1)
+        except (TypeError, ValueError):
+            order = index + 1
+        remaining = max(0, 160000 - total_chars)
+        content = str(raw.get("content") or "").strip()[: min(16000, remaining)]
+        total_chars += len(content)
+        out.append({
+            "id": block_id,
+            "name": str(raw.get("name") or block_id)[:160],
+            "position": position,
+            "role": role,
+            "order": max(0, min(order, 9999)),
+            "enabled": _preset_bool(raw.get("enabled"), True),
+            "user_toggleable": _preset_bool(raw.get("user_toggleable"), False),
+            "forbid_overrides": _preset_bool(raw.get("forbid_overrides"), False),
+            "content": content,
+        })
+    out.sort(key=lambda item: (item.get("position", ""), item.get("order", 0), item.get("name", "")))
+    return out
+
+
 def normalize_card_prompt_preset(value: object) -> dict:
     """Normalize an author-owned card prompt preset without retaining secret fields."""
     if not isinstance(value, dict):
@@ -13557,6 +13818,7 @@ def normalize_card_prompt_preset(value: object) -> dict:
             "content": content,
             "marker": bool(raw.get("marker")),
             "system_prompt": bool(raw.get("system_prompt")),
+            "forbid_overrides": bool(raw.get("forbid_overrides")),
             "in_order": bool(raw.get("in_order")),
             "order": _bounded_int(raw.get("order"), index, 0, 9999),
             "order_enabled": bool(raw.get("order_enabled")),
@@ -13571,7 +13833,7 @@ def normalize_card_prompt_preset(value: object) -> dict:
         "source_file": Path(str(value.get("source_file") or "")).name[:260],
         "prompts": prompts,
         "prompt_order": normalized.get("prompt_order") if isinstance(normalized.get("prompt_order"), list) else [],
-        "blocks": normalize_global_prompt_blocks(normalized.get("blocks") or [])[:160],
+        "blocks": normalize_card_prompt_blocks(value.get("blocks") or normalized.get("blocks") or [])[:160],
     }
     clean["stats"] = {
         "entry_count": len(prompts) if prompts else len(clean["blocks"]),
@@ -16174,21 +16436,45 @@ def apply_conversation_global_preset_override(settings: dict | None, context: di
         runtime["global_regex_preset"] = dict(selected_regex)
     master_enabled = bool(conversation_settings.get("global_preset_enabled", True))
     raw_overrides = conversation_settings.get("preset_overrides") if isinstance(conversation_settings.get("preset_overrides"), dict) else {}
-    prompt_overrides = raw_overrides.get("prompt") if isinstance(raw_overrides.get("prompt"), dict) else {}
     regex_overrides = raw_overrides.get("regex") if isinstance(raw_overrides.get("regex"), dict) else {}
-    if master_enabled and not prompt_overrides and not regex_overrides:
-        return runtime
     prompt = normalize_full_prompt_preset(runtime.get("global_prompt_preset"))
-    prompt_map = prompt_overrides.get(str(prompt.get("id") or "")) if isinstance(prompt_overrides, dict) else None
+    prompt_id = str(prompt.get("id") or "")
+    prompt_map: dict = {}
+    legacy_prompt_overrides = raw_overrides.get("prompt") if isinstance(raw_overrides.get("prompt"), dict) else {}
+    global_prompt_overrides = raw_overrides.get("global_prompt") if isinstance(raw_overrides.get("global_prompt"), dict) else {}
+    legacy_prompt_map = legacy_prompt_overrides.get(prompt_id) if isinstance(legacy_prompt_overrides, dict) else None
+    global_prompt_map = global_prompt_overrides.get(prompt_id) if isinstance(global_prompt_overrides, dict) else None
+    if isinstance(legacy_prompt_map, dict):
+        prompt_map.update(legacy_prompt_map)
+    if isinstance(global_prompt_map, dict):
+        prompt_map.update(global_prompt_map)
     if isinstance(prompt_map, dict) and prompt_map:
         copied_prompts = []
         for item in prompt.get("prompts") or []:
             copied = dict(item)
             entry_id = str(copied.get("identifier") or "")
-            if entry_id in prompt_map:
+            has_content = bool(str(copied.get("content") or "").strip())
+            marker = _preset_bool(copied.get("marker"), False) or not has_content
+            user_toggleable = _preset_bool(copied.get("user_toggleable"), False)
+            forbid_overrides = _preset_bool(copied.get("forbid_overrides"), False)
+            can_toggle = bool(user_toggleable and copied.get("in_order") and has_content and not marker and not forbid_overrides)
+            if can_toggle and entry_id in prompt_map:
                 copied["order_enabled"] = bool(prompt_map[entry_id])
             copied_prompts.append(copied)
         prompt["prompts"] = copied_prompts
+        copied_blocks = []
+        for item in prompt.get("blocks") or []:
+            copied = dict(item)
+            entry_id = str(copied.get("id") or "")
+            can_toggle = bool(
+                _preset_bool(copied.get("user_toggleable"), False)
+                and str(copied.get("content") or "").strip()
+                and not _preset_bool(copied.get("forbid_overrides"), False)
+            )
+            if can_toggle and entry_id in prompt_map:
+                copied["enabled"] = bool(prompt_map[entry_id])
+            copied_blocks.append(copied)
+        prompt["blocks"] = copied_blocks
     regex = normalize_full_regex_preset(runtime.get("global_regex_preset"))
     regex_map = regex_overrides.get(str(regex.get("id") or "")) if isinstance(regex_overrides, dict) else None
     if isinstance(regex_map, dict) and regex_map:
@@ -16206,6 +16492,51 @@ def apply_conversation_global_preset_override(settings: dict | None, context: di
     runtime["global_prompt_preset"] = prompt
     runtime["global_regex_preset"] = regex
     return runtime
+
+
+def apply_conversation_card_prompt_override(preset: object, context: dict | None = None) -> dict:
+    """Apply only overrides valid for the current locked character-version preset."""
+    normalized = normalize_card_prompt_preset(preset)
+    conversation_settings = context.get("conversation_settings") if isinstance(context, dict) else None
+    if not isinstance(conversation_settings, dict):
+        return normalized
+    preset_id = _card_prompt_preset_id(normalized, str(conversation_settings.get("version_id") or ""))
+    if not preset_id:
+        return normalized
+    raw_overrides = conversation_settings.get("preset_overrides") if isinstance(conversation_settings.get("preset_overrides"), dict) else {}
+    card_overrides = raw_overrides.get("card_prompt") if isinstance(raw_overrides.get("card_prompt"), dict) else {}
+    prompt_map = card_overrides.get(preset_id) if isinstance(card_overrides, dict) else None
+    if not isinstance(prompt_map, dict) or not prompt_map:
+        return normalized
+    copied_prompts: list[dict] = []
+    for item in normalized.get("prompts") or []:
+        copied = dict(item)
+        entry_id = str(copied.get("identifier") or "")
+        has_content = bool(str(copied.get("content") or "").strip())
+        marker = _preset_bool(copied.get("marker"), False) or not has_content
+        can_toggle = bool(
+            copied.get("in_order")
+            and has_content
+            and not marker
+            and not _preset_bool(copied.get("forbid_overrides"), False)
+        )
+        if can_toggle and entry_id in prompt_map:
+            copied["order_enabled"] = bool(prompt_map[entry_id])
+        copied_prompts.append(copied)
+    normalized["prompts"] = copied_prompts
+    copied_blocks: list[dict] = []
+    for item in normalized.get("blocks") or []:
+        copied = dict(item)
+        entry_id = str(copied.get("id") or "")
+        can_toggle = bool(
+            str(copied.get("content") or "").strip()
+            and not _preset_bool(copied.get("forbid_overrides"), False)
+        )
+        if can_toggle and entry_id in prompt_map:
+            copied["enabled"] = bool(prompt_map[entry_id])
+        copied_blocks.append(copied)
+    normalized["blocks"] = copied_blocks
+    return normalized
 
 
 def stream_reply_requires_buffering(
@@ -16290,7 +16621,7 @@ def build_user_llm_request(app: dict, content: str, messages: list[dict] | None 
     apply_initial_template_variables(extras.get("world_info") or [], template_context, char_name=char_name, user_name=user_name)
     global_preset = settings.get("global_prompt_preset") if isinstance(settings, dict) else None
     global_regex_preset = settings.get("global_regex_preset") if isinstance(settings, dict) else None
-    card_preset = normalize_card_prompt_preset(extras.get("card_prompt_preset"))
+    card_preset = apply_conversation_card_prompt_override(extras.get("card_prompt_preset"), context)
     conversation_settings = context.get("conversation_settings") if isinstance(context, dict) else None
     galgame_enabled = None
     if isinstance(conversation_settings, dict) and "galgame_enabled" in conversation_settings:
@@ -16931,9 +17262,6 @@ def prepare_sillytavern_bridge_generation(store: "Store", claims: dict, body: di
     )
     history = store.list_messages(conversation_id, user_id, limit=100) if conversation_id else []
     context = store.chat_context(user_id, app_id, conversation_id, last_user, history) if conversation_id else {}
-    database_prompt = str(context.get("conversation_database_prompt") or "").strip()
-    if database_prompt:
-        messages.insert(0, {"role": "system", "content": database_prompt})
 
     settings = store.effective_llm_settings(app, user_id=user_id)
     request_info = build_user_llm_request(
@@ -16949,11 +17277,16 @@ def prepare_sillytavern_bridge_generation(store: "Store", claims: dict, body: di
     protocol = str(request_info.get("protocol") or "openai")
     payload = dict(request_info.get("payload") if isinstance(request_info.get("payload"), dict) else {})
     if protocol == "anthropic":
-        system_parts = [
+        authoritative_system = str(payload.get("system") or "").strip()
+        raw_system_parts = [
             str(item.get("content") or "")
             for item in messages
             if item.get("role") == "system" and str(item.get("content") or "")
         ]
+        system_parts = [authoritative_system] if authoritative_system else []
+        for value in raw_system_parts:
+            if value not in system_parts:
+                system_parts.append(value)
         provider_messages: list[dict] = []
         for item in messages:
             role = str(item.get("role") or "")
@@ -16964,12 +17297,42 @@ def prepare_sillytavern_bridge_generation(store: "Store", claims: dict, body: di
                 provider_messages[-1]["content"] += "\n\n" + content
             else:
                 provider_messages.append({"role": role, "content": content})
+        if not provider_messages:
+            provider_messages = [
+                dict(item)
+                for item in payload.get("messages") or []
+                if isinstance(item, dict) and item.get("role") in {"user", "assistant"}
+            ]
         if not provider_messages or provider_messages[-1]["role"] != "user":
             provider_messages.append({"role": "user", "content": last_user or "请继续。"})
         payload["system"] = "\n\n".join(system_parts)
         payload["messages"] = provider_messages
     else:
-        payload["messages"] = messages
+        authoritative_messages = [
+            dict(item)
+            for item in payload.get("messages") or []
+            if isinstance(item, dict)
+            and item.get("role") in {"system", "user", "assistant"}
+            and str(item.get("content") or "")
+        ]
+        first_user_index = next(
+            (index for index, item in enumerate(authoritative_messages) if item.get("role") == "user"),
+            len(authoritative_messages),
+        )
+        raw_keys = {
+            (str(item.get("role") or ""), str(item.get("content") or ""))
+            for item in messages
+        }
+        prefix = [
+            item for item in authoritative_messages[:first_user_index]
+            if (str(item.get("role") or ""), str(item.get("content") or "")) not in raw_keys
+        ]
+        suffix = [
+            item for item in authoritative_messages[first_user_index + 1:]
+            if item.get("role") != "user"
+            and (str(item.get("role") or ""), str(item.get("content") or "")) not in raw_keys
+        ]
+        payload["messages"] = prefix + messages + suffix
 
     def _float_param(name: str, minimum: float, maximum: float) -> None:
         if name not in body:

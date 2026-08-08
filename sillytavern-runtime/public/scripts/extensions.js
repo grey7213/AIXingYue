@@ -1787,6 +1787,18 @@ export async function loadExtensionSettings(settings, versionChanged, enableAuto
         Object.assign(extension_settings, settings.extension_settings);
     }
 
+    // Homer temporarily keeps the Yuzi phone package installed for later use,
+    // but the mobile popup product surface is disabled for every existing and
+    // new profile. Apply this before discovery/activation so its bundle is not
+    // evaluated during the current page load.
+    const homerDisabledExtensions = new Set(
+        Array.isArray(extension_settings.disabledExtensions)
+            ? extension_settings.disabledExtensions
+            : [],
+    );
+    homerDisabledExtensions.add('third-party/st-yuzi-phone');
+    extension_settings.disabledExtensions = [...homerDisabledExtensions];
+
     $('#extensions_url').val(extension_settings.apiUrl);
     $('#extensions_api_key').val(extension_settings.apiKey);
     $('#extensions_autoconnect').prop('checked', extension_settings.autoConnect);

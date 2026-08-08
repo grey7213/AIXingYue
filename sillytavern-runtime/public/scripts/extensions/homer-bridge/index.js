@@ -6,10 +6,7 @@ import {
     saveSettingsDebounced,
     setOnlineStatus,
 } from '../../../script.js';
-import {
-    oai_settings,
-    promptManager,
-} from '../../openai.js';
+import { oai_settings } from '../../openai.js';
 import { allowScopedScripts } from '../regex/engine.js';
 import { extension_settings } from '../../extensions.js';
 import { getContext } from '../../st-context.js';
@@ -51,8 +48,7 @@ let loadingLaunch = false;
 let launch = null;
 let session = null;
 let runtimeVariables = {};
-let presetOverrides = {};
-let presetRestore = null;
+let presetSearchQuery = '';
 let syncTimer = null;
 let tokenRefreshTimer = null;
 let generationSettleTimer = null;
@@ -327,6 +323,13 @@ function ensureHomerExtensionSettingDefaults() {
     if (!requestedAppId || !requestedConversationId) {
         return;
     }
+    const disabledExtensions = new Set(
+        Array.isArray(extension_settings.disabledExtensions)
+            ? extension_settings.disabledExtensions
+            : [],
+    );
+    disabledExtensions.add('third-party/st-yuzi-phone');
+    extension_settings.disabledExtensions = [...disabledExtensions];
     const memoryBooks = extension_settings.STMemoryBooks ||= {};
     const moduleSettings = memoryBooks.moduleSettings ||= {};
     // Homer owns the chat header. Memory Books remains fully available from
@@ -1378,7 +1381,7 @@ async function loadCloudChat() {
         conversation_id: launch.conversation_id,
         runtime: 'dialogue',
     };
-    context.chatMetadata.homer_preset_overrides = { ...presetOverrides };
+    delete context.chatMetadata.homer_preset_overrides;
     context.chatMetadata.homer_model_settings = { ...conversationModelSettings() };
     try {
         // Finish the local compatibility mirror before the host announces
@@ -1627,15 +1630,12 @@ async function loadRuntimeState() {
     runtimeVariables = state?.variables && typeof state.variables === 'object'
         ? { ...state.variables }
         : {};
-    presetOverrides = runtimeVariables.homer_preset_overrides
-        && typeof runtimeVariables.homer_preset_overrides === 'object'
-        ? { ...runtimeVariables.homer_preset_overrides }
-        : {};
+    delete runtimeVariables.homer_preset_overrides;
 }
 
 async function persistRuntimeVariables() {
     const context = getContext();
-    context.chatMetadata.homer_preset_overrides = { ...presetOverrides };
+    delete context.chatMetadata.homer_preset_overrides;
     context.chatMetadata.homer_model_settings = { ...conversationModelSettings() };
     await requestJson('/api/homer/runtime-state', {
         method: 'POST',
@@ -1645,14 +1645,6 @@ async function persistRuntimeVariables() {
             variables: runtimeVariables,
         }),
     });
-}
-
-async function persistPresetOverrides() {
-    runtimeVariables = {
-        ...runtimeVariables,
-        homer_preset_overrides: { ...presetOverrides },
-    };
-    await persistRuntimeVariables();
 }
 
 async function persistModelSettings(settings) {
@@ -1737,67 +1729,78 @@ function formatConversationTime(value) {
     }).format(new Date(timestamp));
 }
 
-function promptEntries() {
-    const manager = promptManager;
-    if (!manager?.activeCharacter) {
-        return [];
-    }
-    return manager.getPromptOrderForCharacter(manager.activeCharacter).map((entry, index) => {
-        const prompt = manager.getPromptById(entry.identifier);
-        const defaultEnabled = Boolean(entry.enabled);
-        const hasOverride = Object.hasOwn(presetOverrides, entry.identifier);
+function presetGroups() {
+    const preset = launch?.runtime_config?.preset && typeof launch.runtime_config.preset === 'object'
+        ? launch.runtime_config.preset
+        : {};
+    const definitions = [
+        {
+            kind: 'card_prompt',
+            label: '角色卡预设',
+            description: '创作者为当前角色版本绑定的全部条目',
+            config: preset.card_prompt || {},
+        },
+        {
+            kind: 'global_prompt',
+            label: '官方公开预设',
+            description: '后台明确允许用户查看和切换的条目',
+            config: preset.global_prompt || preset.prompt || {},
+        },
+    ];
+    return definitions.map(group => {
+        const config = group.config && typeof group.config === 'object' ? group.config : {};
+        const presetId = String(config.preset_id || '');
+        const entries = Array.isArray(config.entries)
+            ? config.entries.map((entry, index) => ({
+                ...entry,
+                id: String(entry?.id || ''),
+                name: String(entry?.name || entry?.id || `条目 ${index + 1}`),
+                role: String(entry?.role || 'system'),
+                position: String(entry?.position || 'system_before'),
+                enabled: Boolean(entry?.enabled),
+                inheritedEnabled: Boolean(entry?.inherited_enabled),
+                overridden: Boolean(entry?.overridden),
+                locked: Boolean(entry?.locked || entry?.toggleable === false),
+                toggleable: Boolean(entry?.toggleable && !entry?.locked),
+                lockedReason: String(entry?.locked_reason || ''),
+                kind: group.kind,
+                groupLabel: group.label,
+                presetId,
+            })).filter(entry => entry.id)
+            : [];
         return {
-            id: String(entry.identifier),
-            name: String(prompt?.name || prompt?.identifier || entry.identifier || `条目 ${index + 1}`),
-            role: String(prompt?.role || 'system'),
-            defaultEnabled,
-            enabled: hasOverride ? Boolean(presetOverrides[entry.identifier]) : defaultEnabled,
-            overridden: hasOverride,
+            ...group,
+            presetId,
+            name: String(config.name || group.label),
+            enabled: Boolean(config.enabled),
+            entries,
         };
     });
 }
 
-function applyPresetOverrides() {
-    if (!promptManager?.activeCharacter || presetRestore) {
+async function togglePreset(entry, enabled) {
+    if (!entry?.toggleable || !entry?.presetId || !launch?.conversation_id) {
         return;
     }
-    const order = promptManager.getPromptOrderForCharacter(promptManager.activeCharacter);
-    presetRestore = new Map();
-    for (const entry of order) {
-        if (!Object.hasOwn(presetOverrides, entry.identifier)) {
-            continue;
-        }
-        presetRestore.set(entry.identifier, Boolean(entry.enabled));
-        entry.enabled = Boolean(presetOverrides[entry.identifier]);
-    }
-}
-
-function restorePresetDefaults() {
-    if (!presetRestore || !promptManager?.activeCharacter) {
-        presetRestore = null;
-        return;
-    }
-    const order = promptManager.getPromptOrderForCharacter(promptManager.activeCharacter);
-    for (const entry of order) {
-        if (presetRestore.has(entry.identifier)) {
-            entry.enabled = presetRestore.get(entry.identifier);
-        }
-    }
-    presetRestore = null;
-}
-
-async function togglePreset(id, enabled) {
-    const entry = promptEntries().find(item => item.id === id);
-    if (!entry) {
-        return;
-    }
-    if (enabled === entry.defaultEnabled) {
-        delete presetOverrides[id];
+    const result = await requestJson(
+        `/api/homer/conversations/${encodeURIComponent(launch.conversation_id)}/preset-overrides`,
+        {
+            method: 'POST',
+            body: JSON.stringify({
+                preset_kind: entry.kind,
+                preset_id: entry.presetId,
+                items: [{ entry_id: entry.id, enabled: Boolean(enabled) }],
+            }),
+        },
+    );
+    if (result?.runtime_config && typeof result.runtime_config === 'object') {
+        launch.runtime_config = result.runtime_config;
     } else {
-        presetOverrides[id] = Boolean(enabled);
+        launch.runtime_config = await requestJson(
+            `/api/homer/conversations/${encodeURIComponent(launch.conversation_id)}/runtime-config`,
+        );
     }
-    await persistPresetOverrides();
-    renderPresetLists();
+    renderPresetLists(presetSearchQuery);
 }
 
 function createElement(tag, className = '', text = '') {
@@ -1813,52 +1816,101 @@ function createElement(tag, className = '', text = '') {
 
 function createPresetRow(entry) {
     const row = createElement('label', 'homer-preset-row');
+    row.classList.toggle('is-locked', !entry.toggleable);
     const copy = createElement('span', 'homer-preset-row__copy');
     const title = createElement('span', 'homer-preset-row__name', entry.name);
+    const positionLabel = entry.position === 'post_history' ? '历史后' : '系统提示';
+    const stateLabel = entry.overridden ? '当前对话已调整' : '默认状态';
+    const lockLabel = entry.toggleable ? '' : ` · ${entry.lockedReason || '只读条目'}`;
     const meta = createElement(
         'span',
         'homer-preset-row__meta',
-        `${entry.role === 'system' ? '系统提示' : entry.role}${entry.overridden ? ' · 当前对话已调整' : ' · 默认状态'}`,
+        `${positionLabel} · ${entry.role} · ${stateLabel}${lockLabel}`,
     );
     copy.append(title, meta);
-    const control = createElement('span', 'homer-switch');
-    const input = document.createElement('input');
-    input.type = 'checkbox';
-    input.checked = entry.enabled;
-    input.setAttribute('aria-label', `${entry.name} ${entry.enabled ? '已开启' : '已关闭'}`);
-    const slider = createElement('span', 'homer-switch__track');
-    input.addEventListener('change', () => {
-        void togglePreset(entry.id, input.checked);
-    });
-    control.append(input, slider);
-    row.append(copy, control);
+    if (entry.toggleable) {
+        const control = createElement('span', 'homer-switch');
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.checked = entry.enabled;
+        input.setAttribute('aria-label', `${entry.name} ${entry.enabled ? '已开启' : '已关闭'}`);
+        const slider = createElement('span', 'homer-switch__track');
+        input.addEventListener('change', () => {
+            const nextEnabled = input.checked;
+            input.disabled = true;
+            void togglePreset(entry, nextEnabled).catch(error => {
+                input.checked = entry.enabled;
+                showHostNotice(String(error?.message || '预设条目保存失败'), 'error');
+            }).finally(() => {
+                input.disabled = false;
+            });
+        });
+        control.append(input, slider);
+        row.append(copy, control);
+    } else {
+        row.append(copy, createElement('span', 'homer-preset-row__state', entry.enabled ? '已启用' : '已停用'));
+    }
     return row;
 }
 
-function renderPresetLists(filter = '') {
-    const entries = promptEntries();
+function renderPresetContainer(container, groups, query, quick = false) {
+    if (!container) {
+        return;
+    }
+    const sections = [];
+    for (const group of groups) {
+        const matching = query
+            ? group.entries.filter(item => `${item.name} ${item.role} ${item.lockedReason}`.toLocaleLowerCase().includes(query))
+            : group.entries;
+        if (query && !matching.length) {
+            continue;
+        }
+        const section = createElement('section', 'homer-preset-group');
+        const head = createElement('header', 'homer-preset-group__head');
+        const copy = createElement('span', 'homer-preset-group__copy');
+        copy.append(
+            createElement('strong', '', group.label),
+            createElement('small', '', `${group.name}${group.enabled ? '' : ' · 整体未启用'}`),
+        );
+        head.append(copy, createElement('span', 'homer-preset-group__count', `${matching.length} 条`));
+        section.append(head);
+        const values = quick ? matching.slice(0, 3) : matching;
+        if (values.length) {
+            const list = createElement('div', 'homer-preset-group__list');
+            list.append(...values.map(createPresetRow));
+            section.append(list);
+            if (quick && matching.length > values.length) {
+                section.append(createElement('div', 'homer-preset-group__more', `另有 ${matching.length - values.length} 条，请展开查看`));
+            }
+        } else {
+            section.append(createElement(
+                'div',
+                'homer-empty',
+                group.kind === 'card_prompt' ? '当前角色版本没有绑定预设条目' : '后台暂未公开可见条目',
+            ));
+        }
+        sections.push(section);
+    }
+    container.replaceChildren(...sections);
+    if (!sections.length) {
+        container.append(createElement('div', 'homer-empty', '没有找到匹配的预设条目'));
+    }
+}
+
+function renderPresetLists(filter = presetSearchQuery) {
+    presetSearchQuery = String(filter || '').trim();
+    const groups = presetGroups();
+    const entries = groups.flatMap(group => group.entries);
     const query = String(filter || '').trim().toLocaleLowerCase();
-    const filtered = query
-        ? entries.filter(item => item.name.toLocaleLowerCase().includes(query))
-        : entries;
     const quick = document.querySelector('#homer-preset-quick-list');
     const full = document.querySelector('#homer-preset-full-list');
     const count = document.querySelector('#homer-preset-count');
     if (count) {
-        count.textContent = `${entries.filter(item => item.enabled).length}/${entries.length} 已开启`;
+        const toggleable = entries.filter(item => item.toggleable);
+        count.textContent = `${toggleable.filter(item => item.enabled).length}/${toggleable.length} 可切换项已开启`;
     }
-    if (quick) {
-        quick.replaceChildren(...filtered.slice(0, 6).map(createPresetRow));
-        if (!filtered.length) {
-            quick.append(createElement('div', 'homer-empty', '当前预设没有可切换条目'));
-        }
-    }
-    if (full) {
-        full.replaceChildren(...filtered.map(createPresetRow));
-        if (!filtered.length) {
-            full.append(createElement('div', 'homer-empty', '没有找到匹配的预设条目'));
-        }
-    }
+    renderPresetContainer(quick, groups, query, true);
+    renderPresetContainer(full, groups, query, false);
 }
 
 function updateRuntimeStatus(text, state = 'online') {
@@ -2739,7 +2791,7 @@ function buildRuntimeUi() {
     const notice = createElement(
         'p',
         'homer-preset-notice',
-        '仅显示当前角色绑定预设中允许切换的名称和状态；不会展示提示词或世界书正文。',
+        '角色卡预设会列出全部条目；官方预设只列出后台明确公开的条目。这里只显示名称和状态，不展示提示词或世界书正文。',
     );
     const quickList = createElement('div', 'homer-preset-list');
     quickList.id = 'homer-preset-quick-list';
@@ -2754,7 +2806,7 @@ function buildRuntimeUi() {
     const dialogHead = createElement('header', 'homer-preset-dialog__head');
     const dialogHeading = createElement('div');
     dialogHeading.append(
-        createElement('div', 'homer-preset-panel__eyebrow', '仅作用于当前对话'),
+        createElement('div', 'homer-preset-panel__eyebrow', '角色卡全部条目 · 官方公开条目'),
         createElement('h2', 'homer-preset-dialog__title', '预设条目控制台'),
     );
     const dialogClose = createElement('button', 'homer-icon-button', '×');
@@ -2765,7 +2817,7 @@ function buildRuntimeUi() {
     const search = document.createElement('input');
     search.className = 'homer-preset-search';
     search.type = 'search';
-    search.placeholder = '搜索允许切换的预设条目';
+    search.placeholder = '搜索角色卡或官方预设条目';
     search.setAttribute('aria-label', '搜索预设条目');
     search.addEventListener('input', () => renderPresetLists(search.value));
     const fullList = createElement('div', 'homer-preset-list homer-preset-list--full');
@@ -2778,21 +2830,6 @@ function buildRuntimeUi() {
         }
     });
 
-    const actions = createElement('nav', 'homer-action-dock');
-    actions.setAttribute('aria-label', '对话快捷操作');
-    const actionDefinitions = [
-        ['continue', '续写', '在当前回复后继续生成'],
-        ['regenerate', '重写', '重新生成最后一条角色回复'],
-        ['next', '下回续', '自然推进到下一回合'],
-    ];
-    for (const [type, label, actionTitle] of actionDefinitions) {
-        const button = createElement('button', 'homer-action-button', label);
-        button.type = 'button';
-        button.title = actionTitle;
-        button.addEventListener('click', () => void runAction(type));
-        actions.append(button);
-    }
-
     root.append(
         header,
         backdrop,
@@ -2803,7 +2840,6 @@ function buildRuntimeUi() {
         dialog,
         buildModelDialog(),
         buildModDialog(),
-        actions,
     );
     root.addEventListener('keydown', event => {
         if (event.key === 'Escape') {
@@ -2836,7 +2872,7 @@ async function switchConversation(conversation) {
         session,
         launch,
         runtimeVariables: { ...runtimeVariables },
-        presetOverrides: { ...presetOverrides },
+        presetSearchQuery,
         runtimeUiData,
         extensionSettings: cloneJsonObject(extension_settings),
         extensionSettingsScope: lastExtensionSettingsScope,
@@ -2849,7 +2885,6 @@ async function switchConversation(conversation) {
     try {
         await flushExtensionSettingsPersist();
         await syncCloudChat();
-        restorePresetDefaults();
         const nextSession = await fetchSession(targetAppId, targetConversationId);
         if (!nextSession?.launch) {
             throw new Error('没有找到目标历史会话');
@@ -2857,7 +2892,7 @@ async function switchConversation(conversation) {
         session = nextSession;
         launch = nextSession.launch;
         runtimeVariables = {};
-        presetOverrides = {};
+        presetSearchQuery = '';
         lastSyncSignature = '';
         setAccessClasses(session?.user);
         await loadRuntimeState();
@@ -2889,7 +2924,7 @@ async function switchConversation(conversation) {
         session = previous.session;
         launch = previous.launch;
         runtimeVariables = previous.runtimeVariables;
-        presetOverrides = previous.presetOverrides;
+        presetSearchQuery = previous.presetSearchQuery;
         runtimeUiData = previous.runtimeUiData;
         replaceExtensionSettings(previous.extensionSettings);
         await eventSource.emit(event_types.SETTINGS_LOADED);
@@ -2947,7 +2982,7 @@ function installEventHandlers() {
     eventSource.on(event_types.GENERATION_STARTED, (_type, _options, dryRun) => {
         // SillyTavern and prompt extensions use dry-run generations to assemble or
         // count prompts. A dry run has no matching GENERATION_ENDED event, so it
-        // must never put the Homer action dock into a persistent busy state.
+        // must never put Homer message actions into a persistent busy state.
         if (dryRun) {
             return;
         }
@@ -2955,14 +2990,9 @@ function installEventHandlers() {
         generationSettleTimer = null;
         generationBusy = true;
         document.body.classList.add('homer-generating');
-        applyPresetOverrides();
-    });
-    eventSource.on(event_types.CHAT_COMPLETION_PROMPT_READY, () => {
-        restorePresetDefaults();
     });
     for (const event of [event_types.GENERATION_ENDED, event_types.GENERATION_STOPPED]) {
         eventSource.on(event, () => {
-            restorePresetDefaults();
             window.clearTimeout(generationSettleTimer);
             generationSettleTimer = window.setTimeout(() => {
                 generationBusy = false;
