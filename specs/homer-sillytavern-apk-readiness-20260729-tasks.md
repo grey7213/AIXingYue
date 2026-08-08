@@ -24,7 +24,7 @@
 | HSA16 | 补齐生产 dialogue runtime、systemd、Nginx 和部署工具 | Done | 部署工具已实现安全包、源码/数据分离、专用用户、loopback `8091`、同源 `/module/dialogue/`、旧路径/根相对资源重定向、cookie path、独立 frame policy、webpack `5.105.4` 校验与失败回滚；本地布局/归档验证通过。 |
 | HSA17 | 完成本地静态、后端、runtime 和桌面/移动浏览器回归 | Done | `py_compile`、`node --check`、`git diff --check`、4 项卡体验自测、对话数据库/ST runtime 自测、TavernHelper 后端/浏览器、后端 readiness、原版 ST 与 Homer runtime Chromium E2E 均通过；桌面/390px 无溢出、console/page/network error 为 0，固定四扩展和 RoleplayHub sandbox 均通过。 |
 | HSA18 | 备份并部署生产，完成安全、许可和回滚验收 | Done | 2026-08-08 生产 runtime 已原子切换到 `/opt/homer-dialogue-runtime/releases/20260808-182614`；backend/dialogue/Nginx active，8008/8091 仅 loopback，webpack `5.105.4`，内外 Homer health 与 dialogue `/csrf-token` 均为 200，`CONTENT_MODE=local_only`。最终真实登录 Chromium 在桌面和 390px 均退出加载层、显示 5 条目标会话消息，runtime 为 `homer-runtime-ready` 且无 pending，RoleplayHub sandbox 精确为 `allow-scripts`，page/console/network error 均为 0；release 启动后 CSRF 403 为 0。 |
-| HSA19 | 更新项目记忆、聚焦提交并推送 | Pending | 更新真实验证结果；不提交用户 `.thm`、运行数据、截图、token、Cookie 或 secrets。 |
+| HSA19 | 更新项目记忆、聚焦提交并推送 | Done | 生产卡死修复、回归测试、部署器守卫、SPEC 和两条稳定错误记忆已提交为 `fa9067a`（`fix: stabilize Homer dialogue runtime startup`）并推送 `origin/main`；用户 `.thm`、运行数据、截图、token、Cookie、secrets 和临时清理脚本均未提交。 |
 
 ## 固定公共扩展
 
