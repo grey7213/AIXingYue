@@ -70,6 +70,16 @@
   Fix: 清除旧预设变量/函数的全部启动与事件引用，面板只使用服务端 `runtime_config.preset`；在原版 `loadExtensionSettings()` 的 discover/activate 前和 Homer 会话 settings overlay 中都强制加入 `third-party/st-yuzi-phone`，保留扩展源码目录但不执行 bundle。
   Verify: 2026-08-08 隔离 SillyTavern 1.18.0 在 1440×900/390×844 均完成 ready；全局 dock DOM/CSS 为 0，逐消息 continue/regenerate/next 真实生成，Yuzi JS/CSS 请求为 0，console/page error=0。生产 release `20260808-213614` 的关键文件哈希与本地一致，backend/dialogue/Nginx active、8008/8091 health OK。
 
+- Symptom: 生产《道渊》卡的“提示词助手/道渊配置助手”悬浮窗不显示，但同一脚本在原始 SillyTavern 卡中可以运行。
+  Cause: 存量导入/编辑数据只保留了规范化世界书和 Regex，`extra_settings.extensions.tavern_helper.scripts` 与原始卡的 TavernHelper 命名空间在当前行、版本快照和草稿中均为空；bridge 的角色脚本启用生命周期本身正常。
+  Fix: 从受控备份恢复原始 Character Card 的 `tavern_helper` 命名空间，仅合并到两张目标卡及其全部版本/草稿，保留用户修改的世界书、Regex、Prompt、ID、公开状态和会话版本锁；迁移前做 SQLite backup，迁移后刷新 `content_hash` 并重启 backend/dialogue。
+  Verify: 2026-08-08 生产两张目标卡各为 3 个脚本、4 个版本全为 3、SQLite `quick_check=ok`；1440px/390px 真实浏览器均显示并可点击助手面板，Yuzi 请求 0，临时会话清理后目标卡会话数未变。
+
+- Symptom: 角色脚本的固定 340px 浮动面板在 390px 手机右侧溢出约 10px。
+  Cause: 上游助手按桌面布局固定 `left:60px;width:340px`，没有扣除移动端安全区。
+  Fix: 在 Homer bridge 的 `@media (max-width:640px)` 作用域内用 `right`、`width/max-width` 和 `max-height` 约束 `#bp-switch-panel`，不改脚本业务逻辑。
+  Verify: 本地与生产 390px 面板均在视口内（生产实测无横向溢出），桌面布局和逐消息操作保持通过。
+
 - Symptom: APK 的 `DefaultServerNodes` 已全部绑定新域名，但最终二进制仍能扫到旧上游域名；构建报告还可能在没有 ADB 设备时写成“安装成功”，签名命令日志也可能直接显示密码参数。
   Cause: 历史支付协程在 `PayViewModel$toPay$1.smali` 单独硬编码 `return_url`，不属于节点列表补丁；旧报告使用固定运行结果文本，命令日志未脱敏敏感参数。
   Fix: APK 流水线按绑定服务器同步把支付返回地址改为其 `/app/`，对 `--ks-pass/--key-pass/--storepass` 后续值脱敏；ADB 验证返回真实状态，报告只记录实际执行结果。

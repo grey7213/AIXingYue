@@ -462,16 +462,21 @@ def assert_complex_card_runtime(
     if not prompt_template_loaded:
         raise AssertionError("bundled ST-Prompt-Template did not load")
 
+    # The assistant may remember either mode in its own runtime state. Probe
+    # both explicit targets instead of assuming the first render is MVU.
+    runtime.locator('#bp-mode-btns [data-mode="mvu"]').click()
+    runtime.wait_for_timeout(1_800)
+    mvu_worldbook = runtime_worldbook()
     runtime.locator('#bp-mode-btns [data-mode="xml"]').click()
     runtime.wait_for_timeout(1_800)
     xml_worldbook = runtime_worldbook()
-    if xml_worldbook["enabledSignature"] == initial_worldbook["enabledSignature"]:
-        raise AssertionError("card assistant XML switch did not mutate the active worldbook")
+    if xml_worldbook["enabledSignature"] == mvu_worldbook["enabledSignature"]:
+        raise AssertionError("card assistant mode switch did not mutate the active worldbook")
     runtime.locator('#bp-mode-btns [data-mode="mvu"]').click()
     runtime.wait_for_timeout(1_800)
     restored_worldbook = runtime_worldbook()
-    if restored_worldbook["enabledSignature"] != initial_worldbook["enabledSignature"]:
-        raise AssertionError("card assistant MVU switch did not restore the active worldbook")
+    if restored_worldbook["enabledSignature"] != mvu_worldbook["enabledSignature"]:
+        raise AssertionError("card assistant MVU switch did not restore the MVU worldbook state")
 
     if "配置最优" not in runtime.locator("#bp-ejs-status").inner_text():
         runtime.locator("#bp-ejs-optimize").click()
@@ -517,6 +522,63 @@ def assert_complex_card_runtime(
         "worldbook_mode_switch": "mutated-and-restored",
         "prompt_template": "loaded-and-configurable",
         "configuration_status": configuration_status,
+    }
+
+
+def assert_complex_card_mobile_layout(
+    page: Page,
+    base_url: str,
+    app_id: str,
+    artifact_dir: Path,
+) -> dict:
+    conversation_id = start_conversation(page, base_url, app_id)
+    runtime = launch_chat(page, base_url, app_id, conversation_id)
+    card = launch_card(runtime)
+    data = card.get("data") if isinstance(card.get("data"), dict) else {}
+    extensions = data.get("extensions") if isinstance(data.get("extensions"), dict) else {}
+    helper_count = len(extensions.get("tavern_helper", {}).get("scripts", []))
+    if helper_count != 3:
+        raise AssertionError(f"mobile complex card helper scripts are incomplete: {helper_count}")
+    runtime.wait_for_function("Boolean(window.TavernHelper)", timeout=60_000)
+    for _ in range(5):
+        if not dismiss_extension_notice(runtime):
+            break
+        runtime.wait_for_timeout(300)
+    bubble = runtime.locator("#bp-switch-bubble")
+    bubble.wait_for(state="visible", timeout=60_000)
+    panel = runtime.locator("#bp-switch-panel")
+    for _ in range(20):
+        if panel.is_visible():
+            break
+        bubble.click()
+        runtime.wait_for_timeout(750)
+    if not panel.is_visible():
+        raise AssertionError("mobile complex card helper panel did not open")
+    viewport = runtime.evaluate("() => ({ width: innerWidth, height: innerHeight })")
+    box = panel.bounding_box()
+    if not box:
+        raise AssertionError("mobile complex card helper panel has no bounding box")
+    if (
+        box["x"] < -1
+        or box["x"] + box["width"] > viewport["width"] + 1
+        or box["y"] < -1
+        or box["y"] + min(box["height"], viewport["height"]) > viewport["height"] + 1
+    ):
+        raise AssertionError(
+            "mobile complex card helper panel escaped the viewport: "
+            + json.dumps({"box": box, "viewport": viewport}, ensure_ascii=False)
+        )
+    avatar_layout = assert_message_avatars_hidden(runtime, "mobile complex card")
+    assert_no_overflow(runtime, "mobile complex card dialogue frame")
+    panel.screenshot(
+        path=str(artifact_dir / "original-sillytavern-complex-card-mobile.png")
+    )
+    return {
+        "helper_scripts": helper_count,
+        "card_floating_window": "visible-contained-and-interactive",
+        "panel_box": {key: round(float(value), 2) for key, value in box.items()},
+        "viewport": viewport,
+        "message_avatar_layout": avatar_layout,
     }
 
 
@@ -615,6 +677,45 @@ def assert_no_overflow(page: Page, label: str) -> None:
     )
     if overflow:
         raise AssertionError(f"{label}: horizontal overflow")
+
+
+def assert_message_avatars_hidden(page: Page, label: str) -> dict:
+    facts = page.evaluate(
+        """() => {
+          const wrappers = [...document.querySelectorAll('#chat .mes > .mesAvatarWrapper')];
+          const visibleWrappers = wrappers.filter(element => {
+            const style = getComputedStyle(element);
+            const rect = element.getBoundingClientRect();
+            return style.display !== 'none'
+              && style.visibility !== 'hidden'
+              && rect.width > 0
+              && rect.height > 0;
+          });
+          const messageBlocks = [...document.querySelectorAll('#chat .mes > .mes_block')];
+          return {
+            wrapperCount: wrappers.length,
+            visibleWrapperCount: visibleWrappers.length,
+            blockCount: messageBlocks.length,
+            blockInlinePadding: messageBlocks.map(element => {
+              const style = getComputedStyle(element);
+              return {
+                start: Number.parseFloat(style.paddingInlineStart) || 0,
+                end: Number.parseFloat(style.paddingInlineEnd) || 0,
+              };
+            }),
+          };
+        }"""
+    )
+    if facts["wrapperCount"] < 1 or facts["blockCount"] < 1:
+        raise AssertionError(f"{label}: message avatar fixture was not rendered: {facts}")
+    if facts["visibleWrapperCount"] != 0:
+        raise AssertionError(f"{label}: message avatar remains visible: {facts}")
+    if any(
+        padding["start"] > 0.5 or padding["end"] > 0.5
+        for padding in facts["blockInlinePadding"]
+    ):
+        raise AssertionError(f"{label}: hidden avatar left a message text inset: {facts}")
+    return facts
 
 
 def dismiss_extension_notice(page: Page | Frame) -> str:
@@ -1414,6 +1515,10 @@ def main() -> int:
                 base_url,
                 first_conversation,
             )
+            avatar_layout = assert_message_avatars_hidden(
+                desktop_runtime,
+                "desktop dialogue frame",
+            )
             assert_no_overflow(desktop_runtime, "desktop dialogue frame")
             assert_no_overflow(desktop_page, "desktop")
             desktop_page.screenshot(
@@ -1507,6 +1612,7 @@ def main() -> int:
                     "action_dock": "removed",
                     "yuzi_phone_asset_requests": len(desktop_failures["yuzi"]),
                     "generation": generation,
+                    "message_avatar_layout": avatar_layout,
                     "realtime_rollback": realtime_rollback,
                     "extension_notice": bool(extension_notice),
                     "generic_fidelity": generic_fidelity,
@@ -1553,6 +1659,10 @@ def main() -> int:
             mobile_runtime.locator("#homer-preset-panel").wait_for(state="hidden")
             mobile_runtime.locator("[data-keyword-open]").click()
             mobile_runtime.locator("[data-keyword-panel]").wait_for(state="visible")
+            mobile_avatar_layout = assert_message_avatars_hidden(
+                mobile_runtime,
+                "mobile dialogue frame",
+            )
             assert_no_overflow(mobile_runtime, "mobile dialogue frame")
             assert_no_overflow(mobile_page, "mobile")
             mobile_page.screenshot(
@@ -1567,9 +1677,26 @@ def main() -> int:
                     "preset_panel": "pass",
                     "keyword_injector_panel": "pass",
                     "yuzi_phone_asset_requests": len(mobile_failures["yuzi"]),
+                    "message_avatar_layout": mobile_avatar_layout,
                     "horizontal_overflow": False,
                 }
             )
+            if complex_app_id:
+                mobile_complex_result = assert_complex_card_mobile_layout(
+                    mobile_page,
+                    base_url,
+                    complex_app_id,
+                    artifact_dir,
+                )
+                assert_clean(mobile_failures, "mobile complex card")
+                results.append(
+                    {
+                        "viewport": "mobile",
+                        "fixture": "high-complexity SillyTavern card",
+                        "universal_pipeline": "pass",
+                        **mobile_complex_result,
+                    }
+                )
             mobile.close()
 
             regular = browser.new_context(viewport={"width": 1440, "height": 900})

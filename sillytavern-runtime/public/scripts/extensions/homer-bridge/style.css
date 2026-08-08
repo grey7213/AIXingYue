@@ -2526,6 +2526,21 @@ body.homer-runtime #chat .mes[is_system="true"] {
     background: var(--homer-panel-soft);
 }
 
+/* Homer uses the message card itself as the visual identity container. Keep
+ * character artwork in the header, history drawer, and character lists, but
+ * remove the duplicated avatar column from every rendered chat message. */
+body.homer-runtime #chat .mes > .mesAvatarWrapper {
+    display: none !important;
+}
+
+body.homer-runtime #chat .mes > .mes_block,
+body.homer-runtime #chat .mes[is_user="true"] > .mes_block {
+    flex: 1 1 auto;
+    width: 100%;
+    min-width: 0;
+    padding-inline: 0;
+}
+
 body.homer-runtime #chat .mes_text,
 body.homer-runtime #chat .mes_text * {
     text-shadow: none;
@@ -2801,6 +2816,25 @@ body.homer-generating .homer-message-action {
 @media (max-width: 640px) {
     body.homer-runtime #chat .mes {
         width: 100%;
+    }
+
+    /* Character-provided helper panels commonly anchor themselves beside a
+     * 50px floating bubble. On 390px phones that legacy 60px left offset plus
+     * a fixed 340px panel spills 10px outside the dialogue viewport. Preserve
+     * the card UI while clamping it to the Homer safe area. */
+    body.homer-runtime #bp-switch-panel {
+        right: max(8px, env(safe-area-inset-right)) !important;
+        left: auto !important;
+        width: min(
+            340px,
+            calc(100vw - 16px - env(safe-area-inset-left) - env(safe-area-inset-right))
+        ) !important;
+        max-width: calc(
+            100vw - 16px - env(safe-area-inset-left) - env(safe-area-inset-right)
+        ) !important;
+        max-height: calc(100dvh - 20px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+        overflow-y: auto;
+        box-sizing: border-box;
     }
 
     .homer-message-actions {
