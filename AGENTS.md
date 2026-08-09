@@ -794,3 +794,8 @@
   Cause: runtime Cookie 被限定到 `/module/dialogue/`，但原版根相对 `fetch('/csrf-token')`、`/api/*` 与绝对 ESM import 先请求站点根；Nginx 307 虽能跳回模块路径，浏览器仍把重定向前后 URL 视为两套模块身份，且根路径请求不携带模块 Cookie，缓存的旧 CSRF 响应还会覆盖当前 token。
   Fix: embedded runtime 启动前设置 mounted base，并重写同源 `/csrf-token`、`/api/*` 的 fetch/XHR 到 `/module/dialogue/`；核心绝对 ESM import 全部改为相对 import，CSRF bootstrap 使用 `cache:no-store` 且服务端响应禁止缓存。保留 `proxy_cookie_path / /module/dialogue/`，不要恢复根路径双命名空间。
   Verify: 2026-08-08 生产内外 `/module/dialogue/csrf-token` 均为 200，自 release 启动后 journal 中 CSRF 403 为 0；桌面和 390px 探针 launcher hidden、iframe opacity=1、runtime 无 pending，RoleplayHub 仍为无 same-origin 的 `allow-scripts` 沙箱。
+
+- Symptom: 把消息角色名/时间/更多/编辑和续写/Swipe 操作从常驻区迁到长按菜单后，菜单能准确锁定消息，但通过隐藏的 `.mes_edit` 元素间接点击可能不打开编辑器；若动作只记 `mesid`，删除前文后还可能误操作其他消息。
+  Cause: SillyTavern 的隐藏 DOM 控件不是稳定的程序化 API，嵌入生命周期和可见性会影响委托点击；`mesid` 又会随消息数组裁剪重排，不能单独作为延迟菜单动作的身份依据。
+  Fix: 编辑直接调用上游导出的 `messageEdit(messageIndex)`；菜单同时保存消息对象引用、稳定 Homer 消息 ID 和当前索引，执行前重新解析，找不到即拒绝。普通态只用 Homer CSS 隐藏原生 chrome，保留编辑器 DOM 和事件链。
+  Verify: 2026-08-09 原版 SillyTavern 1.18.0 在 1440×900/390×844 真实 Chromium 中，长按用户消息只编辑准确目标；右键/键盘角色菜单的续写、重写、下回、双向候选、单条删除和回溯均通过；常驻 chrome 可见数 0，Yuzi 请求 0，console/page/network error 0。

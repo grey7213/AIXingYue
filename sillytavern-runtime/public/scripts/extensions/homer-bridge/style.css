@@ -2546,12 +2546,79 @@ body.homer-runtime #chat .mes_text * {
     text-shadow: none;
 }
 
-body.homer-runtime #chat .ch_name {
+/* Message chrome lives in the long-press/right-click menu. Keep the native
+ * elements available for upstream editing logic, but never reserve permanent
+ * space for names, timestamps, ellipsis/edit buttons, or swipe controls. */
+body.homer-runtime #chat .ch_name,
+body.homer-runtime #chat .mes_buttons,
+body.homer-runtime #chat .extraMesButtons,
+body.homer-runtime #chat .extraMesButtonsHint,
+body.homer-runtime #chat .homer-message-rollback,
+body.homer-runtime #chat .homer-message-actions,
+body.homer-runtime #chat .swipe_left,
+body.homer-runtime #chat .swipeRightBlock,
+body.homer-runtime #chat .swipe_right,
+body.homer-runtime #chat .swipes-counter,
+body.homer-runtime #chat .mes_edit_buttons {
+    display: none !important;
+}
+
+body.homer-runtime #chat .mes.homer-message-editing .ch_name {
+    display: flex !important;
+    min-height: 34px;
+    margin: 0 0 6px;
+    justify-content: flex-end;
     color: var(--homer-accent);
 }
 
-body.homer-runtime #chat .mes[is_user="true"] .ch_name {
-    color: #b24e35;
+body.homer-runtime #chat .mes.homer-message-editing .ch_name > .flex-container,
+body.homer-runtime #chat .mes.homer-message-editing .mes_buttons,
+body.homer-runtime #chat .mes.homer-message-editing .mes_edit_buttons > * {
+    display: none !important;
+}
+
+body.homer-runtime #chat .mes.homer-message-editing .mes_edit_buttons {
+    display: inline-flex !important;
+    align-items: center;
+    gap: 8px;
+}
+
+body.homer-runtime #chat .mes.homer-message-editing .mes_edit_done,
+body.homer-runtime #chat .mes.homer-message-editing .mes_edit_cancel {
+    display: inline-flex !important;
+    width: 32px;
+    height: 32px;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #e4d4c7;
+    border-radius: 11px;
+    color: var(--homer-accent);
+    background: #fff8f3;
+}
+
+body.homer-runtime #chat .mes.homer-message-editing .mes_edit_done:hover,
+body.homer-runtime #chat .mes.homer-message-editing .mes_edit_done:focus-visible,
+body.homer-runtime #chat .mes.homer-message-editing .mes_edit_cancel:hover,
+body.homer-runtime #chat .mes.homer-message-editing .mes_edit_cancel:focus-visible {
+    border-color: #dfa990;
+    color: #fff;
+    background: var(--homer-accent);
+    outline: none;
+}
+
+body.homer-runtime #chat .mes.homer-message-menu-target {
+    cursor: context-menu;
+    touch-action: pan-y;
+    -webkit-touch-callout: none;
+}
+
+body.homer-runtime #chat .mes.homer-message-menu-target:focus-visible {
+    outline: 2px solid rgba(152, 47, 79, 0.42);
+    outline-offset: 3px;
+}
+
+body.homer-runtime #chat .mes_text {
+    padding-top: 1px;
 }
 
 body.homer-runtime #chat .mes .avatar img {
@@ -2759,42 +2826,196 @@ body.homer-runtime #send_but {
     background: transparent;
 }
 
-.homer-message-actions {
+.homer-danger-button {
+    border-color: transparent;
+    color: #fff;
+    background: linear-gradient(135deg, #b84b50, #8f2940);
+}
+
+.homer-message-menu-dialog {
+    position: fixed;
+    z-index: 2147483000;
+    inset: auto;
+    width: min(360px, calc(100vw - 24px));
+    max-width: none;
+    max-height: calc(100dvh - 24px);
+    margin: 0;
+    padding: 0;
+    overflow: visible;
+    border: 0;
+    color: var(--homer-ink);
+    background: transparent;
+}
+
+.homer-message-menu-dialog.is-positioning {
+    visibility: hidden;
+}
+
+.homer-message-menu-dialog::backdrop {
+    background: rgba(62, 45, 37, 0.28);
+    backdrop-filter: blur(2px);
+}
+
+.homer-message-menu__shell {
+    box-sizing: border-box;
+    width: 100%;
+    max-height: calc(100dvh - 24px);
+    padding: 16px;
+    overflow: auto;
+    border: 1px solid #ead8ce;
+    border-radius: 22px;
+    color: var(--homer-ink);
+    background:
+        radial-gradient(circle at 8% 0, rgba(232, 131, 78, 0.1), transparent 34%),
+        rgba(255, 253, 249, 0.99);
+    box-shadow: 0 22px 66px rgba(79, 54, 38, 0.22);
+}
+
+.homer-message-menu__head {
     display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px;
-    margin-top: 9px;
-    padding-top: 9px;
-    border-top: 1px solid var(--homer-line);
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
+    margin-bottom: 14px;
 }
 
-.homer-message-action {
-    min-height: 28px;
-    padding: 0 9px;
-    cursor: pointer;
-    border: 1px solid #e4d8cb;
-    border-radius: 999px;
-    color: #75675d;
-    background: #faf6ef;
+.homer-message-menu__heading {
+    min-width: 0;
+}
+
+.homer-message-menu__eyebrow {
+    color: var(--homer-accent);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.16em;
+}
+
+.homer-message-menu__title {
+    margin: 3px 0 0;
+    color: var(--homer-ink);
+    font-family: var(--homer-display-font);
+    font-size: 20px;
+    line-height: 1.2;
+}
+
+.homer-message-menu__meta {
+    margin-top: 4px;
+    color: var(--homer-muted);
     font-size: 11px;
-    font-weight: 700;
-    line-height: 1;
-    transition: border-color 140ms ease, color 140ms ease, background 140ms ease;
+    font-weight: 650;
 }
 
-.homer-message-action:hover,
-.homer-message-action:focus-visible {
+.homer-message-menu__close {
+    display: inline-flex;
+    flex: 0 0 auto;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    cursor: pointer;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #ead8ce;
+    border-radius: 12px;
+    color: #866f62;
+    background: #fff7f2;
+    font-size: 22px;
+    line-height: 1;
+}
+
+.homer-message-menu__close:hover,
+.homer-message-menu__close:focus-visible {
+    border-color: #dfa990;
+    color: #fff;
+    background: var(--homer-accent);
+    outline: none;
+}
+
+.homer-message-menu__actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.homer-message-menu__action {
+    display: flex;
+    min-width: 0;
+    min-height: 46px;
+    padding: 0 12px;
+    cursor: pointer;
+    align-items: center;
+    gap: 9px;
+    border: 1px solid #eadbd0;
+    border-radius: 14px;
+    color: #604c42;
+    background: #fff8f3;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 760;
+    text-align: left;
+    transition: transform 140ms ease, border-color 140ms ease, color 140ms ease, background 140ms ease;
+}
+
+.homer-message-menu__action:hover,
+.homer-message-menu__action:focus-visible {
+    transform: translateY(-1px);
     border-color: #dfa990;
     color: var(--homer-accent);
     background: #fff0e7;
     outline: none;
 }
 
-body.homer-generating .homer-message-action {
-    cursor: progress;
-    opacity: 0.46;
-    pointer-events: none;
+.homer-message-menu__action.is-danger {
+    color: #a43d48;
+    background: #fff3f2;
+}
+
+.homer-message-menu__action.is-danger:hover,
+.homer-message-menu__action.is-danger:focus-visible {
+    border-color: #d9959b;
+    color: #8f2940;
+    background: #ffe9e8;
+}
+
+.homer-message-menu__action:disabled {
+    cursor: not-allowed;
+    transform: none;
+    border-color: #ece4dc;
+    color: #aa9c92;
+    background: #f7f3ee;
+    opacity: 0.68;
+}
+
+.homer-message-menu__icon {
+    display: inline-flex;
+    flex: 0 0 18px;
+    width: 18px;
+    align-items: center;
+    justify-content: center;
+    color: currentColor;
+}
+
+.homer-message-menu__label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.homer-message-menu__hint {
+    margin: 12px 2px 0;
+    color: #948176;
+    font-size: 10px;
+    line-height: 1.55;
+    text-align: center;
+}
+
+.homer-clipboard-fallback {
+    position: fixed;
+    top: -10000px;
+    left: -10000px;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
 }
 
 .homer-roleplayhub-frame {
@@ -2837,13 +3058,28 @@ body.homer-generating .homer-message-action {
         box-sizing: border-box;
     }
 
-    .homer-message-actions {
-        gap: 5px;
+    .homer-message-menu-dialog {
+        right: max(8px, env(safe-area-inset-right));
+        bottom: max(8px, env(safe-area-inset-bottom));
+        left: max(8px, env(safe-area-inset-left));
+        top: auto !important;
+        width: auto;
+        max-height: calc(
+            100dvh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom)
+        );
     }
 
-    .homer-message-action {
-        min-height: 30px;
-        padding: 0 8px;
-        font-size: 10px;
+    .homer-message-menu__shell {
+        max-height: calc(
+            100dvh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom)
+        );
+        padding: 15px 14px calc(14px + env(safe-area-inset-bottom));
+        border-radius: 24px;
+    }
+
+    .homer-message-menu__action {
+        min-height: 48px;
+        padding-inline: 11px;
+        font-size: 12px;
     }
 }

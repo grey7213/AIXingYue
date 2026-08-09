@@ -4,6 +4,7 @@
 
 ## 当前主要入口
 
+- 惑梦对话消息长按菜单：`homer-dialogue-message-menu-20260809-requirements.md`、`homer-dialogue-message-menu-20260809-design.md`、`homer-dialogue-message-menu-20260809-tasks.md`
 - 《道渊》提示词助手与消息头像：`homer-daoyuan-prompt-helper-20260808-requirements.md`、`homer-daoyuan-prompt-helper-20260808-design.md`、`homer-daoyuan-prompt-helper-20260808-tasks.md`
 - 惑梦对话预设可见性与操作收敛：`homer-dialogue-preset-controls-20260808-requirements.md`、`homer-dialogue-preset-controls-20260808-design.md`、`homer-dialogue-preset-controls-20260808-tasks.md`
 - 惑梦反扒卡分享包与 APK 构建：`homer-share-and-apk-20260806-requirements.md`、`homer-share-and-apk-20260806-design.md`、`homer-share-and-apk-20260806-tasks.md`

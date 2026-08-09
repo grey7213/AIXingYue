@@ -718,6 +718,109 @@ def assert_message_avatars_hidden(page: Page, label: str) -> dict:
     return facts
 
 
+def assert_message_chrome_hidden(page: Page | Frame, label: str) -> dict:
+    facts = page.evaluate(
+        """() => {
+          const selectors = {
+            names: '#chat .ch_name',
+            buttons: '#chat .mes_buttons',
+            extraButtons: '#chat .extraMesButtons, #chat .extraMesButtonsHint',
+            homerActions: '#chat .homer-message-actions, #chat .homer-message-rollback',
+            swipes: '#chat .swipe_left, #chat .swipeRightBlock, #chat .swipe_right, #chat .swipes-counter',
+          };
+          const visible = element => {
+            const style = getComputedStyle(element);
+            const rect = element.getBoundingClientRect();
+            return style.display !== 'none'
+              && style.visibility !== 'hidden'
+              && rect.width > 0
+              && rect.height > 0;
+          };
+          return Object.fromEntries(Object.entries(selectors).map(([key, selector]) => {
+            const elements = [...document.querySelectorAll(selector)];
+            return [key, {
+              count: elements.length,
+              visible: elements.filter(visible).length,
+            }];
+          }));
+        }"""
+    )
+    exposed = {
+        key: value
+        for key, value in facts.items()
+        if value["visible"] != 0
+    }
+    if exposed:
+        raise AssertionError(f"{label}: permanent message chrome remains visible: {exposed}")
+    if facts["homerActions"]["count"] != 0:
+        raise AssertionError(f"{label}: legacy Homer message controls remain in the DOM: {facts}")
+    return facts
+
+
+def close_message_menu(page: Page | Frame) -> None:
+    dialog = page.locator("#homer-message-menu-dialog[open]")
+    if not dialog.count():
+        return
+    page.locator("#homer-message-menu-dialog .homer-message-menu__close").click()
+    dialog.wait_for(state="hidden", timeout=5_000)
+
+
+def open_message_menu(
+    page: Page | Frame,
+    message,
+    *,
+    method: str,
+) -> dict:
+    close_message_menu(page)
+    message.scroll_into_view_if_needed()
+    expected_index = int(message.get_attribute("mesid") or -1)
+    trigger = message.locator(".mes_block").first
+    if method == "long-press":
+        box = trigger.bounding_box()
+        if box is None:
+            raise AssertionError("message bubble has no bounding box for long press")
+        event = {
+            "button": 0,
+            "buttons": 1,
+            "clientX": box["x"] + min(24, box["width"] / 2),
+            "clientY": box["y"] + min(24, box["height"] / 2),
+            "isPrimary": True,
+            "pointerId": 41,
+            "pointerType": "touch",
+        }
+        trigger.dispatch_event("pointerdown", event)
+        page.wait_for_timeout(650)
+        trigger.dispatch_event("pointerup", {**event, "buttons": 0})
+    elif method == "contextmenu":
+        trigger.click(button="right", force=True)
+    elif method == "keyboard":
+        message.focus()
+        message.press("Shift+F10")
+    else:
+        raise AssertionError(f"unsupported message menu trigger: {method}")
+
+    dialog = page.locator("#homer-message-menu-dialog[open]")
+    dialog.wait_for(state="visible", timeout=5_000)
+    page.wait_for_timeout(80)
+    state = dialog.evaluate(
+        """dialog => ({
+          messageIndex: Number(dialog.dataset.messageIndex),
+          messageId: String(dialog.dataset.messageId || ''),
+          messageRole: String(dialog.dataset.messageRole || ''),
+          actions: [...dialog.querySelectorAll('[data-homer-message-menu-action]')]
+            .map(button => ({
+              id: button.dataset.homerMessageMenuAction,
+              disabled: button.disabled,
+            })),
+        })"""
+    )
+    if state["messageIndex"] != expected_index:
+        raise AssertionError(
+            f"message menu bound to the wrong bubble: expected={expected_index}, state={state}"
+        )
+    return state
+
+
 def dismiss_extension_notice(page: Page | Frame) -> str:
     popup = page.locator("dialog.popup[open]").last
     if popup.count() and popup.is_visible():
@@ -1263,40 +1366,60 @@ def exercise_generation_and_actions(
     if not generated["isAssistant"] or not generated["text"].strip():
         raise AssertionError(f"SillyTavern generation returned no assistant message: {generated}")
 
-    bindings = page.evaluate(
-        """() => [...document.querySelectorAll('#chat .mes')].map(element => ({
-          messageIndex: Number(element.getAttribute('mesid')),
-          isUser: element.getAttribute('is_user') === 'true',
-          isSystem: element.getAttribute('is_system') === 'true',
-          barIndex: Number(element.querySelector('.homer-message-actions')?.dataset.messageIndex),
-          actions: [...element.querySelectorAll('[data-homer-message-action]')]
-            .map(button => button.dataset.homerMessageAction),
-        }))"""
+    message_chrome = assert_message_chrome_hidden(page, "generated dialogue")
+    user_index = page.evaluate(
+        """() => {
+          const chat = window.SillyTavern.getContext().chat;
+          for (let index = chat.length - 1; index >= 0; index -= 1) {
+            if (chat[index]?.is_user && String(chat[index]?.mes || '').includes('HOMER_E2E_GENERATION_PROBE')) {
+              return index;
+            }
+          }
+          return -1;
+        }"""
     )
-    for binding in bindings:
-        if binding["isSystem"]:
-            if binding["actions"]:
-                raise AssertionError(f"system message exposed actions: {binding}")
-            continue
-        if binding["barIndex"] != binding["messageIndex"]:
-            raise AssertionError(f"message action bar is bound to the wrong message: {binding}")
-        expected = ["rewind"] if binding["isUser"] else [
-            "rewind", "continue", "regenerate", "next", "swipe-left", "swipe-right",
-        ]
-        if binding["actions"] != expected:
-            raise AssertionError(f"message actions are incomplete: {binding}")
+    if user_index < 0:
+        raise AssertionError("generated user message fixture was not found")
+    user_message = page.locator(f'#chat .mes[mesid="{user_index}"]')
+    user_menu = open_message_menu(page, user_message, method="long-press")
+    expected_user_actions = ["copy", "edit", "rollback", "delete"]
+    if (
+        user_menu["messageRole"] != "user"
+        or [item["id"] for item in user_menu["actions"]] != expected_user_actions
+    ):
+        raise AssertionError(f"user message menu is incomplete: {user_menu}")
+    page.locator(
+        '#homer-message-menu-dialog [data-homer-message-menu-action="edit"]'
+    ).click()
+    user_message.locator(".edit_textarea").wait_for(state="visible", timeout=5_000)
+    editing_indices = page.evaluate(
+        """() => [...document.querySelectorAll('#chat .mes:has(.edit_textarea)')]
+          .map(element => Number(element.getAttribute('mesid')))"""
+    )
+    if editing_indices != [user_index]:
+        raise AssertionError(
+            f"message editor opened on the wrong bubble: expected={user_index}, actual={editing_indices}"
+        )
+    user_message.locator(".mes_edit_cancel").wait_for(state="visible", timeout=5_000)
+    user_message.locator(".edit_textarea").press("Escape")
+    user_message.locator(".edit_textarea").wait_for(state="detached", timeout=5_000)
 
-    action_results: list[dict] = []
-    for action in ("continue", "regenerate", "next"):
-        before = signature()
-        for _ in range(3):
-            if not dismiss_extension_notice(page):
-                break
-            page.wait_for_timeout(200)
-        page.locator(
-            '#chat .mes:not([is_user="true"]):not([is_system="true"]) '
-            f'[data-homer-message-action="{action}"]'
-        ).last.click()
+    assistant_message = page.locator(
+        '#chat .mes:not([is_user="true"]):not([is_system="true"])'
+    ).last
+    assistant_menu = open_message_menu(page, assistant_message, method="keyboard")
+    expected_assistant_actions = [
+        "copy", "edit", "rollback", "continue", "regenerate", "next",
+        "swipe-left", "swipe-right", "delete",
+    ]
+    if (
+        assistant_menu["messageRole"] != "assistant"
+        or [item["id"] for item in assistant_menu["actions"]] != expected_assistant_actions
+    ):
+        raise AssertionError(f"assistant message menu is incomplete: {assistant_menu}")
+    close_message_menu(page)
+
+    def wait_for_action_change(before: dict, action: str) -> dict:
         try:
             page.wait_for_function(
                 """before => {
@@ -1340,12 +1463,112 @@ def exercise_generation_and_actions(
             raise AssertionError(
                 f"message {action} did not finish with an assistant message: {after}"
             )
+        return after
+
+    action_results: list[dict] = []
+    for action in ("continue", "regenerate", "next"):
+        before = signature()
+        for _ in range(3):
+            if not dismiss_extension_notice(page):
+                break
+            page.wait_for_timeout(200)
+        assistant_message = page.locator(
+            '#chat .mes:not([is_user="true"]):not([is_system="true"])'
+        ).last
+        action_menu = open_message_menu(page, assistant_message, method="contextmenu")
+        if action_menu["messageRole"] != "assistant":
+            raise AssertionError(f"{action} opened a non-assistant menu: {action_menu}")
+        page.locator(
+            '#homer-message-menu-dialog '
+            f'[data-homer-message-menu-action="{action}"]'
+        ).click()
+        wait_for_action_change(before, action)
         action_results.append({"action": f"message-{action}", "result": "generated"})
+
+    for action in ("swipe-right", "swipe-left"):
+        before = signature()
+        assistant_message = page.locator(
+            '#chat .mes:not([is_user="true"]):not([is_system="true"])'
+        ).last
+        action_menu = open_message_menu(page, assistant_message, method="contextmenu")
+        button_state = next(item for item in action_menu["actions"] if item["id"] == action)
+        if button_state["disabled"]:
+            raise AssertionError(f"{action} unexpectedly disabled: {action_menu}")
+        page.locator(
+            '#homer-message-menu-dialog '
+            f'[data-homer-message-menu-action="{action}"]'
+        ).click()
+        wait_for_action_change(before, action)
+        action_results.append({"action": f"message-{action}", "result": "switched"})
 
     page.wait_for_function(
         "() => document.querySelector('#homer-runtime-status')?.textContent?.includes('云端已同步')",
         timeout=15_000,
     )
+
+    deletion_fixture = page.evaluate(
+        """() => {
+          const chat = window.SillyTavern.getContext().chat;
+          const messageIndex = chat.findIndex(message => message?.is_user
+            && String(message?.mes || '').includes('HOMER_E2E_GENERATION_PROBE'));
+          const message = messageIndex >= 0 ? chat[messageIndex] : null;
+          const ids = chat.map(item => String(
+            item?.extra?.homer_message_id || item?.extra?.homer_sync_id || '',
+          ));
+          return {
+            messageIndex,
+            messageId: String(message?.extra?.homer_message_id || ''),
+            ids,
+            length: chat.length,
+          };
+        }"""
+    )
+    if deletion_fixture["messageIndex"] < 0 or not deletion_fixture["messageId"]:
+        raise AssertionError(f"single-delete fixture was not cloud-bound: {deletion_fixture}")
+    delete_target = page.locator(
+        f'#chat .mes[mesid="{deletion_fixture["messageIndex"]}"]'
+    )
+    delete_menu = open_message_menu(page, delete_target, method="contextmenu")
+    if delete_menu["messageId"] != deletion_fixture["messageId"]:
+        raise AssertionError(
+            f"delete menu targeted the wrong cloud message: {delete_menu}, {deletion_fixture}"
+        )
+    page.locator(
+        '#homer-message-menu-dialog [data-homer-message-menu-action="delete"]'
+    ).click()
+    page.locator("#homer-delete-message-dialog[open]").wait_for(
+        state="visible", timeout=5_000,
+    )
+    page.locator(
+        '#homer-delete-message-dialog button[value="confirm"]'
+    ).click()
+    page.wait_for_function(
+        """fixture => {
+          const chat = window.SillyTavern.getContext().chat;
+          return chat.length === fixture.length - 1
+            && !chat.some(item => String(item?.extra?.homer_message_id || '') === fixture.messageId);
+        }""",
+        arg=deletion_fixture,
+        timeout=15_000,
+    )
+    deletion_result = page.evaluate(
+        """fixture => {
+          const ids = window.SillyTavern.getContext().chat.map(item => String(
+            item?.extra?.homer_message_id || item?.extra?.homer_sync_id || '',
+          ));
+          return {
+            ids,
+            expected: fixture.ids.filter(id => id !== fixture.messageId),
+          };
+        }""",
+        deletion_fixture,
+    )
+    if deletion_result["ids"] != deletion_result["expected"]:
+        raise AssertionError(
+            "single-message delete changed neighboring messages: "
+            + json.dumps(deletion_result, ensure_ascii=False)
+        )
+
     cloud = page.evaluate(
         """async ({ baseUrl, conversationId }) => {
           const response = await fetch(
@@ -1380,6 +1603,13 @@ def exercise_generation_and_actions(
         "connection": "homer-cloud",
         "send": "generated",
         "actions": action_results,
+        "message_menu": {
+            "user_long_press": "pass",
+            "assistant_keyboard": "pass",
+            "assistant_contextmenu": "pass",
+            "single_delete": "pass",
+        },
+        "message_chrome": message_chrome,
         "cloud_messages": cloud_data["total"],
     }
 
@@ -1401,10 +1631,12 @@ def exercise_realtime_rollback(
     runtime.evaluate("window.__homerRollbackSentinel = 'frame-alive'")
 
     target = runtime.locator("#chat .mes").first
-    target.locator(".extraMesButtonsHint").click(force=True)
-    rollback = target.locator(".homer-message-rollback")
-    rollback.wait_for(state="visible", timeout=10_000)
-    rollback.click()
+    menu = open_message_menu(runtime, target, method="contextmenu")
+    if menu["messageIndex"] != 0:
+        raise AssertionError(f"rollback menu targeted the wrong message: {menu}")
+    runtime.locator(
+        '#homer-message-menu-dialog [data-homer-message-menu-action="rollback"]'
+    ).click()
     runtime.locator("#homer-rollback-dialog[open]").wait_for(
         state="visible", timeout=10_000,
     )
@@ -1653,6 +1885,51 @@ def main() -> int:
             mobile_runtime = launch_chat(mobile_page, base_url, app_id, first_conversation)
             if mobile_runtime.locator(".homer-action-dock, .homer-action-button").count():
                 raise AssertionError("removed global action dock is visible on mobile")
+            mobile_message = mobile_runtime.locator(
+                '#chat .mes:not([is_user="true"]):not([is_system="true"])'
+            ).last
+            mobile_menu = open_message_menu(
+                mobile_runtime,
+                mobile_message,
+                method="long-press",
+            )
+            if mobile_menu["messageRole"] != "assistant":
+                raise AssertionError(f"mobile long press opened the wrong menu: {mobile_menu}")
+            mobile_menu_layout = mobile_runtime.evaluate(
+                """() => {
+                  const dialog = document.querySelector('#homer-message-menu-dialog[open]');
+                  const rect = dialog?.getBoundingClientRect();
+                  return {
+                    viewportWidth: innerWidth,
+                    viewportHeight: innerHeight,
+                    left: rect?.left ?? -1,
+                    top: rect?.top ?? -1,
+                    right: rect?.right ?? -1,
+                    bottom: rect?.bottom ?? -1,
+                    width: rect?.width ?? 0,
+                    height: rect?.height ?? 0,
+                    position: dialog ? getComputedStyle(dialog).position : '',
+                  };
+                }"""
+            )
+            if (
+                mobile_menu_layout["position"] != "fixed"
+                or mobile_menu_layout["left"] < -0.5
+                or mobile_menu_layout["top"] < -0.5
+                or mobile_menu_layout["right"] > mobile_menu_layout["viewportWidth"] + 0.5
+                or mobile_menu_layout["bottom"] > mobile_menu_layout["viewportHeight"] + 0.5
+                or mobile_menu_layout["width"] <= 0
+                or mobile_menu_layout["height"] <= 0
+            ):
+                raise AssertionError(
+                    "mobile message menu escaped the safe viewport: "
+                    + json.dumps(mobile_menu_layout, ensure_ascii=False)
+                )
+            mobile_page.screenshot(
+                path=str(artifact_dir / "original-sillytavern-mobile-message-menu.png"),
+                full_page=True,
+            )
+            close_message_menu(mobile_runtime)
             mobile_runtime.locator("#homer-preset-ball").click()
             mobile_runtime.locator("#homer-preset-panel").wait_for(state="visible")
             mobile_runtime.locator("#homer-preset-ball").click()
@@ -1660,6 +1937,10 @@ def main() -> int:
             mobile_runtime.locator("[data-keyword-open]").click()
             mobile_runtime.locator("[data-keyword-panel]").wait_for(state="visible")
             mobile_avatar_layout = assert_message_avatars_hidden(
+                mobile_runtime,
+                "mobile dialogue frame",
+            )
+            mobile_message_chrome = assert_message_chrome_hidden(
                 mobile_runtime,
                 "mobile dialogue frame",
             )
@@ -1678,6 +1959,11 @@ def main() -> int:
                     "keyword_injector_panel": "pass",
                     "yuzi_phone_asset_requests": len(mobile_failures["yuzi"]),
                     "message_avatar_layout": mobile_avatar_layout,
+                    "message_chrome": mobile_message_chrome,
+                    "message_menu": {
+                        "long_press": "pass",
+                        "safe_area_layout": mobile_menu_layout,
+                    },
                     "horizontal_overflow": False,
                 }
             )

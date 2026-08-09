@@ -3,6 +3,7 @@ import {
     eventSource,
     event_types,
     getRequestHeaders,
+    messageEdit,
     saveSettingsDebounced,
     setOnlineStatus,
 } from '../../../script.js';
@@ -58,8 +59,15 @@ let rollbackBusy = false;
 let lastSyncSignature = '';
 let eventHandlersInstalled = false;
 let dialogueEventLogMuted = 0;
-let messageActionObserver = null;
-let messageActionRenderQueued = false;
+let messageMenuObserver = null;
+let messageMenuRenderQueued = false;
+let activeMessageMenuTarget = null;
+let messagePressTimer = null;
+let messagePressStart = null;
+let messagePressTarget = null;
+let suppressMessageClickUntil = 0;
+const MESSAGE_LONG_PRESS_DELAY = 520;
+const MESSAGE_LONG_PRESS_MOVE_TOLERANCE = 12;
 let extensionSettingsBridgeInstalled = false;
 let embeddedDocumentLookupBridgeInstalled = false;
 let extensionSettingsBaseline = null;
@@ -1394,7 +1402,7 @@ async function loadCloudChat() {
         console.warn(`${MODULE_ID}: local chat mirror was not saved; cloud sync remains active`, error);
     }
     await context.printMessages();
-    installMessageRollbackControls();
+    queueMessageMenuRender();
     await eventSource.emit(event_types.CHAT_LOADED, context.chatId);
     suppressSync = false;
     scheduleSync(100);
@@ -1454,7 +1462,7 @@ async function syncCloudChat() {
                 homer_created_at: Number(message?.created_at || context.chat[index].extra?.homer_created_at || Date.now()),
             };
         });
-        installMessageRollbackControls();
+        queueMessageMenuRender();
         updateRuntimeStatus('云端已同步', 'online');
     } catch (error) {
         console.warn(`${MODULE_ID}: cloud sync failed`, error);
@@ -1470,34 +1478,41 @@ function scheduleSync(delay = 900) {
     syncTimer = window.setTimeout(syncCloudChat, delay);
 }
 
-function confirmRollback(messageIndex) {
-    const existing = document.querySelector('#homer-rollback-dialog');
+function confirmHomerAction({
+    id = 'homer-confirm-dialog',
+    eyebrow = '当前对话',
+    title = '确认操作',
+    notice = '',
+    confirmLabel = '确认',
+    danger = false,
+} = {}) {
+    const existing = document.querySelector(`#${id}`);
     existing?.close();
     existing?.remove();
     const dialog = createElement('dialog', 'homer-sheet-dialog homer-confirm-dialog');
-    dialog.id = 'homer-rollback-dialog';
+    dialog.id = id;
     const shell = createElement('form', 'homer-sheet-dialog__shell');
     shell.method = 'dialog';
     const head = createElement('header', 'homer-sheet-dialog__head');
     const copy = createElement('div');
     copy.append(
-        createElement('div', 'homer-preset-panel__eyebrow', '当前对话'),
-        createElement('h2', 'homer-sheet-dialog__title', '确认回溯'),
+        createElement('div', 'homer-preset-panel__eyebrow', eyebrow),
+        createElement('h2', 'homer-sheet-dialog__title', title),
     );
     head.append(copy);
     shell.append(
         head,
-        createElement(
-            'p',
-            'homer-sheet-dialog__notice',
-            `将移除第 ${messageIndex + 1} 条及之后的消息；当前页面会立即更新，无需刷新。`,
-        ),
+        createElement('p', 'homer-sheet-dialog__notice', notice),
     );
     const actions = createElement('footer', 'homer-sheet-dialog__actions');
     const cancel = createElement('button', 'homer-secondary-button', '取消');
     cancel.type = 'submit';
     cancel.value = 'cancel';
-    const confirm = createElement('button', 'homer-primary-button', '确认回溯');
+    const confirm = createElement(
+        'button',
+        danger ? 'homer-primary-button homer-danger-button' : 'homer-primary-button',
+        confirmLabel,
+    );
     confirm.type = 'submit';
     confirm.value = 'confirm';
     actions.append(cancel, confirm);
@@ -1514,11 +1529,21 @@ function confirmRollback(messageIndex) {
     });
 }
 
-async function rollbackToMessage(messageIndex, { askConfirmation = true } = {}) {
-    const context = getContext();
-    const index = Number(messageIndex);
-    const message = Number.isInteger(index) ? context.chat[index] : null;
-    const messageId = String(message?.extra?.homer_message_id || '').trim();
+function confirmRollback(messageIndex) {
+    return confirmHomerAction({
+        id: 'homer-rollback-dialog',
+        title: '确认回溯',
+        notice: `将移除第 ${messageIndex + 1} 条及之后的消息；当前页面会立即更新，无需刷新。`,
+        confirmLabel: '确认回溯',
+        danger: true,
+    });
+}
+
+async function rollbackToMessage(target, { askConfirmation = true } = {}) {
+    let resolved = resolveMessageMenuTarget(target);
+    let index = resolved?.messageIndex ?? -1;
+    let message = resolved?.message || null;
+    let messageId = cloudHomerMessageId(message);
     if (!message || !messageId) {
         showHostNotice('这条消息仍在同步，请稍后再回溯', 'warning');
         return false;
@@ -1531,17 +1556,32 @@ async function rollbackToMessage(messageIndex, { askConfirmation = true } = {}) 
         return false;
     }
 
+    resolved = resolveMessageMenuTarget(target);
+    index = resolved?.messageIndex ?? -1;
+    message = resolved?.message || null;
+    messageId = cloudHomerMessageId(message);
+    if (!message || !messageId) {
+        showHostNotice('目标消息已经变化，未执行回溯', 'warning');
+        return false;
+    }
+
     rollbackBusy = true;
     document.body.classList.add('homer-rollback-busy');
+    queueMessageMenuRender();
+    const previousSuppressSync = suppressSync;
     try {
         const result = await requestJson(
             siteUrl(`/console/api/web/messages/${encodeURIComponent(messageId)}/rollback`),
             { method: 'POST', body: '{}' },
         );
+        const context = getContext();
         suppressSync = true;
         context.chat.splice(index);
         if (Array.isArray(launch?.messages)) {
-            launch.messages.splice(index);
+            const launchIndex = launch.messages.findIndex(item => String(item?.id || '') === messageId);
+            if (launchIndex >= 0) {
+                launch.messages.splice(launchIndex);
+            }
         }
         try {
             await context.saveChat();
@@ -1549,10 +1589,17 @@ async function rollbackToMessage(messageIndex, { askConfirmation = true } = {}) 
             console.warn(`${MODULE_ID}: rolled-back local mirror was not saved`, error);
         }
         await context.printMessages();
-        await eventSource.emit(event_types.MESSAGE_DELETED, context.chat.length);
-        await eventSource.emit(event_types.CHAT_LOADED, context.chatId);
+        dialogueEventLogMuted += 1;
+        try {
+            await eventSource.emit(event_types.MESSAGE_DELETED, context.chat.length);
+            await eventSource.emit(event_types.CHAT_LOADED, context.chatId);
+        } finally {
+            dialogueEventLogMuted = Math.max(0, dialogueEventLogMuted - 1);
+        }
         lastSyncSignature = JSON.stringify(serializeChat());
-        installMessageRollbackControls();
+        await logDialogueEvent('rewind', index, message);
+        closeMessageMenu();
+        queueMessageMenuRender();
         updateRuntimeStatus('云端已同步', 'online');
         showHostNotice(`已回溯，移除 ${Number(result?.deleted_count || 0)} 条消息`, 'success');
         return true;
@@ -1561,41 +1608,10 @@ async function rollbackToMessage(messageIndex, { askConfirmation = true } = {}) 
         showHostNotice(String(error?.message || '回溯失败，请重试'), 'error');
         return false;
     } finally {
-        suppressSync = false;
+        suppressSync = previousSuppressSync;
         rollbackBusy = false;
         document.body.classList.remove('homer-rollback-busy');
-    }
-}
-
-function installMessageRollbackControls() {
-    const context = getContext();
-    for (const element of document.querySelectorAll('#chat .mes[mesid]')) {
-        const messageIndex = Number(element.getAttribute('mesid'));
-        const messageId = String(context.chat[messageIndex]?.extra?.homer_message_id || '').trim();
-        const actions = element.querySelector('.extraMesButtons');
-        if (!actions || !messageId || actions.querySelector('.homer-message-rollback')) {
-            continue;
-        }
-        const button = createElement(
-            'div',
-            'mes_button homer-message-rollback fa-solid fa-clock-rotate-left interactable',
-        );
-        button.title = '回溯到这里';
-        button.tabIndex = 0;
-        button.setAttribute('role', 'button');
-        button.setAttribute('aria-label', `回溯到第 ${messageIndex + 1} 条消息`);
-        const activate = event => {
-            event.preventDefault();
-            event.stopPropagation();
-            void rollbackToMessage(messageIndex);
-        };
-        button.addEventListener('click', activate);
-        button.addEventListener('keydown', event => {
-            if (event.key === 'Enter' || event.key === ' ') {
-                activate(event);
-            }
-        });
-        actions.prepend(button);
+        queueMessageMenuRender();
     }
 }
 
@@ -1949,17 +1965,29 @@ function setFullDialogOpen(open) {
     }
 }
 
-function homerMessageId(message, index = -1) {
+function cloudHomerMessageId(message) {
     const extra = message?.extra && typeof message.extra === 'object' ? message.extra : {};
     return String(
         extra.homer_message_id
-        || extra.homer_sync_id
         || message?.homer_message_id
-        || (index >= 0 ? `message-${index}` : ''),
+        || '',
     ).trim().slice(0, 160);
 }
 
-async function logDialogueEvent(eventType, messageIndex = -1) {
+function stableHomerMessageId(message) {
+    const extra = message?.extra && typeof message.extra === 'object' ? message.extra : {};
+    return String(
+        cloudHomerMessageId(message)
+        || extra.homer_sync_id
+        || '',
+    ).trim().slice(0, 160);
+}
+
+function homerMessageId(message, index = -1) {
+    return stableHomerMessageId(message) || (index >= 0 ? `message-${index}` : '');
+}
+
+async function logDialogueEvent(eventType, messageIndex = -1, messageOverride = null) {
     if (dialogueEventLogMuted || !launch?.app_id || !launch?.conversation_id) {
         return;
     }
@@ -1968,7 +1996,7 @@ async function logDialogueEvent(eventType, messageIndex = -1) {
     const index = Number.isInteger(Number(messageIndex)) && Number(messageIndex) >= 0
         ? Number(messageIndex)
         : fallbackIndex;
-    const message = index >= 0 ? context.chat[index] : null;
+    const message = messageOverride || (index >= 0 ? context.chat[index] : null);
     const eventId = globalThis.crypto?.randomUUID?.()
         || `evt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
     const payload = {
@@ -1995,179 +2023,666 @@ async function logDialogueEvent(eventType, messageIndex = -1) {
     }
 }
 
-async function truncateAfterMessage(messageIndex, actionLabel = '继续操作') {
-    const context = getContext();
-    const index = Number(messageIndex);
-    if (!Number.isInteger(index) || index < 0 || index >= context.chat.length) {
-        throw new Error('目标消息已经变化，请刷新后重试');
-    }
-    const trailingCount = context.chat.length - index - 1;
-    if (trailingCount <= 0) {
-        return true;
-    }
-    const confirmed = window.confirm(
-        `${actionLabel}需要回溯到这条消息，并移除其后的 ${trailingCount} 条内容。是否继续？`,
-    );
-    if (!confirmed) {
-        return false;
-    }
-    dialogueEventLogMuted += 1;
-    try {
-        while (context.chat.length - 1 > index) {
-            await context.deleteLastMessage();
-        }
-        await context.saveChat();
-        scheduleSync(0);
-    } finally {
-        dialogueEventLogMuted = Math.max(0, dialogueEventLogMuted - 1);
-    }
-    return true;
-}
-
 function messageIndexFromElement(element) {
     const raw = element?.getAttribute?.('mesid');
     const index = Number(raw);
     return Number.isInteger(index) && index >= 0 ? index : -1;
 }
 
-function messageActionButton(action, label, title = '') {
-    const button = createElement('button', 'homer-message-action', label);
-    button.type = 'button';
-    button.dataset.homerMessageAction = action;
-    button.title = title || label;
-    return button;
+function messageMenuTargetForIndex(messageIndex, element = null, anchor = {}) {
+    const context = getContext();
+    const index = Number(messageIndex);
+    const message = Number.isInteger(index) && index >= 0 ? context.chat[index] : null;
+    if (!message || message?.is_system) {
+        return null;
+    }
+    return {
+        messageIndex: index,
+        messageId: stableHomerMessageId(message),
+        messageRef: message,
+        isUser: Boolean(message?.is_user),
+        element: element || document.querySelector(`#chat .mes[mesid="${index}"]`),
+        anchorX: Number.isFinite(Number(anchor?.x)) ? Number(anchor.x) : null,
+        anchorY: Number.isFinite(Number(anchor?.y)) ? Number(anchor.y) : null,
+    };
 }
 
-function renderMessageActions() {
+function messageMenuTargetFromElement(element, anchor = {}) {
+    return messageMenuTargetForIndex(messageIndexFromElement(element), element, anchor);
+}
+
+function resolveMessageMenuTarget(target) {
+    if ((typeof target === 'number' || typeof target === 'string') && Number.isInteger(Number(target))) {
+        return messageMenuTargetForIndex(Number(target));
+    }
+    if (!target || typeof target !== 'object') {
+        return null;
+    }
+    const context = getContext();
+    const expectedId = String(target.messageId || '').trim();
+    const matches = message => Boolean(
+        message
+        && !message?.is_system
+        && (
+            (target.messageRef && message === target.messageRef)
+            || (expectedId && stableHomerMessageId(message) === expectedId)
+        )
+    );
+    let index = Number(target.messageIndex);
+    let message = Number.isInteger(index) && index >= 0 ? context.chat[index] : null;
+    if (!matches(message)) {
+        index = expectedId
+            ? context.chat.findIndex(item => stableHomerMessageId(item) === expectedId)
+            : -1;
+        if (index < 0 && target.messageRef) {
+            index = context.chat.indexOf(target.messageRef);
+        }
+        message = index >= 0 ? context.chat[index] : null;
+    }
+    if (!message || message?.is_system) {
+        return null;
+    }
+    const element = document.querySelector(`#chat .mes[mesid="${index}"]`);
+    return {
+        ...target,
+        messageIndex: index,
+        messageId: stableHomerMessageId(message),
+        messageRef: message,
+        message,
+        isUser: Boolean(message?.is_user),
+        element,
+    };
+}
+
+async function truncateAfterMessage(target, actionLabel = '继续操作') {
+    let resolved = resolveMessageMenuTarget(target);
+    if (!resolved) {
+        throw new Error('目标消息已经变化，请重新打开消息菜单');
+    }
+    const context = getContext();
+    let trailingCount = context.chat.length - resolved.messageIndex - 1;
+    if (trailingCount <= 0) {
+        return true;
+    }
+    const confirmed = await confirmHomerAction({
+        id: 'homer-timeline-confirm-dialog',
+        title: `${actionLabel}前需要回溯`,
+        notice: `将保留这条消息，并移除其后的 ${trailingCount} 条内容。当前页面会立即更新。`,
+        confirmLabel: '回溯并继续',
+        danger: true,
+    });
+    if (!confirmed) {
+        return false;
+    }
+    resolved = resolveMessageMenuTarget(target);
+    if (!resolved) {
+        throw new Error('目标消息已经变化，未执行操作');
+    }
+    trailingCount = context.chat.length - resolved.messageIndex - 1;
+    if (trailingCount <= 0) {
+        return true;
+    }
+    const previousSuppressSync = suppressSync;
+    suppressSync = true;
+    dialogueEventLogMuted += 1;
+    try {
+        while (context.chat.length - 1 > resolved.messageIndex) {
+            await context.deleteLastMessage();
+        }
+        await context.saveChat();
+    } finally {
+        dialogueEventLogMuted = Math.max(0, dialogueEventLogMuted - 1);
+        suppressSync = previousSuppressSync;
+    }
+    if (!previousSuppressSync) {
+        scheduleSync(0);
+    }
+    return true;
+}
+
+function messageMenuActions(resolved) {
+    const actions = [
+        { id: 'copy', label: '复制', icon: 'fa-regular fa-copy' },
+        { id: 'edit', label: '编辑', icon: 'fa-solid fa-pen' },
+        { id: 'rollback', label: '回溯', icon: 'fa-solid fa-clock-rotate-left', cloud: true },
+    ];
+    if (!resolved.isUser) {
+        actions.push(
+            { id: 'continue', label: '续写', icon: 'fa-solid fa-forward-step' },
+            { id: 'regenerate', label: '重写', icon: 'fa-solid fa-rotate' },
+            { id: 'next', label: '下回续写', icon: 'fa-solid fa-angles-right' },
+            { id: 'swipe-left', label: '上一候选', icon: 'fa-solid fa-chevron-left' },
+            { id: 'swipe-right', label: '下一候选', icon: 'fa-solid fa-chevron-right' },
+        );
+    }
+    actions.push({ id: 'delete', label: '删除', icon: 'fa-regular fa-trash-can', cloud: true, danger: true });
+    return actions;
+}
+
+function ensureMessageMenuDialog() {
+    let dialog = document.querySelector('#homer-message-menu-dialog');
+    if (dialog) {
+        return dialog;
+    }
+    dialog = createElement('dialog', 'homer-message-menu-dialog');
+    dialog.id = 'homer-message-menu-dialog';
+    dialog.setAttribute('aria-labelledby', 'homer-message-menu-title');
+    const shell = createElement('section', 'homer-message-menu__shell');
+    const head = createElement('header', 'homer-message-menu__head');
+    const copy = createElement('div', 'homer-message-menu__heading');
+    copy.append(
+        createElement('div', 'homer-message-menu__eyebrow', '消息操作'),
+        createElement('h2', 'homer-message-menu__title', '角色回复'),
+        createElement('div', 'homer-message-menu__meta'),
+    );
+    copy.querySelector('.homer-message-menu__title').id = 'homer-message-menu-title';
+    const close = createElement('button', 'homer-message-menu__close', '×');
+    close.type = 'button';
+    close.setAttribute('aria-label', '关闭消息菜单');
+    close.addEventListener('click', () => closeMessageMenu());
+    head.append(copy, close);
+    const actions = createElement('div', 'homer-message-menu__actions');
+    actions.setAttribute('role', 'menu');
+    const hint = createElement(
+        'p',
+        'homer-message-menu__hint',
+        '长按气泡或在电脑上右键，可随时再次打开。',
+    );
+    shell.append(head, actions, hint);
+    dialog.append(shell);
+    dialog.addEventListener('click', event => {
+        if (event.target === dialog) {
+            closeMessageMenu();
+            return;
+        }
+        const button = event.target instanceof Element
+            ? event.target.closest('[data-homer-message-menu-action]')
+            : null;
+        if (!button || button.disabled) {
+            return;
+        }
+        const target = activeMessageMenuTarget;
+        const action = String(button.dataset.homerMessageMenuAction || '');
+        closeMessageMenu();
+        void handleMessageMenuAction(action, target);
+    });
+    dialog.addEventListener('close', () => {
+        activeMessageMenuTarget = null;
+        dialog.classList.remove('is-positioning');
+        dialog.style.removeProperty('left');
+        dialog.style.removeProperty('top');
+        document.body.classList.remove('homer-message-menu-open');
+    });
+    document.body.append(dialog);
+    return dialog;
+}
+
+function closeMessageMenu() {
+    const dialog = document.querySelector('#homer-message-menu-dialog');
+    if (dialog?.open) {
+        dialog.close();
+    } else {
+        activeMessageMenuTarget = null;
+        document.body.classList.remove('homer-message-menu-open');
+    }
+}
+
+function positionMessageMenuDialog(dialog, resolved) {
+    if (!dialog?.open || window.matchMedia('(max-width: 640px)').matches) {
+        dialog?.classList.remove('is-positioning');
+        return;
+    }
+    const anchorElement = resolved?.element?.querySelector('.mes_text')
+        || resolved?.element?.querySelector('.mes_block')
+        || resolved?.element;
+    const rect = anchorElement?.getBoundingClientRect?.();
+    if (!rect) {
+        dialog.classList.remove('is-positioning');
+        return;
+    }
+    const gap = 10;
+    const edge = 12;
+    const width = dialog.offsetWidth;
+    const height = dialog.offsetHeight;
+    const pointerX = resolved?.anchorX === null ? Number.NaN : Number(resolved?.anchorX);
+    const pointerY = resolved?.anchorY === null ? Number.NaN : Number(resolved?.anchorY);
+    let left;
+    let top;
+    if (Number.isFinite(pointerX) && Number.isFinite(pointerY)) {
+        left = pointerX + gap;
+        top = pointerY + gap;
+        if (left + width > window.innerWidth - edge) {
+            left = pointerX - width - gap;
+        }
+        if (top + height > window.innerHeight - edge) {
+            top = pointerY - height - gap;
+        }
+    } else {
+        left = resolved?.isUser ? rect.right - width : rect.left;
+        top = rect.bottom + gap;
+        if (top + height > window.innerHeight - edge) {
+            top = rect.top - height - gap;
+        }
+    }
+    left = Math.max(edge, Math.min(left, window.innerWidth - width - edge));
+    top = Math.max(edge, Math.min(top, window.innerHeight - height - edge));
+    dialog.style.left = `${Math.round(left)}px`;
+    dialog.style.top = `${Math.round(top)}px`;
+    dialog.classList.remove('is-positioning');
+}
+
+function renderMessageMenuDialog() {
+    const dialog = ensureMessageMenuDialog();
+    if (!activeMessageMenuTarget) {
+        return;
+    }
+    const resolved = resolveMessageMenuTarget(activeMessageMenuTarget);
+    if (!resolved) {
+        if (dialog.open) {
+            closeMessageMenu();
+        }
+        return;
+    }
+    activeMessageMenuTarget = resolved;
+    const title = dialog.querySelector('.homer-message-menu__title');
+    const meta = dialog.querySelector('.homer-message-menu__meta');
+    const actions = dialog.querySelector('.homer-message-menu__actions');
+    const swipes = Array.isArray(resolved.message?.swipes) ? resolved.message.swipes : [];
+    const swipeCount = Math.max(swipes.length, 1);
+    const swipeIndex = Math.max(0, Math.min(Number(resolved.message?.swipe_id || 0), swipeCount - 1));
+    title.textContent = resolved.isUser ? '用户输入' : '角色回复';
+    meta.textContent = !resolved.isUser && swipeCount > 1
+        ? `候选 ${swipeIndex + 1} / ${swipeCount}`
+        : `第 ${resolved.messageIndex + 1} 条消息`;
+    dialog.dataset.messageIndex = String(resolved.messageIndex);
+    dialog.dataset.messageId = cloudHomerMessageId(resolved.message) || resolved.messageId || '';
+    dialog.dataset.messageRole = resolved.isUser ? 'user' : 'assistant';
+    const busy = generationBusy || rollbackBusy || loadingLaunch;
+    const cloudReady = Boolean(cloudHomerMessageId(resolved.message));
+    const buttons = messageMenuActions(resolved).map(action => {
+        const button = createElement(
+            'button',
+            `homer-message-menu__action${action.danger ? ' is-danger' : ''}`,
+        );
+        button.type = 'button';
+        button.setAttribute('role', 'menuitem');
+        button.dataset.homerMessageMenuAction = action.id;
+        const disabledBySwipe = action.id === 'swipe-left' && swipeIndex <= 0;
+        const disabled = (busy && action.id !== 'copy') || (action.cloud && !cloudReady) || disabledBySwipe;
+        button.disabled = disabled;
+        button.setAttribute('aria-disabled', String(disabled));
+        if (action.cloud && !cloudReady) {
+            button.title = '这条消息同步到云端后可用';
+        }
+        button.append(
+            createElement('span', `homer-message-menu__icon ${action.icon}`),
+            createElement('span', 'homer-message-menu__label', action.label),
+        );
+        return button;
+    });
+    actions.replaceChildren(...buttons);
+    if (dialog.open) {
+        requestAnimationFrame(() => positionMessageMenuDialog(dialog, resolved));
+    }
+}
+
+function openMessageMenu(target) {
+    const resolved = resolveMessageMenuTarget(target);
+    if (!resolved) {
+        showHostNotice('目标消息已经变化，请重新长按', 'warning');
+        return;
+    }
+    const dialog = ensureMessageMenuDialog();
+    activeMessageMenuTarget = resolved;
+    dialog.classList.add('is-positioning');
+    renderMessageMenuDialog();
+    document.body.classList.add('homer-message-menu-open');
+    if (!dialog.open) {
+        dialog.showModal();
+    }
+    requestAnimationFrame(() => {
+        renderMessageMenuDialog();
+        dialog.querySelector('.homer-message-menu__action:not(:disabled)')?.focus({ preventScroll: true });
+    });
+}
+
+function renderMessageMenuTargets() {
     const context = getContext();
     document.querySelectorAll('#chat .mes').forEach(messageElement => {
+        messageElement.querySelector('.homer-message-actions')?.remove();
         const index = messageIndexFromElement(messageElement);
-        if (index < 0 || !context.chat[index] || messageElement.getAttribute('is_system') === 'true') {
-            messageElement.querySelector('.homer-message-actions')?.remove();
+        const message = index >= 0 ? context.chat[index] : null;
+        const eligible = Boolean(message && !message?.is_system && messageElement.getAttribute('is_system') !== 'true');
+        const editing = eligible && Boolean(messageElement.querySelector('.edit_textarea'));
+        messageElement.classList.toggle('homer-message-menu-target', eligible);
+        messageElement.classList.toggle('homer-message-editing', editing);
+        if (!eligible) {
+            messageElement.removeAttribute('tabindex');
+            messageElement.removeAttribute('aria-haspopup');
+            messageElement.removeAttribute('aria-controls');
+            messageElement.removeAttribute('aria-label');
+            delete messageElement.dataset.messageIndex;
+            delete messageElement.dataset.homerMessageId;
             return;
         }
-        let bar = messageElement.querySelector(':scope > .mes_block > .homer-message-actions');
-        if (!bar) {
-            bar = createElement('div', 'homer-message-actions');
-            bar.setAttribute('aria-label', '本条消息操作');
-            messageElement.querySelector(':scope > .mes_block')?.append(bar);
-        }
-        const message = context.chat[index];
-        const isAssistant = !message?.is_user && !message?.is_system;
-        const actions = [messageActionButton('rewind', '回溯', '保留本条并移除后续内容')];
-        if (isAssistant) {
-            actions.push(
-                messageActionButton('continue', '续写', '从本条回复结尾继续'),
-                messageActionButton('regenerate', '重写', '重新生成本条回复'),
-                messageActionButton('next', '下回', '从本条自然推进下一段'),
-                messageActionButton('swipe-left', '‹', '切换到上一条候选回复'),
-                messageActionButton('swipe-right', '›', '切换到下一条候选回复'),
-            );
-        }
-        const signature = actions.map(item => item.dataset.homerMessageAction).join('|');
-        if (bar.dataset.actionsSignature !== signature) {
-            bar.replaceChildren(...actions);
-            bar.dataset.actionsSignature = signature;
-        }
-        bar.dataset.messageIndex = String(index);
+        messageElement.tabIndex = 0;
+        messageElement.setAttribute('aria-haspopup', 'dialog');
+        messageElement.setAttribute('aria-controls', 'homer-message-menu-dialog');
+        messageElement.setAttribute(
+            'aria-label',
+            `${message?.is_user ? '用户输入' : '角色回复'}，长按或右键打开操作菜单`,
+        );
+        messageElement.dataset.messageIndex = String(index);
+        messageElement.dataset.homerMessageId = stableHomerMessageId(message);
     });
+    renderMessageMenuDialog();
 }
 
-function queueMessageActionRender() {
-    if (messageActionRenderQueued) {
+function queueMessageMenuRender() {
+    if (messageMenuRenderQueued) {
         return;
     }
-    messageActionRenderQueued = true;
+    messageMenuRenderQueued = true;
     requestAnimationFrame(() => {
-        messageActionRenderQueued = false;
-        renderMessageActions();
+        messageMenuRenderQueued = false;
+        renderMessageMenuTargets();
     });
 }
 
-async function handleMessageAction(button) {
-    if (generationBusy) {
-        return;
-    }
-    const messageElement = button.closest('.mes');
-    const messageIndex = messageIndexFromElement(messageElement);
-    const action = String(button.dataset.homerMessageAction || '');
-    if (messageIndex < 0 || !action) {
-        return;
-    }
-    if (action === 'rewind') {
-        const context = getContext();
-        if (messageIndex >= context.chat.length - 1) {
-            window.toastr?.info?.('这已经是当前对话的最后一条消息');
-            return;
-        }
-        generationBusy = true;
-        document.body.classList.add('homer-generating');
-        try {
-            if (await truncateAfterMessage(messageIndex, '回溯')) {
-                await logDialogueEvent('rewind', messageIndex);
-                queueMessageActionRender();
-            }
-        } catch (error) {
-            console.error(`${MODULE_ID}: rewind failed`, error);
-            window.toastr?.error?.(String(error?.message || '回溯失败，请重试'));
-        } finally {
-            generationBusy = false;
-            document.body.classList.remove('homer-generating');
-        }
-        return;
-    }
-    if (action === 'swipe-left' || action === 'swipe-right') {
-        generationBusy = true;
-        document.body.classList.add('homer-generating');
-        try {
-            if (!await truncateAfterMessage(messageIndex, '切换候选回复')) {
-                return;
-            }
-            dialogueEventLogMuted += 1;
-            try {
-                const context = getContext();
-                if (action === 'swipe-left') {
-                    await context.swipe.left();
-                } else {
-                    await context.swipe.right();
-                }
-            } finally {
-                dialogueEventLogMuted = Math.max(0, dialogueEventLogMuted - 1);
-            }
-            await logDialogueEvent('swipe', messageIndex);
-            scheduleSync(100);
-        } catch (error) {
-            console.error(`${MODULE_ID}: swipe failed`, error);
-            window.toastr?.error?.(String(error?.message || '切换回复失败，请重试'));
-        } finally {
-            generationBusy = false;
-            document.body.classList.remove('homer-generating');
-            queueMessageActionRender();
-        }
-        return;
-    }
-    await runAction(action, { messageIndex });
+function clearMessagePress() {
+    window.clearTimeout(messagePressTimer);
+    messagePressTimer = null;
+    messagePressStart = null;
+    messagePressTarget = null;
 }
 
-function installMessageActions() {
+function eventMessageElement(event) {
+    return event.target instanceof Element
+        ? event.target.closest('#chat .mes.homer-message-menu-target')
+        : null;
+}
+
+function isInteractiveMessageTarget(target) {
+    return target instanceof Element && Boolean(target.closest(
+        'button, a, input, textarea, select, option, iframe, [contenteditable="true"], .mes_edit_buttons',
+    ));
+}
+
+async function copyMessageText(message) {
+    const text = String(message?.mes || '');
+    try {
+        await navigator.clipboard.writeText(text);
+    } catch {
+        const textarea = createElement('textarea', 'homer-clipboard-fallback');
+        textarea.value = text;
+        textarea.setAttribute('readonly', '');
+        document.body.append(textarea);
+        textarea.select();
+        const copied = document.execCommand('copy');
+        textarea.remove();
+        if (!copied) {
+            throw new Error('复制失败');
+        }
+    }
+    showHostNotice('已复制这条消息', 'success');
+}
+
+async function openNativeMessageEditor(target) {
+    const resolved = resolveMessageMenuTarget(target);
+    if (!resolved) {
+        throw new Error('目标消息已经变化，无法编辑');
+    }
+    await messageEdit(resolved.messageIndex);
+    requestAnimationFrame(() => {
+        queueMessageMenuRender();
+        resolved.element?.querySelector('.edit_textarea')?.focus({ preventScroll: true });
+    });
+}
+
+async function deleteCloudMessage(target) {
+    let resolved = resolveMessageMenuTarget(target);
+    let messageId = cloudHomerMessageId(resolved?.message);
+    if (!resolved || !messageId) {
+        showHostNotice('这条消息仍在同步，请稍后再删除', 'warning');
+        return false;
+    }
+    const confirmed = await confirmHomerAction({
+        id: 'homer-delete-message-dialog',
+        title: '确认删除',
+        notice: '只删除这一条消息，其他上下文保留。对话摘要会同步失效并在后续重建。',
+        confirmLabel: '删除消息',
+        danger: true,
+    });
+    if (!confirmed) {
+        return false;
+    }
+    resolved = resolveMessageMenuTarget(target);
+    messageId = cloudHomerMessageId(resolved?.message);
+    if (!resolved || !messageId) {
+        showHostNotice('目标消息已经变化，未执行删除', 'warning');
+        return false;
+    }
+    rollbackBusy = true;
+    document.body.classList.add('homer-rollback-busy');
+    queueMessageMenuRender();
+    const previousSuppressSync = suppressSync;
+    try {
+        const result = await requestJson(
+            siteUrl(`/console/api/web/messages/${encodeURIComponent(messageId)}/delete`),
+            { method: 'POST', body: '{}' },
+        );
+        if (result?.deleted !== true) {
+            throw new Error('消息不存在或已被删除');
+        }
+        const context = getContext();
+        const { messageIndex, message } = resolved;
+        suppressSync = true;
+        context.chat.splice(messageIndex, 1);
+        if (Array.isArray(launch?.messages)) {
+            const launchIndex = launch.messages.findIndex(item => String(item?.id || '') === messageId);
+            if (launchIndex >= 0) {
+                launch.messages.splice(launchIndex, 1);
+            }
+        }
+        try {
+            await context.saveChat();
+        } catch (error) {
+            console.warn(`${MODULE_ID}: deleted local mirror was not saved`, error);
+        }
+        await context.printMessages();
+        dialogueEventLogMuted += 1;
+        try {
+            await eventSource.emit(event_types.MESSAGE_DELETED, context.chat.length);
+            await eventSource.emit(event_types.CHAT_LOADED, context.chatId);
+        } finally {
+            dialogueEventLogMuted = Math.max(0, dialogueEventLogMuted - 1);
+        }
+        lastSyncSignature = JSON.stringify(serializeChat());
+        await logDialogueEvent('message_delete', messageIndex, message);
+        updateRuntimeStatus('云端已同步', 'online');
+        showHostNotice('已删除这条消息', 'success');
+        queueMessageMenuRender();
+        return true;
+    } catch (error) {
+        console.error(`${MODULE_ID}: message delete failed`, error);
+        showHostNotice(String(error?.message || '删除失败，请重试'), 'error');
+        return false;
+    } finally {
+        suppressSync = previousSuppressSync;
+        rollbackBusy = false;
+        document.body.classList.remove('homer-rollback-busy');
+        queueMessageMenuRender();
+    }
+}
+
+async function handleMessageMenuAction(action, target) {
+    const resolved = resolveMessageMenuTarget(target);
+    if (!resolved) {
+        showHostNotice('目标消息已经变化，未执行操作', 'warning');
+        return;
+    }
+    if ((generationBusy || rollbackBusy || loadingLaunch) && action !== 'copy') {
+        showHostNotice('当前操作完成后再修改对话', 'warning');
+        return;
+    }
+    try {
+        if (action === 'copy') {
+            await copyMessageText(resolved.message);
+            return;
+        }
+        if (action === 'edit') {
+            await openNativeMessageEditor(resolved);
+            return;
+        }
+        if (action === 'rollback') {
+            await rollbackToMessage(resolved);
+            return;
+        }
+        if (action === 'delete') {
+            await deleteCloudMessage(resolved);
+            return;
+        }
+        if (action === 'swipe-left' || action === 'swipe-right') {
+            generationBusy = true;
+            document.body.classList.add('homer-generating');
+            queueMessageMenuRender();
+            try {
+                if (!await truncateAfterMessage(resolved, '切换候选回复')) {
+                    return;
+                }
+                const current = resolveMessageMenuTarget(resolved);
+                if (!current) {
+                    throw new Error('目标消息已经变化');
+                }
+                dialogueEventLogMuted += 1;
+                try {
+                    const context = getContext();
+                    if (action === 'swipe-left') {
+                        await context.swipe.left();
+                    } else {
+                        await context.swipe.right();
+                    }
+                } finally {
+                    dialogueEventLogMuted = Math.max(0, dialogueEventLogMuted - 1);
+                }
+                await logDialogueEvent('swipe', current.messageIndex, current.message);
+                scheduleSync(100);
+            } finally {
+                generationBusy = false;
+                document.body.classList.remove('homer-generating');
+                queueMessageMenuRender();
+            }
+            return;
+        }
+        if (['continue', 'regenerate', 'next'].includes(action)) {
+            await runAction(action, { messageTarget: resolved });
+        }
+    } catch (error) {
+        console.error(`${MODULE_ID}: message menu action failed`, action, error);
+        showHostNotice(String(error?.message || '操作失败，请重试'), 'error');
+    }
+}
+
+function installMessageMenu() {
     const chat = document.querySelector('#chat');
     if (!chat) {
-        window.setTimeout(installMessageActions, 120);
+        window.setTimeout(installMessageMenu, 120);
         return;
     }
-    chat.addEventListener('click', event => {
-        const button = event.target.closest('[data-homer-message-action]');
-        if (!button || !chat.contains(button)) {
-            return;
+    if (chat.dataset.homerMessageMenuInstalled !== 'true') {
+        chat.dataset.homerMessageMenuInstalled = 'true';
+        chat.addEventListener('pointerdown', event => {
+            if (event.button !== 0 || event.isPrimary === false || isInteractiveMessageTarget(event.target)) {
+                return;
+            }
+            const element = eventMessageElement(event);
+            if (!element) {
+                return;
+            }
+            clearMessagePress();
+            messagePressStart = {
+                x: Number(event.clientX),
+                y: Number(event.clientY),
+                pointerId: event.pointerId,
+            };
+            messagePressTarget = messageMenuTargetFromElement(element, {
+                x: messagePressStart.x,
+                y: messagePressStart.y,
+            });
+            if (!messagePressTarget) {
+                clearMessagePress();
+                return;
+            }
+            messagePressTimer = window.setTimeout(() => {
+                const target = messagePressTarget;
+                if (target) {
+                    suppressMessageClickUntil = Date.now() + 700;
+                    window.getSelection?.()?.removeAllRanges?.();
+                    openMessageMenu(target);
+                }
+                clearMessagePress();
+            }, MESSAGE_LONG_PRESS_DELAY);
+        }, { passive: true });
+        chat.addEventListener('pointermove', event => {
+            if (!messagePressStart || event.pointerId !== messagePressStart.pointerId) {
+                return;
+            }
+            const distance = Math.hypot(
+                Number(event.clientX) - messagePressStart.x,
+                Number(event.clientY) - messagePressStart.y,
+            );
+            if (distance > MESSAGE_LONG_PRESS_MOVE_TOLERANCE) {
+                clearMessagePress();
+            }
+        }, { passive: true });
+        for (const eventName of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+            chat.addEventListener(eventName, clearMessagePress, { passive: true });
         }
-        event.preventDefault();
-        event.stopPropagation();
-        void handleMessageAction(button);
-    });
-    messageActionObserver?.disconnect();
-    messageActionObserver = new MutationObserver(queueMessageActionRender);
-    messageActionObserver.observe(chat, { childList: true, subtree: true });
-    queueMessageActionRender();
+        chat.addEventListener('contextmenu', event => {
+            const element = eventMessageElement(event);
+            if (!element || element.querySelector('.edit_textarea')) {
+                return;
+            }
+            clearMessagePress();
+            event.preventDefault();
+            event.stopPropagation();
+            openMessageMenu(messageMenuTargetFromElement(element, {
+                x: event.clientX,
+                y: event.clientY,
+            }));
+        });
+        chat.addEventListener('click', event => {
+            if (Date.now() >= suppressMessageClickUntil || !eventMessageElement(event)) {
+                return;
+            }
+            event.preventDefault();
+            event.stopImmediatePropagation();
+        }, true);
+        chat.addEventListener('keydown', event => {
+            const keyboardMenu = event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10');
+            if (!keyboardMenu) {
+                return;
+            }
+            const element = eventMessageElement(event)
+                || (document.activeElement instanceof Element
+                    ? document.activeElement.closest('#chat .mes.homer-message-menu-target')
+                    : null);
+            if (!element) {
+                return;
+            }
+            event.preventDefault();
+            const rect = element.getBoundingClientRect();
+            openMessageMenu(messageMenuTargetFromElement(element, {
+                x: rect.left + rect.width / 2,
+                y: rect.top + Math.min(rect.height / 2, 80),
+            }));
+        });
+    }
+    messageMenuObserver?.disconnect();
+    messageMenuObserver = new MutationObserver(queueMessageMenuRender);
+    messageMenuObserver.observe(chat, { childList: true, subtree: true });
+    ensureMessageMenuDialog();
+    queueMessageMenuRender();
 }
 
 async function runAction(type, options = {}) {
@@ -2175,14 +2690,29 @@ async function runAction(type, options = {}) {
         return;
     }
     const context = getContext();
-    const messageIndex = Number(options.messageIndex);
+    const target = options.messageTarget || (
+        Number.isInteger(Number(options.messageIndex))
+            ? messageMenuTargetForIndex(Number(options.messageIndex))
+            : null
+    );
+    let resolved = target ? resolveMessageMenuTarget(target) : null;
+    if (target && !resolved) {
+        showHostNotice('目标消息已经变化，未执行生成', 'warning');
+        return;
+    }
+    const logMessage = resolved?.message || null;
     generationBusy = true;
     document.body.classList.add('homer-generating');
+    queueMessageMenuRender();
     try {
-        if (Number.isInteger(messageIndex) && messageIndex >= 0) {
+        if (resolved) {
             const label = type === 'regenerate' ? '重写' : type === 'next' ? '推进下一回' : '续写';
-            if (!await truncateAfterMessage(messageIndex, label)) {
+            if (!await truncateAfterMessage(resolved, label)) {
                 return;
+            }
+            resolved = resolveMessageMenuTarget(resolved);
+            if (!resolved) {
+                throw new Error('目标消息已经变化');
             }
         }
         dialogueEventLogMuted += 1;
@@ -2200,7 +2730,8 @@ async function runAction(type, options = {}) {
         }
         await logDialogueEvent(
             type === 'next' ? 'continue_next' : type,
-            Number.isInteger(messageIndex) ? messageIndex : context.chat.length - 1,
+            resolved?.messageIndex ?? context.chat.length - 1,
+            logMessage,
         );
     } catch (error) {
         console.error(`${MODULE_ID}: action failed`, error);
@@ -2211,7 +2742,7 @@ async function runAction(type, options = {}) {
         generationBusy = false;
         document.body.classList.remove('homer-generating');
         scheduleSync(100);
-        queueMessageActionRender();
+        queueMessageMenuRender();
     }
 }
 
@@ -2948,36 +3479,28 @@ function installEventHandlers() {
     eventSource.on(event_types.MESSAGE_SENT, messageIndex => {
         scheduleSync();
         void logDialogueEvent('message_send', Number(messageIndex));
-        queueMessageActionRender();
+        queueMessageMenuRender();
     });
     eventSource.on(event_types.MESSAGE_EDITED, messageIndex => {
         scheduleSync();
         void logDialogueEvent('message_edit', Number(messageIndex));
-        queueMessageActionRender();
+        queueMessageMenuRender();
     });
     eventSource.on(event_types.MESSAGE_DELETED, messageIndex => {
         scheduleSync();
         void logDialogueEvent('message_delete', Number(messageIndex));
-        queueMessageActionRender();
+        queueMessageMenuRender();
     });
     eventSource.on(event_types.MESSAGE_SWIPED, messageIndex => {
         scheduleSync();
         void logDialogueEvent('swipe', Number(messageIndex));
-        queueMessageActionRender();
+        queueMessageMenuRender();
     });
     for (const event of [event_types.MESSAGE_RECEIVED, event_types.MESSAGE_UPDATED]) {
         eventSource.on(event, () => {
             scheduleSync();
-            queueMessageActionRender();
+            queueMessageMenuRender();
         });
-    }
-    for (const event of [
-        event_types.CHARACTER_MESSAGE_RENDERED,
-        event_types.USER_MESSAGE_RENDERED,
-        event_types.MESSAGE_UPDATED,
-        event_types.MESSAGE_SWIPED,
-    ]) {
-        eventSource.on(event, () => window.setTimeout(installMessageRollbackControls, 0));
     }
     eventSource.on(event_types.GENERATION_STARTED, (_type, _options, dryRun) => {
         // SillyTavern and prompt extensions use dry-run generations to assemble or
@@ -2990,6 +3513,7 @@ function installEventHandlers() {
         generationSettleTimer = null;
         generationBusy = true;
         document.body.classList.add('homer-generating');
+        queueMessageMenuRender();
     });
     for (const event of [event_types.GENERATION_ENDED, event_types.GENERATION_STOPPED]) {
         eventSource.on(event, () => {
@@ -2998,13 +3522,15 @@ function installEventHandlers() {
                 generationBusy = false;
                 document.body.classList.remove('homer-generating');
                 generationSettleTimer = null;
+                queueMessageMenuRender();
             }, 300);
             scheduleSync(100);
         });
     }
     eventSource.on(event_types.CHAT_CHANGED, () => {
+        closeMessageMenu();
         window.setTimeout(renderPresetLists, 100);
-        window.setTimeout(queueMessageActionRender, 100);
+        window.setTimeout(queueMessageMenuRender, 100);
     });
     eventSource.on(event_types.SETTINGS_UPDATED, () => {
         void saveConversationExtensionSettings().catch(error => {
@@ -3068,7 +3594,7 @@ async function bootstrapLaunch(preloadedSession = null, administratorExtensionsP
         performance.mark('homer-bootstrap-cloud-loaded');
         buildRuntimeUi();
         installEventHandlers();
-        installMessageActions();
+        installMessageMenu();
         installTokenRefresh();
         // Native startup may normalize the API selectors after the early
         // core-ready configuration. Reapply the conversation bridge once all
