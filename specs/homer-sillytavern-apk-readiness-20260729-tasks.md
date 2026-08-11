@@ -26,6 +26,7 @@
 | HSA18 | 备份并部署生产，完成安全、许可和回滚验收 | Done | 2026-08-08 生产 runtime 已原子切换到 `/opt/homer-dialogue-runtime/releases/20260808-182614`；backend/dialogue/Nginx active，8008/8091 仅 loopback，webpack `5.105.4`，内外 Homer health 与 dialogue `/csrf-token` 均为 200，`CONTENT_MODE=local_only`。最终真实登录 Chromium 在桌面和 390px 均退出加载层、显示 5 条目标会话消息，runtime 为 `homer-runtime-ready` 且无 pending，RoleplayHub sandbox 精确为 `allow-scripts`，page/console/network error 均为 0；release 启动后 CSRF 403 为 0。 |
 | HSA19 | 更新项目记忆、聚焦提交并推送 | Done | 生产卡死修复、回归测试、部署器守卫、SPEC 和两条稳定错误记忆已提交为 `fa9067a`（`fix: stabilize Homer dialogue runtime startup`）并推送 `origin/main`；用户 `.thm`、运行数据、截图、token、Cookie、secrets 和临时清理脚本均未提交。 |
 | HSA20 | 下线平台级许可/源码入口并阻止旧 URL 回退 | Done | 2026-08-12 删除共享侧栏“许可”、信息中心许可卡片和 `frontend/app/open-source.html`；前端归档 86 文件且不含该页面，部署器会删除远端残留并校验精确 Nginx 404。线上文件不存在、旧 URL=404、`layout.js` 无旧 href、`info.html` 无许可文案；backend/dialogue/Nginx active，8008 health、8091 `/csrf-token`、公网 health 和 `CONTENT_MODE=local_only` 通过。真实 Chromium 1440×900 与 390×844 均无许可文本/旧链接、无横向溢出，console/page error=0。 |
+| HSA21 | 清理生产历史备份并固化最近一组保留策略 | Done | `/opt/ai-fengyue-backend/backups/` 删除 55 个历史项、43,103,877,141 bytes；最终仅保留当前 SQLite + 前端源码归档，磁盘可用空间约 41.8 GB。部署器在全部生产验收后将托管 DB/前端备份各裁剪到 1；本地自测、`py_compile`、`git diff --check` 和最终线上完整性/健康检查通过。 |
 
 ## 固定公共扩展
 
@@ -51,5 +52,6 @@
 - 原版 ST 浏览器结果包含：真实生成、逐消息动作、实时回溯、扩展设置持久化、关键词侧栏、普通用户 403、桌面/移动布局。
 - 2026-08-06 本地收尾：许可页真实 Chromium 桌面/390px 通过；TavernHelper 锁定投影补充确认 `extensions.tavern_helper.scripts` 不含正文；重新启动隔离栈后，原版 ST 与 Homer runtime 两套 Chromium E2E 均通过，四个端口验收后已按登记 PID 停止。
 - 2026-08-08 生产卡死修复：`/module/dialogue/` 下的根相对 API/CSRF 请求统一进入 cookie-scoped 模块路径，核心 ESM 只保留单一 mounted URL；MacroEngine、SlashCommandParser/power-user、extension prompt 常量和 TTS provider 的启动循环改为依赖无关状态桥、常量下沉与惰性读取。生产桌面/390px 对《黎明之契2.71》真实存档验证 5 条消息可见，加载器隐藏、iframe opacity=1、无启动循环/CSRF/资源失败。
-- 2026-08-12 平台许可入口下线：桌面截图 `output/playwright/license-removal-desktop.png`、移动截图 `output/playwright/license-removal-mobile.png`；侧栏工具链接精确为 `创作/历史/收藏`，手机底栏为 `探索/群聊/创作/历史对话/我的`。本次重试发现备份目录占满磁盘，仅清理失败产生的 `20260812-015441` 不完整 SQLite backup/journal，保留 `20260812-015059` 有效恢复点；当前磁盘约 413 MB 可用，完整部署前需另行处理历史备份保留策略。
+- 2026-08-12 平台许可入口下线：桌面截图 `output/playwright/license-removal-desktop.png`、移动截图 `output/playwright/license-removal-mobile.png`；侧栏工具链接精确为 `创作/历史/收藏`，手机底栏为 `探索/群聊/创作/历史对话/我的`。本次重试发现备份目录占满磁盘，仅清理失败产生的 `20260812-015441` 不完整 SQLite backup/journal，保留 `20260812-015059` 有效恢复点；当时磁盘约 413 MB 可用，历史备份保留待办随后由 HSA21 完成。
+- 2026-08-12 历史备份收敛：先验证 live 与 `20260812-015059` 恢复库 `quick_check=ok`、旧前端 tar 可读，再删除备份目录直属历史项并生成当前恢复集。最终仅有 `ai_fengyue-current-20260811-183028.sqlite3`（1,776,779,264 bytes）和 `frontend-source-current-20260811-183028.tgz`（1,955,764 bytes，130 entries）；删除 55 项共 43,103,877,141 bytes，可用空间为 41,801,490,432 bytes。SQLite 临时 `-wal/-shm` 已在确认 WAL 为 0 后清理，前端归档排除 `media-cache/download`。
 - 收尾清理：两条无消息诊断会话及其 16 条会话表镜像、2 条 runtime profile 已在单事务中精确删除；root-only 定向恢复库为 `/opt/ai-fengyue-backend/data/backups/diagnostic-conversations-before-20260808-103812.sqlite3`（mode 600），恢复库和 live SQLite 均 `quick_check=ok`。

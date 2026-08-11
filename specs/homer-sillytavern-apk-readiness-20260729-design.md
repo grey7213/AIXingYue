@@ -109,6 +109,7 @@ systemd homer-dialogue.service
 - runtime 源码目录和数据目录分离；源码替换使用版本化临时目录 + 原子切换，数据目录不随部署覆盖。
 - Nginx 的 dialogue location 使用独立 CSP（`frame-ancestors 'self'`）并复用 `offline_dev_proxy.py` 已验证的根相对路径映射；站点全局 `frame-ancestors 'none'` 不套用到该模块响应。
 - 修改远端 Nginx、systemd、runtime 前建立时间戳备份；SSH 使用 keepalive/有限重试，健康检查或传输失败时以独立重连恢复配置/源码链接并重启旧服务，不迁移或删除 SQLite。
+- `/opt/ai-fengyue-backend/backups/` 的部署器托管恢复集固定为 retention=1：全部服务、Nginx、内外 health、`CONTENT_MODE`、SQLite 和前端守卫通过后，数据库备份与排除 `media-cache/download` 的前端源码归档各只保留最近一个。裁剪只匹配部署器的 `before-community-versions/current` 命名，不触碰 `data/backups`、安全备份或其他目录；裁剪失败记录告警，不触发已成功部署的回滚。
 - 2026-08-12 起不再发布平台级许可/源码页面：共享侧栏和信息中心移除入口，部署归档不再要求 `app/open-source.html`，解包后显式删除服务器旧文件，并验证直接 URL 为 404。第三方许可证和来源记录继续保留在源码与内部文档中；本 UI 决策不构成许可义务已解除的判断。
 
 ### 子路径启动稳定性

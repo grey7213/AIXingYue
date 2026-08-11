@@ -71,10 +71,10 @@
   Fix: 对明确退役的页面增加优先级更高的精确 `location = /app/<page>.html { return 404; }`，同时从归档移除文件、部署时删除远端残留，并把直接 URL 状态码写入部署守卫。
   Verify: 2026-08-12 `/app/open-source.html` 线上返回 404，服务器文件不存在，`layout.js` 无旧链接、`info.html` 无许可卡片；Chromium 1440×900/390×844 均无“许可”文本或旧 href、无横向溢出，console/page error=0。
 
-- Symptom: 重试部署在创建 SQLite 备份时出现 `database or disk is full`，随后连很小的 Nginx 备份也报 `No space left on device`。
-  Cause: `/opt/ai-fengyue-backend/backups/` 长期保留多个约 1.5–1.8 GB 的完整 SQLite 备份；失败的 SQLite backup 还会留下大体积不完整目标文件和 journal。
-  Fix: 先按本次部署时间戳精确识别并删除失败产生的不完整 backup/journal，保留 live SQLite 和最近 `quick_check=ok` 恢复点；若本轮已有有效备份，配置重试只做带小型独立备份的定向部署。历史备份保留策略需另行获得用户授权后处理。
-  Verify: 2026-08-12 仅删除 `...20260812-015441.sqlite3` 及其 journal（约 558 MB），保留 `...20260812-015059.sqlite3`；随后 Nginx 定向部署、`nginx -t`、三服务 active、8008 health、8091 `/csrf-token` 和公网 health 全部通过。磁盘仍仅约 413 MB 可用，后续完整部署前必须先处理备份保留策略。
+- Symptom: 重试部署在创建 SQLite 备份时出现 `database or disk is full`，随后连很小的 Nginx 备份也报 `No space left on device`；手工重建备份时还可能留下 `-wal/-shm`，或把 `media-cache/download` 打进前端源码包导致归档膨胀到 GB 级。
+  Cause: `/opt/ai-fengyue-backend/backups/` 曾长期累积多个约 1.5–1.8 GB 的完整 SQLite、定向目录和前端归档，部署器没有成功后保留策略；SQLite 临时文件校验后再改名会把辅助文件留在旧文件名旁，未排除运行数据的前端 tar 也不是源码恢复包。
+  Fix: 该目录只保留最近一个已验证 SQLite 和一个前端源码归档。清理前验证 live/最近恢复库 `quick_check` 与 tar，精确删除目录直属旧项，再用 SQLite Online Backup 生成当前库、切换到 `journal_mode=DELETE` 并以 immutable 只读方式校验；前端归档固定排除 `media-cache/download`。部署器仅在全部生产验收成功后，把自身管理的 `before-community-versions/current` 两组文件各裁剪到最近 1 个；裁剪失败只告警，不回滚已经验收成功的部署，也不触碰其他目录的安全/业务备份。
+  Verify: 2026-08-12 从该目录删除 55 个历史项，共 43,103,877,141 bytes（约 40.14 GiB）；最终只剩 `ai_fengyue-current-20260811-183028.sqlite3`（`quick_check=ok`）和 `frontend-source-current-20260811-183028.tgz`（130 entries，约 1.96 MB），可用空间由 430,194,688 增至 41,801,490,432 bytes。backend/dialogue/Nginx active，8008 health、8091 `/csrf-token`、公网 health 和 `CONTENT_MODE=local_only` 均通过。
 
 - Symptom: 删除旧预设助手/全局操作坞后，对话页一直停在加载层；或明明已把 `st-yuzi-phone` 写进默认 disabled，存量账号仍会加载手机弹窗资源。
   Cause: Homer bridge 启动链仍引用已删除的 `presetOverrides`、`restorePresetDefaults()`、`applyPresetOverrides()`，初始化异常发生在 ready class 设置前；同时 SillyTavern 的用户级 `extension_settings.disabledExtensions` 和会话快照会覆盖默认 settings，单改默认 JSON 不能约束存量账号。

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import argparse
+import base64
 import hashlib
+import json
 import posixpath
 import re
 import secrets
@@ -81,6 +83,17 @@ FRONTEND_EXCLUDED_TOP_LEVEL = {
     "node_modules",
     "output",
 }
+MANAGED_BACKUP_RETENTION = 1
+MANAGED_BACKUP_PATTERNS = {
+    "database": (
+        r"ai_fengyue-before-community-versions-\d{8}-\d{6}\.sqlite3",
+        r"ai_fengyue-current-\d{8}-\d{6}\.sqlite3",
+    ),
+    "frontend": (
+        r"frontend-source-before-community-versions-\d{8}-\d{6}\.tgz",
+        r"frontend-source-current-\d{8}-\d{6}\.tgz",
+    ),
+}
 DOMAIN_NAME_RE = re.compile(
     r"(?=.{1,253}\Z)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}\Z"
 )
@@ -91,8 +104,14 @@ def log(message: str) -> None:
     print(f"[ai-fengyue-deploy] {message}", flush=True)
 
 
-def run(ssh: paramiko.SSHClient, command: str, check: bool = True) -> str:
-    log(f"remote: {command}")
+def run(
+    ssh: paramiko.SSHClient,
+    command: str,
+    check: bool = True,
+    *,
+    log_label: str | None = None,
+) -> str:
+    log(f"remote: {log_label or command}")
     stdin, stdout, stderr = ssh.exec_command(command)
     out = stdout.read().decode("utf-8", errors="replace")
     err = stderr.read().decode("utf-8", errors="replace")
@@ -177,6 +196,88 @@ def remote_exists(sftp: paramiko.SFTPClient, path: str) -> bool:
         return True
     except FileNotFoundError:
         return False
+
+
+def managed_backup_retention_script(backup_dir: str, preferred: dict[str, str]) -> str:
+    payload = json.dumps(
+        {
+            "backup_dir": backup_dir,
+            "preferred": preferred,
+            "patterns": MANAGED_BACKUP_PATTERNS,
+            "retention": MANAGED_BACKUP_RETENTION,
+        },
+        separators=(",", ":"),
+    )
+    return f"""
+import json
+from pathlib import Path
+import re
+
+payload = json.loads({payload!r})
+root = Path(payload["backup_dir"])
+if payload["retention"] != 1:
+    raise RuntimeError("unsupported managed backup retention")
+if not root.is_absolute() or root.is_symlink() or not root.is_dir() or root.resolve() != root:
+    raise RuntimeError("refusing unexpected managed backup directory: {{}}".format(root))
+
+groups = {{name: [] for name in payload["patterns"]}}
+for path in root.iterdir():
+    matched_group = None
+    for group, patterns in payload["patterns"].items():
+        if any(re.fullmatch(pattern, path.name) for pattern in patterns):
+            matched_group = group
+            break
+    if matched_group is None:
+        continue
+    if path.is_symlink() or not path.is_file() or path.parent != root:
+        raise RuntimeError("refusing unsafe managed backup entry: {{}}".format(path))
+    groups[matched_group].append(path)
+
+kept = {{}}
+removed = []
+for group, candidates in groups.items():
+    preferred_name = payload["preferred"].get(group, "")
+    if preferred_name and Path(preferred_name).name != preferred_name:
+        raise RuntimeError("unsafe preferred managed backup name: {{}}".format(preferred_name))
+    if preferred_name:
+        target = root / preferred_name
+        if target not in candidates:
+            raise RuntimeError("preferred managed backup is missing: {{}}".format(target))
+    else:
+        target = max(candidates, key=lambda item: (item.stat().st_mtime_ns, item.name)) if candidates else None
+    if target is not None:
+        kept[group] = target.name
+    for path in candidates:
+        if path == target:
+            continue
+        size = path.stat().st_size
+        path.unlink()
+        removed.append({{"group": group, "name": path.name, "bytes": size}})
+
+for group, patterns in payload["patterns"].items():
+    remaining = [
+        path
+        for path in root.iterdir()
+        if path.is_file() and not path.is_symlink() and any(re.fullmatch(pattern, path.name) for pattern in patterns)
+    ]
+    expected = 1 if group in kept else 0
+    if len(remaining) != expected:
+        raise RuntimeError("unexpected managed backup count for {{}}: {{}}".format(group, len(remaining)))
+
+print(json.dumps({{
+    "retention": payload["retention"],
+    "kept": kept,
+    "removed_count": len(removed),
+    "removed_bytes": sum(item["bytes"] for item in removed),
+    "removed": removed,
+}}, separators=(",", ":")))
+""".strip()
+
+
+def managed_backup_retention_command(backup_dir: str, preferred: dict[str, str]) -> str:
+    script = managed_backup_retention_script(backup_dir, preferred)
+    encoded = base64.b64encode(script.encode("utf-8")).decode("ascii")
+    return f"python3 -c \"import base64;exec(base64.b64decode('{encoded}'))\""
 
 
 def sha256_file(path: Path) -> str:
@@ -867,6 +968,8 @@ def main() -> int:
     dialogue_unit_existed = False
     patcher_nginx_backup = ""
     dialogue_unit_backup = ""
+    remote_db_backup = ""
+    frontend_backup = ""
     try:
         ssh = connect_with_retries(args.host, args.user, args.key)
         sftp = ssh.open_sftp()
@@ -900,6 +1003,8 @@ def main() -> int:
             "assert a==\"ok\" and b==\"ok\"; dst.close(); src.close()' "
             f"{remote_db} {remote_db_backup}; chmod 600 {remote_db_backup}; fi",
         )
+        if run(ssh, f"if [ -f {remote_db_backup} ]; then printf 1; else printf 0; fi").strip() != "1":
+            remote_db_backup = ""
         run(ssh, "id -u ai-xingyue >/dev/null 2>&1 || useradd --system --home /nonexistent --shell /usr/sbin/nologin ai-xingyue")
         run(ssh, f"cp {NGINX_CONF} {NGINX_CONF}.bak-ai-xingyue-{timestamp}")
         run(ssh, f"[ -f {PATCHER_NGINX_CONF} ] && cp {PATCHER_NGINX_CONF} {patcher_nginx_backup} || true")
@@ -1080,8 +1185,11 @@ def main() -> int:
                     f"if [ -d {FRONTEND_REMOTE} ]; then tar -C {posixpath.dirname(FRONTEND_REMOTE)} -czf {frontend_backup} "
                     f"--exclude='{posixpath.basename(FRONTEND_REMOTE)}/media-cache' "
                     f"--exclude='{posixpath.basename(FRONTEND_REMOTE)}/download' "
-                    f"{posixpath.basename(FRONTEND_REMOTE)}; chmod 600 {frontend_backup}; fi",
+                    f"{posixpath.basename(FRONTEND_REMOTE)} && chmod 600 {frontend_backup} && "
+                    f"tar -tzf {frontend_backup} >/dev/null; fi",
                 )
+                if run(ssh, f"if [ -f {frontend_backup} ]; then printf 1; else printf 0; fi").strip() != "1":
+                    frontend_backup = ""
                 log(f"uploading frontend from {args.frontend} -> {FRONTEND_REMOTE}")
                 remote_frontend_archive = f"/tmp/homer-frontend-{timestamp}.tgz"
                 put_file(sftp, frontend_package["path"], remote_frontend_archive, 0o600)
@@ -1255,6 +1363,20 @@ def main() -> int:
         # Keep deploy verification read-only. Registration/email probes send real
         # messages and consume abuse-control quotas, so they belong in an explicit
         # post-deploy acceptance test rather than the deploy helper.
+        preferred_backups = {
+            "database": posixpath.basename(remote_db_backup) if remote_db_backup else "",
+            "frontend": posixpath.basename(frontend_backup) if frontend_backup else "",
+        }
+        try:
+            retention_result = run(
+                ssh,
+                managed_backup_retention_command(backup_dir, preferred_backups),
+                log_label="prune managed deployment backups to retention=1",
+            ).strip()
+            if retention_result:
+                log(f"managed backup retention result: {retention_result}")
+        except Exception as exc:
+            log(f"warning: deployment succeeded but managed backup retention failed: {exc}")
         log("deployment complete")
         return 0
     except Exception:
