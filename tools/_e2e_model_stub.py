@@ -115,49 +115,44 @@ class ModelStubHandler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-cache, no-store")
             self.send_header("Connection", "close")
             self.end_headers()
-            chunks = [
-                {
+            chunks = [{
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": MODEL_ID,
+                "choices": [{
+                    "index": 0,
+                    "delta": {"role": "assistant"},
+                    "finish_reason": None,
+                }],
+            }]
+            for part in ("惑梦", "隔离", "模型", f"回复 #{sequence}", "。"):
+                chunks.append({
                     "id": completion_id,
                     "object": "chat.completion.chunk",
                     "created": created,
                     "model": MODEL_ID,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {"role": "assistant"},
-                            "finish_reason": None,
-                        }
-                    ],
-                },
-                {
-                    "id": completion_id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
-                    "model": MODEL_ID,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {"content": answer},
-                            "finish_reason": None,
-                        }
-                    ],
-                },
-                {
-                    "id": completion_id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
-                    "model": MODEL_ID,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {},
-                            "finish_reason": "stop",
-                        }
-                    ],
-                },
-            ]
+                    "choices": [{
+                        "index": 0,
+                        "delta": {"content": part},
+                        "finish_reason": None,
+                    }],
+                })
+            chunks.append({
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": MODEL_ID,
+                "choices": [{
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": "stop",
+                }],
+            })
             for chunk in chunks:
                 self.wfile.write(b"data: " + json_bytes(chunk) + b"\n\n")
+                self.wfile.flush()
+                time.sleep(0.11)
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
             self.close_connection = True

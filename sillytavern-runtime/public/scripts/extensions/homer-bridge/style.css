@@ -2247,8 +2247,9 @@ body.homer-runtime #send_but:hover {
     body.homer-runtime #chat {
         padding:
             calc(74px + env(safe-area-inset-top))
-            10px
-            158px;
+            calc(10px + env(safe-area-inset-right))
+            158px
+            calc(42px + env(safe-area-inset-left));
         scroll-padding-bottom: 158px;
     }
 
@@ -2546,13 +2547,154 @@ body.homer-runtime #chat .mes_text * {
     text-shadow: none;
 }
 
-/* Message chrome lives in the long-press/right-click menu. Keep the native
- * elements available for upstream editing logic, but never reserve permanent
- * space for names, timestamps, ellipsis/edit buttons, or swipe controls. */
-body.homer-runtime #chat .ch_name,
-body.homer-runtime #chat .mes_buttons,
+/* Keep the compact identity row from the supplied Homer UI while retaining the
+ * precise long-press/right-click menu for the full action set. */
+body.homer-runtime #chat .ch_name {
+    display: flex !important;
+    min-width: 0;
+    min-height: 36px;
+    margin: 0 0 7px;
+    align-items: center !important;
+    justify-content: space-between;
+    gap: 10px;
+    color: var(--homer-accent);
+}
+
+body.homer-runtime #chat .mes[is_system="true"] .ch_name {
+    display: none !important;
+}
+
+body.homer-runtime #chat .ch_name > .flex-container:first-child {
+    min-width: 0;
+    overflow: hidden;
+}
+
+body.homer-runtime #chat .ch_name .alignItemsBaseline {
+    display: grid !important;
+    min-width: 0;
+    align-items: center !important;
+    grid-template-columns: minmax(0, auto) auto 1fr;
+    grid-template-areas:
+        "name version spare"
+        "time help spare";
+    column-gap: 6px;
+    row-gap: 2px;
+}
+
+body.homer-runtime #chat .ch_name .name_text {
+    min-width: 0;
+    max-width: min(42vw, 360px);
+    overflow: hidden;
+    grid-area: name;
+    color: var(--homer-accent);
+    font-size: 13px;
+    font-weight: 820;
+    letter-spacing: 0.02em;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+body.homer-runtime #chat .mes[is_user="true"] .ch_name .name_text {
+    color: #a54835;
+}
+
+body.homer-runtime #chat .homer-message-version {
+    display: inline-flex;
+    min-height: 18px;
+    padding: 0 6px;
+    align-items: center;
+    grid-area: version;
+    border: 1px solid rgba(152, 47, 79, 0.2);
+    border-radius: 999px;
+    color: #8f2940;
+    background: rgba(152, 47, 79, 0.08);
+    font-size: 10px;
+    font-weight: 780;
+    line-height: 1;
+    white-space: nowrap;
+}
+
+body.homer-runtime #chat .timestamp {
+    display: inline-flex !important;
+    min-width: 0;
+    align-items: center;
+    grid-area: time;
+    color: #8f8178;
+    font-size: 10px;
+    font-weight: 560;
+    line-height: 1.35;
+    white-space: nowrap;
+}
+
+body.homer-runtime #chat .homer-message-help {
+    display: inline-flex;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    cursor: pointer;
+    align-items: center;
+    justify-content: center;
+    grid-area: help;
+    border: 0;
+    border-radius: 50%;
+    color: #fff;
+    background: var(--homer-accent);
+    box-shadow: none;
+    font-family: inherit;
+    font-size: 10px;
+    font-weight: 800;
+    line-height: 1;
+}
+
+body.homer-runtime #chat .homer-message-help:hover,
+body.homer-runtime #chat .homer-message-help:focus-visible {
+    background: #762038;
+    outline: 2px solid rgba(152, 47, 79, 0.22);
+    outline-offset: 2px;
+}
+
+body.homer-runtime #chat .mes_buttons {
+    display: inline-flex !important;
+    flex: 0 0 auto;
+    min-width: 0;
+    padding: 0;
+    align-items: center;
+    gap: 3px;
+    overflow: visible;
+}
+
+body.homer-runtime #chat .mes_buttons > * {
+    display: none !important;
+}
+
+body.homer-runtime #chat .mes_buttons > .extraMesButtonsHint,
+body.homer-runtime #chat .mes_buttons > .mes_edit {
+    display: inline-flex !important;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    cursor: pointer;
+    align-items: center;
+    justify-content: center;
+    border-radius: 9px;
+    color: #74675f;
+    filter: none;
+    opacity: 0.82;
+}
+
+body.homer-runtime #chat .mes_buttons > .extraMesButtonsHint:hover,
+body.homer-runtime #chat .mes_buttons > .extraMesButtonsHint:focus-visible,
+body.homer-runtime #chat .mes_buttons > .mes_edit:hover,
+body.homer-runtime #chat .mes_buttons > .mes_edit:focus-visible {
+    color: var(--homer-accent);
+    background: rgba(152, 47, 79, 0.08);
+    opacity: 1;
+    outline: none;
+}
+
+body.homer-runtime #chat .mes_ghost,
+body.homer-runtime #chat .timestamp-icon,
 body.homer-runtime #chat .extraMesButtons,
-body.homer-runtime #chat .extraMesButtonsHint,
 body.homer-runtime #chat .homer-message-rollback,
 body.homer-runtime #chat .homer-message-actions,
 body.homer-runtime #chat .swipe_left,
@@ -2561,6 +2703,11 @@ body.homer-runtime #chat .swipe_right,
 body.homer-runtime #chat .swipes-counter,
 body.homer-runtime #chat .mes_edit_buttons {
     display: none !important;
+}
+
+body.homer-runtime.homer-generating #chat .mes.last_mes .mes_buttons {
+    pointer-events: none;
+    opacity: 0.42;
 }
 
 body.homer-runtime #chat .mes.homer-message-editing .ch_name {
@@ -2618,7 +2765,7 @@ body.homer-runtime #chat .mes.homer-message-menu-target:focus-visible {
 }
 
 body.homer-runtime #chat .mes_text {
-    padding-top: 1px;
+    padding-top: 3px;
 }
 
 body.homer-runtime #chat .mes .avatar img {
@@ -3037,6 +3184,25 @@ body.homer-runtime #send_but {
 @media (max-width: 640px) {
     body.homer-runtime #chat .mes {
         width: 100%;
+    }
+
+    body.homer-runtime #chat .ch_name {
+        gap: 5px;
+    }
+
+    body.homer-runtime #chat .ch_name .name_text {
+        max-width: min(48vw, 210px);
+        font-size: 12px;
+    }
+
+    body.homer-runtime #chat .timestamp {
+        font-size: 9px;
+    }
+
+    body.homer-runtime #chat .mes_buttons > .extraMesButtonsHint,
+    body.homer-runtime #chat .mes_buttons > .mes_edit {
+        width: 26px;
+        height: 26px;
     }
 
     /* Character-provided helper panels commonly anchor themselves beside a

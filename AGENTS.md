@@ -66,6 +66,21 @@
 
 ## Reusable Pitfalls
 
+- Symptom: 模型桩明明逐块发送 SSE，SillyTavern 也设置了 `stream_openai=true`，但浏览器仍在生成结束时一次性显示完整回复，发送/续写/重写/下回/new Swipe 看起来像假流式。
+  Cause: SillyTavern 的 `forwardFetchResponse()` 在部分代理链路中会丢失模型响应的 `Content-Type`；旧 `offline_dev_proxy.py` 只按上游响应头判断 `text/event-stream`，缺头时就读取并缓冲完整响应。
+  Fix: 代理仅对 dialogue runtime 的精确 `POST /api/backends/chat-completions/generate` 读取请求 JSON，并在严格布尔 `stream: true` 时强制逐块转发/flush、补 `text/event-stream`、省略 `Content-Length`。Homer bridge 同时在连接配置、会话重申、生成开始和 settings 更新时重复锁定 `stream_openai=true`。
+  Verify: 2026-08-12 生产 Chromium 的普通发送、续写、重写、下回和最后候选右 Swipe 均在结束前产生 5 次可见正文更新、7 个流事件，delta 间隔约 110ms；既有候选左 Swipe 只切换、不伪装生成。
+
+- Symptom: 生产 E2E 已把临时角色的 `llm_model` 指向本地模型桩 preset，但实际请求仍落到站点默认模型，模型桩没有收到调用，容易误判统一流式已通过或已失败。
+  Cause: 原版 SillyTavern/Homer 对话实际模型还受会话 `homer_model_settings`、会话 settings overlay 和 `#custom_model_id` 控制；只改角色表不能保证当前会话使用该 preset。
+  Fix: 生产夹具同时写入会话级 `homer_model_settings`，进入生成前断言 `#custom_model_id`、保存后的模型 ID 和目标 option 都等于临时 preset；模型桩只监听 loopback，验收结束后清理 preset、角色、会话、runtime state 和用户。
+  Verify: 2026-08-12 生产结果记录 `customModel=savedModel=codex-hms-*`、`optionPresent=true`、`stub_loopback=true`；五类生成均取得真实增量，清理后 users/apps/conversations/preset 均为 0，SQLite `quick_check=ok`。
+
+- Symptom: 桌面消息头正常，但 390px 手机左侧关键词注入竖条会压住 `《角色名》`、版本或帮助按钮，页面本身又没有横向溢出，普通 overflow 检查发现不了遮挡。
+  Cause: 手机聊天区原先左右都只有 10px padding，而固定关键词 rail 占用了消息卡左侧安全区；消息头恢复后可用宽度变窄，几何区域发生重叠。
+  Fix: `@media (max-width:640px)` 下把 `#chat` 左侧 padding 固定为 `42px + env(safe-area-inset-left)`，右侧保持 `10px + safe-area`；浏览器验收同时比较 rail/header 的真实矩形，不只检查 document overflow。
+  Verify: 2026-08-12 生产 390×844 的全部角色消息头均 `keywordRailOverlaps=false`、`overflow=false`，帮助/更多/编辑可点击，长按菜单仍在安全区内。
+
 - Symptom: 已从前端归档和服务器磁盘删除某个 `/app/*.html` 页面，但直接访问旧 URL 仍返回 200 并显示 Web App 首页。
   Cause: Nginx 的 `location /app/ { try_files $uri $uri/ /app/index.html; }` 会把不存在的页面回退到 `/app/index.html`，仅删除静态文件不能形成 404。
   Fix: 对明确退役的页面增加优先级更高的精确 `location = /app/<page>.html { return 404; }`，同时从归档移除文件、部署时删除远端残留，并把直接 URL 状态码写入部署守卫。

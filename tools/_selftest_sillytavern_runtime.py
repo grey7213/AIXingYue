@@ -64,6 +64,43 @@ def test_internal_dialogue_mount_rewrite() -> None:
     print("PASS neutral internal dialogue mount/root-path rewrite")
 
 
+def test_dialogue_stream_request_detection() -> None:
+    stream_body = json.dumps(
+        {"model": "homer-offline-e2e", "stream": True, "messages": []}
+    ).encode("utf-8")
+    assert offline_dev_proxy.is_dialogue_stream_request(
+        target_is_dialogue=True,
+        method="POST",
+        upstream_path="/api/backends/chat-completions/generate",
+        request_body=stream_body,
+    )
+    assert offline_dev_proxy.is_dialogue_stream_request(
+        target_is_dialogue=True,
+        method="POST",
+        upstream_path="/api/backends/chat-completions/generate?connection=main",
+        request_body=stream_body,
+    )
+    assert not offline_dev_proxy.is_dialogue_stream_request(
+        target_is_dialogue=False,
+        method="POST",
+        upstream_path="/api/backends/chat-completions/generate",
+        request_body=stream_body,
+    )
+    assert not offline_dev_proxy.is_dialogue_stream_request(
+        target_is_dialogue=True,
+        method="POST",
+        upstream_path="/api/backends/chat-completions/generate",
+        request_body=b'{"stream":false}',
+    )
+    assert not offline_dev_proxy.is_dialogue_stream_request(
+        target_is_dialogue=True,
+        method="POST",
+        upstream_path="/api/backends/chat-completions/generate",
+        request_body=b"not-json",
+    )
+    print("PASS dialogue stream requests survive missing upstream content-type")
+
+
 def test_embedded_dialogue_request_mount_shim() -> None:
     index_source = (ROOT / "sillytavern-runtime" / "public" / "index.html").read_text(encoding="utf-8")
     assert "const dialogueMount = '/module/dialogue';" in index_source
@@ -979,6 +1016,7 @@ def test_conversation_character_rebinding(store: homer.Store) -> None:
 
 def main() -> int:
     test_internal_dialogue_mount_rewrite()
+    test_dialogue_stream_request_detection()
     test_embedded_dialogue_request_mount_shim()
     test_extension_prompt_constant_cycle_guard()
     test_slash_command_parser_cycle_guard()

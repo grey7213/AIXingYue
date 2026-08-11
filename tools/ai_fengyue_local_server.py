@@ -19524,11 +19524,29 @@ class Handler(BaseHTTPRequestHandler):
                 )
             except Exception:
                 runtime_profile = {}
+            locked_version: dict = {}
+            try:
+                version_id = str(conversation.get("version_id") or "")
+                version_row = ContentVersionStore(self.store.conn, self.store.lock).get_version(
+                    version_id,
+                    "character",
+                    app_id,
+                )
+                if version_row:
+                    locked_version = {
+                        "id": str(version_row.get("id") or ""),
+                        "version_no": int(version_row.get("version_no") or 0),
+                        "version_name": str(version_row.get("version_name") or "")[:80],
+                        "created_at": int(version_row.get("created_at") or 0),
+                    }
+            except Exception:
+                locked_version = {}
             payload["launch"] = {
                 "app_id": app_id,
                 "conversation_id": conversation_id,
                 "card": silly_card,
                 "conversation": conversation,
+                "version": locked_version,
                 "messages": messages,
                 "runtime_config": runtime_config,
                 "runtime_profile": runtime_profile or {},

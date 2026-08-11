@@ -804,6 +804,17 @@ function setAccessClasses(user) {
     document.documentElement.dataset.homerRole = isAdmin ? 'administrator' : 'user';
 }
 
+function enforceStreamingConfiguration() {
+    const changed = oai_settings.stream_openai !== true;
+    oai_settings.stream_openai = true;
+    const toggle = document.querySelector('#stream_toggle');
+    if (toggle instanceof HTMLInputElement && !toggle.checked) {
+        toggle.checked = true;
+    }
+    document.documentElement.dataset.homerStreaming = 'true';
+    return changed;
+}
+
 function applyConnectionConfiguration() {
     if (!session?.runtime || !launch?.bridge_token) {
         return;
@@ -826,7 +837,7 @@ function applyConnectionConfiguration() {
     oai_settings.custom_url = apiBase;
     oai_settings.custom_model = modelId;
     oai_settings.custom_include_headers = includeHeaders;
-    oai_settings.stream_openai = true;
+    enforceStreamingConfiguration();
     oai_settings.bypass_status_check = true;
     oai_settings.temp_openai = modelSettings.temperature;
     oai_settings.top_p_openai = modelSettings.top_p;
@@ -836,7 +847,6 @@ function applyConnectionConfiguration() {
     $('#custom_api_url_text').val(apiBase);
     $('#custom_model_id').val(modelId);
     $('#custom_include_headers').val(includeHeaders);
-    $('#stream_toggle').prop('checked', true);
     $('#temp_openai').val(modelSettings.temperature);
     $('#top_p_openai').val(modelSettings.top_p);
     $('#freq_pen_openai').val(modelSettings.frequency_penalty);
@@ -852,6 +862,7 @@ function applyConnectionConfiguration() {
 
 function reaffirmConversationConnection() {
     const modelId = conversationModelSettings().model_id || 'homer-cloud';
+    enforceStreamingConfiguration();
     setOnlineStatus(modelId);
     const composer = document.querySelector('#send_textarea');
     if (composer instanceof HTMLTextAreaElement) {
@@ -2346,6 +2357,142 @@ function openMessageMenu(target) {
     });
 }
 
+function normalizeCharacterVersionLabel(value) {
+    const raw = String(value || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+    if (!raw) {
+        return '';
+    }
+    if (/^version\s+/i.test(raw)) {
+        return `v${raw.replace(/^version\s+/i, '')}`;
+    }
+    if (/^v\s*\d/i.test(raw)) {
+        return raw.replace(/^v\s*/i, 'v');
+    }
+    if (/^\d+(?:\.\d+)*(?:\b|\s|·|-)/.test(raw)) {
+        return `v${raw}`;
+    }
+    return raw;
+}
+
+function currentCharacterVersionLabel() {
+    const data = launch?.card?.data && typeof launch.card.data === 'object'
+        ? launch.card.data
+        : {};
+    const version = launch?.version && typeof launch.version === 'object'
+        ? launch.version
+        : {};
+    const candidates = [
+        data.character_version,
+        version.version_name,
+        version.label,
+        Number(version.version_no) > 0 ? `v${Number(version.version_no)}` : '',
+    ];
+    for (const candidate of candidates) {
+        const label = normalizeCharacterVersionLabel(candidate);
+        if (label) {
+            return label;
+        }
+    }
+    return '';
+}
+
+function messageHeaderName(message) {
+    const raw = String(
+        message?.name
+        || (message?.is_user ? session?.user?.name : currentRoleName())
+        || (message?.is_user ? '你' : '角色'),
+    ).replace(/\s+/g, ' ').trim().slice(0, 120);
+    if (message?.is_user || /^《.+》/.test(raw)) {
+        return raw;
+    }
+    return `《${raw}》`;
+}
+
+function messageHeaderTime(message) {
+    const raw = message?.send_date || message?.extra?.homer_created_at || '';
+    let date;
+    if (typeof raw === 'number' || /^\d+$/.test(String(raw))) {
+        let timestamp = Number(raw || 0);
+        if (timestamp > 0 && timestamp < 1_000_000_000_000) {
+            timestamp *= 1000;
+        }
+        date = new Date(timestamp);
+    } else {
+        date = new Date(String(raw || ''));
+    }
+    if (!Number.isFinite(date.getTime())) {
+        return '';
+    }
+    return new Intl.DateTimeFormat('zh-CN', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hourCycle: 'h23',
+    }).format(date).replace(/\s+/g, ' ').trim();
+}
+
+function setTextIfChanged(element, text) {
+    if (element && element.textContent !== text) {
+        element.textContent = text;
+    }
+}
+
+function decorateMessageHeader(messageElement, message, messageIndex) {
+    const header = messageElement.querySelector('.ch_name');
+    const nameText = header?.querySelector('.name_text');
+    const timestamp = header?.querySelector('.timestamp');
+    const meta = nameText?.parentElement;
+    if (!header || !nameText || !timestamp || !meta) {
+        return;
+    }
+
+    setTextIfChanged(nameText, messageHeaderName(message));
+    setTextIfChanged(timestamp, messageHeaderTime(message));
+    timestamp.setAttribute('aria-label', `消息时间：${timestamp.textContent || '未知'}`);
+
+    let version = meta.querySelector('.homer-message-version');
+    const versionLabel = message?.is_user ? '' : currentCharacterVersionLabel();
+    if (versionLabel) {
+        if (!version) {
+            version = createElement('span', 'homer-message-version');
+            timestamp.before(version);
+        }
+        setTextIfChanged(version, versionLabel);
+        version.title = `当前角色版本：${versionLabel}`;
+    } else {
+        version?.remove();
+    }
+
+    let help = meta.querySelector('.homer-message-help');
+    if (!help) {
+        help = createElement('button', 'homer-message-help', '?');
+        help.type = 'button';
+        timestamp.after(help);
+    }
+    help.title = '查看这条消息的可用操作';
+    help.setAttribute('aria-label', `查看第 ${messageIndex + 1} 条消息的操作帮助`);
+
+    const more = header.querySelector('.extraMesButtonsHint');
+    if (more) {
+        more.classList.add('homer-message-more');
+        more.title = '更多消息操作';
+        more.tabIndex = 0;
+        more.setAttribute('role', 'button');
+        more.setAttribute('aria-label', `打开第 ${messageIndex + 1} 条消息的更多操作`);
+    }
+    const edit = header.querySelector('.mes_edit');
+    if (edit) {
+        edit.title = '编辑这条消息';
+        edit.tabIndex = 0;
+        edit.setAttribute('role', 'button');
+        edit.setAttribute('aria-label', `编辑第 ${messageIndex + 1} 条消息`);
+    }
+    header.dataset.homerMessageHeader = 'true';
+    header.dataset.homerMessageVersion = versionLabel;
+}
+
 function renderMessageMenuTargets() {
     const context = getContext();
     document.querySelectorAll('#chat .mes').forEach(messageElement => {
@@ -2365,6 +2512,7 @@ function renderMessageMenuTargets() {
             delete messageElement.dataset.homerMessageId;
             return;
         }
+        decorateMessageHeader(messageElement, message, index);
         messageElement.tabIndex = 0;
         messageElement.setAttribute('aria-haspopup', 'dialog');
         messageElement.setAttribute('aria-controls', 'homer-message-menu-dialog');
@@ -2404,7 +2552,7 @@ function eventMessageElement(event) {
 
 function isInteractiveMessageTarget(target) {
     return target instanceof Element && Boolean(target.closest(
-        'button, a, input, textarea, select, option, iframe, [contenteditable="true"], .mes_edit_buttons',
+        'button, a, input, textarea, select, option, iframe, [contenteditable="true"], .mes_buttons, .mes_edit_buttons',
     ));
 }
 
@@ -2652,6 +2800,18 @@ function installMessageMenu() {
             }));
         });
         chat.addEventListener('click', event => {
+            const menuTrigger = event.target instanceof Element
+                ? event.target.closest('.extraMesButtonsHint, .homer-message-help')
+                : null;
+            if (menuTrigger) {
+                const element = menuTrigger.closest('#chat .mes.homer-message-menu-target');
+                if (element) {
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                    openMessageMenu(messageMenuTargetFromElement(element));
+                }
+                return;
+            }
             if (Date.now() >= suppressMessageClickUntil || !eventMessageElement(event)) {
                 return;
             }
@@ -2659,6 +2819,22 @@ function installMessageMenu() {
             event.stopImmediatePropagation();
         }, true);
         chat.addEventListener('keydown', event => {
+            const headerTrigger = event.target instanceof Element
+                ? event.target.closest('.extraMesButtonsHint, .homer-message-help, .mes_edit')
+                : null;
+            if (headerTrigger && (event.key === 'Enter' || event.key === ' ')) {
+                event.preventDefault();
+                event.stopPropagation();
+                if (headerTrigger.matches('.mes_edit')) {
+                    headerTrigger.click();
+                } else {
+                    const element = headerTrigger.closest('#chat .mes.homer-message-menu-target');
+                    if (element) {
+                        openMessageMenu(messageMenuTargetFromElement(element));
+                    }
+                }
+                return;
+            }
             const keyboardMenu = event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10');
             if (!keyboardMenu) {
                 return;
@@ -2717,6 +2893,7 @@ async function runAction(type, options = {}) {
         }
         dialogueEventLogMuted += 1;
         try {
+            enforceStreamingConfiguration();
             if (type === 'next') {
                 await context.generate('normal', {
                     quiet_prompt: '自然推进到下一回合或下一段情节，保持角色设定与当前叙事连续。',
@@ -3503,6 +3680,7 @@ function installEventHandlers() {
         });
     }
     eventSource.on(event_types.GENERATION_STARTED, (_type, _options, dryRun) => {
+        enforceStreamingConfiguration();
         // SillyTavern and prompt extensions use dry-run generations to assemble or
         // count prompts. A dry run has no matching GENERATION_ENDED event, so it
         // must never put Homer message actions into a persistent busy state.
@@ -3533,6 +3711,7 @@ function installEventHandlers() {
         window.setTimeout(queueMessageMenuRender, 100);
     });
     eventSource.on(event_types.SETTINGS_UPDATED, () => {
+        enforceStreamingConfiguration();
         void saveConversationExtensionSettings().catch(error => {
             console.warn(`${MODULE_ID}: extension settings persistence failed`, error);
         });

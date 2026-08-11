@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -22,6 +23,12 @@ def monitor_page(page: Page, allowed_origins: set[str]) -> dict[str, list[str]]:
         "http": [],
         "yuzi": [],
     }
+
+    def record_response(response) -> None:
+        if any(response.url.startswith(origin) for origin in allowed_origins) and response.status >= 400:
+            failures["http"].append(
+                f"{response.status} {response.request.method} {response.url}"
+            )
     page.on(
         "console",
         lambda message: failures["console"].append(message.text)
@@ -42,15 +49,7 @@ def monitor_page(page: Page, allowed_origins: set[str]) -> dict[str, list[str]]:
         if any(request.url.startswith(origin) for origin in allowed_origins)
         else None,
     )
-    page.on(
-        "response",
-        lambda response: failures["http"].append(
-            f"{response.status} {response.request.method} {response.url}"
-        )
-        if any(response.url.startswith(origin) for origin in allowed_origins)
-        and response.status >= 400
-        else None,
-    )
+    page.on("response", record_response)
     page.on(
         "request",
         lambda request: failures["yuzi"].append(request.url)
@@ -718,16 +717,9 @@ def assert_message_avatars_hidden(page: Page, label: str) -> dict:
     return facts
 
 
-def assert_message_chrome_hidden(page: Page | Frame, label: str) -> dict:
+def assert_message_header_visible(page: Page | Frame, label: str) -> dict:
     facts = page.evaluate(
         """() => {
-          const selectors = {
-            names: '#chat .ch_name',
-            buttons: '#chat .mes_buttons',
-            extraButtons: '#chat .extraMesButtons, #chat .extraMesButtonsHint',
-            homerActions: '#chat .homer-message-actions, #chat .homer-message-rollback',
-            swipes: '#chat .swipe_left, #chat .swipeRightBlock, #chat .swipe_right, #chat .swipes-counter',
-          };
           const visible = element => {
             const style = getComputedStyle(element);
             const rect = element.getBoundingClientRect();
@@ -736,25 +728,263 @@ def assert_message_chrome_hidden(page: Page | Frame, label: str) -> dict:
               && rect.width > 0
               && rect.height > 0;
           };
-          return Object.fromEntries(Object.entries(selectors).map(([key, selector]) => {
+          const messages = [...document.querySelectorAll(
+            '#chat .mes:not([is_system="true"])',
+          )].map(element => {
+            const header = element.querySelector('.ch_name');
+            const messageRect = element.getBoundingClientRect();
+            const headerRect = header?.getBoundingClientRect();
+            const keywordRail = document.querySelector('.homer-keyword-injector__rail');
+            const keywordRailRect = keywordRail?.getBoundingClientRect();
+            const keywordRailOverlaps = Boolean(
+              headerRect
+              && keywordRail
+              && visible(keywordRail)
+              && keywordRailRect.bottom > headerRect.top
+              && keywordRailRect.top < headerRect.bottom
+              && keywordRailRect.right > headerRect.left + 1
+            );
+            return {
+              index: Number(element.getAttribute('mesid')),
+              role: element.getAttribute('is_user') === 'true' ? 'user' : 'assistant',
+              headerVisible: Boolean(header && visible(header)),
+              name: header?.querySelector('.name_text')?.textContent?.trim() || '',
+              version: header?.querySelector('.homer-message-version')?.textContent?.trim() || '',
+              timestamp: header?.querySelector('.timestamp')?.textContent?.trim() || '',
+              helpVisible: Boolean(header?.querySelector('.homer-message-help') && visible(header.querySelector('.homer-message-help'))),
+              moreVisible: Boolean(header?.querySelector('.extraMesButtonsHint') && visible(header.querySelector('.extraMesButtonsHint'))),
+              editVisible: Boolean(header?.querySelector('.mes_edit') && visible(header.querySelector('.mes_edit'))),
+              keywordRailOverlaps,
+              overflow: Boolean(headerRect && (
+                headerRect.left < messageRect.left - 1
+                || headerRect.right > messageRect.right + 1
+              )),
+            };
+          });
+          const selectorFacts = selector => {
             const elements = [...document.querySelectorAll(selector)];
-            return [key, {
-              count: elements.length,
-              visible: elements.filter(visible).length,
-            }];
-          }));
+            return { count: elements.length, visible: elements.filter(visible).length };
+          };
+          return {
+            messages,
+            hiddenExtraButtons: selectorFacts('#chat .extraMesButtons'),
+            legacyActions: selectorFacts('#chat .homer-message-actions, #chat .homer-message-rollback'),
+            swipes: selectorFacts('#chat .swipe_left, #chat .swipeRightBlock, #chat .swipe_right, #chat .swipes-counter'),
+            streamingLocked: document.documentElement.dataset.homerStreaming === 'true'
+              && document.querySelector('#stream_toggle')?.checked === true,
+          };
         }"""
     )
-    exposed = {
-        key: value
-        for key, value in facts.items()
-        if value["visible"] != 0
-    }
-    if exposed:
-        raise AssertionError(f"{label}: permanent message chrome remains visible: {exposed}")
-    if facts["homerActions"]["count"] != 0:
-        raise AssertionError(f"{label}: legacy Homer message controls remain in the DOM: {facts}")
+    messages = facts["messages"]
+    if not messages:
+        raise AssertionError(f"{label}: message header fixture was not rendered: {facts}")
+    invalid = [
+        item for item in messages
+        if not item["headerVisible"]
+        or not item["name"]
+        or not item["timestamp"]
+        or not item["helpVisible"]
+        or not item["moreVisible"]
+        or not item["editVisible"]
+        or item["keywordRailOverlaps"]
+        or item["overflow"]
+        or (item["role"] == "assistant" and (
+            not item["version"] or not item["name"].startswith("《")
+        ))
+        or (item["role"] == "user" and bool(item["version"]))
+    ]
+    if invalid:
+        raise AssertionError(f"{label}: message header is incomplete: {invalid}")
+    if facts["hiddenExtraButtons"]["visible"] != 0:
+        raise AssertionError(f"{label}: inherited expanded message buttons are visible: {facts}")
+    if facts["legacyActions"]["count"] != 0 or facts["legacyActions"]["visible"] != 0:
+        raise AssertionError(f"{label}: legacy Homer message controls remain: {facts}")
+    if facts["swipes"]["visible"] != 0:
+        raise AssertionError(f"{label}: inherited swipe chrome is visible: {facts}")
+    if not facts["streamingLocked"]:
+        raise AssertionError(f"{label}: Homer streaming configuration is not locked: {facts}")
     return facts
+
+
+def generation_signature(page: Page | Frame) -> dict:
+    return page.evaluate(
+        """() => {
+          const context = window.SillyTavern.getContext();
+          let assistantIndex = -1;
+          for (let index = context.chat.length - 1; index >= 0; index -= 1) {
+            const item = context.chat[index];
+            if (item && !item.is_user && !item.is_system) {
+              assistantIndex = index;
+              break;
+            }
+          }
+          const last = assistantIndex >= 0 ? context.chat[assistantIndex] : null;
+          return {
+            length: context.chat.length,
+            assistantIndex,
+            text: String(last?.mes || ''),
+            sendDate: String(last?.send_date || ''),
+            genStarted: String(last?.gen_started || ''),
+            genFinished: String(last?.gen_finished || ''),
+            swipes: Array.isArray(last?.swipes) ? last.swipes.length : 0,
+            swipe: Number(last?.swipe_id || 0),
+            isAssistant: Boolean(last),
+          };
+        }"""
+    )
+
+
+def start_stream_probe(page: Page | Frame, label: str) -> None:
+    page.evaluate(
+        """label => {
+          window.__homerE2EStreamProbe?.stop?.();
+          const state = { label, samples: [], tokens: [], started: false };
+          const context = window.SillyTavern?.getContext?.();
+          const eventSource = context?.eventSource || window.eventSource || null;
+          const eventTypes = context?.eventTypes || context?.event_types || window.event_types || {};
+          const streamTokenEvent = eventTypes.STREAM_TOKEN_RECEIVED || 'stream_token_received';
+          const onStreamToken = text => {
+            state.tokens.push({
+              text: String(text || '').slice(0, 20000),
+              at: performance.now(),
+            });
+          };
+          eventSource?.on?.(streamTokenEvent, onStreamToken);
+          const capture = () => {
+            const context = window.SillyTavern?.getContext?.();
+            if (!context?.chat) return;
+            const busy = document.body.classList.contains('homer-generating');
+            if (busy) state.started = true;
+            if (!state.started || state.samples.length >= 240) return;
+            let index = -1;
+            for (let cursor = context.chat.length - 1; cursor >= 0; cursor -= 1) {
+              const item = context.chat[cursor];
+              if (item && !item.is_user && !item.is_system) {
+                index = cursor;
+                break;
+              }
+            }
+            const chatText = index >= 0 ? String(context.chat[index]?.mes || '') : '';
+            const domText = index >= 0
+              ? String(document.querySelector(`#chat .mes[mesid="${index}"] .mes_text`)?.innerText || '')
+              : '';
+            const previous = state.samples.at(-1);
+            if (!previous
+                || previous.index !== index
+                || previous.chatText !== chatText
+                || previous.domText !== domText
+                || previous.busy !== busy) {
+              state.samples.push({
+                index,
+                chatText: chatText.slice(0, 20000),
+                domText: domText.slice(0, 20000),
+                busy,
+                at: performance.now(),
+              });
+            }
+          };
+          const chat = document.querySelector('#chat');
+          const observer = new MutationObserver(capture);
+          if (chat) observer.observe(chat, { childList: true, subtree: true, characterData: true });
+          const timer = window.setInterval(capture, 20);
+          window.__homerE2EStreamProbe = {
+            state,
+            stop() {
+              capture();
+              observer.disconnect();
+              window.clearInterval(timer);
+              if (typeof eventSource?.removeListener === 'function') {
+                eventSource.removeListener(streamTokenEvent, onStreamToken);
+              } else if (typeof eventSource?.off === 'function') {
+                eventSource.off(streamTokenEvent, onStreamToken);
+              }
+              return state;
+            },
+          };
+          capture();
+        }""",
+        label,
+    )
+
+
+def finish_stream_probe(
+    page: Page | Frame,
+    before: dict,
+    label: str,
+    *,
+    minimum_updates: int = 2,
+) -> dict:
+    state = page.evaluate(
+        """() => {
+          const probe = window.__homerE2EStreamProbe;
+          const state = probe?.stop?.() || probe?.state || { samples: [], started: false };
+          delete window.__homerE2EStreamProbe;
+          return state;
+        }"""
+    )
+    after = generation_signature(page)
+
+    def normalize(value: str) -> str:
+        text = re.sub(r"[▍▋▊▉]+$", "", str(value or "").strip()).strip()
+        return text
+
+    initial = normalize(before.get("text", ""))
+    token_times = [
+        float(item.get("at", 0) or 0)
+        for item in state.get("tokens", [])
+    ]
+    token_intervals = [
+        round(token_times[index] - token_times[index - 1], 1)
+        for index in range(1, len(token_times))
+    ]
+    samples: list[str] = []
+    chat_samples: list[str] = []
+    for item in state.get("samples", []):
+        if item.get("index") != after["assistantIndex"] or not item.get("busy"):
+            continue
+        text = normalize(item.get("domText", item.get("text", "")))
+        chat_text = normalize(item.get("chatText", ""))
+        if chat_text and chat_text not in {"...", "…"} and chat_text != initial:
+            if not chat_samples or chat_samples[-1] != chat_text:
+                chat_samples.append(chat_text)
+        if not text or text in {"...", "…"} or text == initial:
+            continue
+        if not samples or samples[-1] != text:
+            samples.append(text)
+    if not state.get("started") or len(samples) < minimum_updates:
+        diagnostic = {
+            "label": label,
+            "before": before,
+            "after": after,
+            "started": state.get("started"),
+            "updates": len(samples),
+            "sample_lengths": [len(item) for item in samples],
+            "chat_updates": len(chat_samples),
+            "chat_sample_lengths": [len(item) for item in chat_samples],
+            "token_events": len(state.get("tokens", [])),
+            "token_lengths": [
+                len(normalize(item.get("text", "")))
+                for item in state.get("tokens", [])
+            ],
+            "token_intervals_ms": token_intervals,
+        }
+        raise AssertionError(
+            f"{label}: visible reply did not update incrementally before generation ended: "
+            + json.dumps(diagnostic, ensure_ascii=False)
+        )
+    return {
+        "updates": len(samples),
+        "sample_lengths": [len(item) for item in samples],
+        "chat_updates": len(chat_samples),
+        "chat_sample_lengths": [len(item) for item in chat_samples],
+        "token_events": len(state.get("tokens", [])),
+        "token_lengths": [
+            len(normalize(item.get("text", "")))
+            for item in state.get("tokens", [])
+        ],
+        "token_intervals_ms": token_intervals,
+        "final_length": len(normalize(after.get("text", ""))),
+    }
 
 
 def close_message_menu(page: Page | Frame) -> None:
@@ -796,6 +1026,10 @@ def open_message_menu(
     elif method == "keyboard":
         message.focus()
         message.press("Shift+F10")
+    elif method == "header-help":
+        message.locator(".homer-message-help").click()
+    elif method == "header-more":
+        message.locator(".extraMesButtonsHint").click()
     else:
         raise AssertionError(f"unsupported message menu trigger: {method}")
 
@@ -1320,6 +1554,8 @@ def exercise_generation_and_actions(
         if not dismiss_extension_notice(page):
             break
         page.wait_for_timeout(300)
+    before_send = generation_signature(page)
+    start_stream_probe(page, "send")
     page.locator("#send_textarea").fill("HOMER_E2E_GENERATION_PROBE")
     page.locator("#send_but").click()
     try:
@@ -1331,7 +1567,7 @@ def exercise_generation_and_actions(
                 && last && !last.is_user && !last.is_system
                 && !document.body.classList.contains('homer-generating');
             }""",
-            arg=connection["chatLength"] + 2,
+            arg=before_send["length"] + 2,
             timeout=45_000,
         )
     except PlaywrightTimeoutError as error:
@@ -1344,29 +1580,12 @@ def exercise_generation_and_actions(
         )
         raise AssertionError(f"initial generation did not settle: {state}") from error
 
-    def signature() -> dict:
-        return page.evaluate(
-            """() => {
-              const context = window.SillyTavern.getContext();
-              const last = context.chat.at(-1);
-              return {
-                length: context.chat.length,
-                text: String(last?.mes || ''),
-                sendDate: String(last?.send_date || ''),
-                genStarted: String(last?.gen_started || ''),
-                genFinished: String(last?.gen_finished || ''),
-                swipes: Array.isArray(last?.swipes) ? last.swipes.length : 0,
-                swipe: Number(last?.swipe_id || 0),
-                isAssistant: Boolean(last && !last.is_user && !last.is_system),
-              };
-            }"""
-        )
-
-    generated = signature()
+    generated = generation_signature(page)
     if not generated["isAssistant"] or not generated["text"].strip():
         raise AssertionError(f"SillyTavern generation returned no assistant message: {generated}")
+    send_stream = finish_stream_probe(page, before_send, "send")
 
-    message_chrome = assert_message_chrome_hidden(page, "generated dialogue")
+    message_header = assert_message_header_visible(page, "generated dialogue")
     user_index = page.evaluate(
         """() => {
           const chat = window.SillyTavern.getContext().chat;
@@ -1388,9 +1607,12 @@ def exercise_generation_and_actions(
         or [item["id"] for item in user_menu["actions"]] != expected_user_actions
     ):
         raise AssertionError(f"user message menu is incomplete: {user_menu}")
-    page.locator(
-        '#homer-message-menu-dialog [data-homer-message-menu-action="edit"]'
-    ).click()
+    close_message_menu(page)
+    user_header_menu = open_message_menu(page, user_message, method="header-more")
+    if user_header_menu["messageIndex"] != user_index:
+        raise AssertionError(f"user header menu targeted the wrong message: {user_header_menu}")
+    close_message_menu(page)
+    user_message.locator(".mes_edit").click()
     user_message.locator(".edit_textarea").wait_for(state="visible", timeout=5_000)
     editing_indices = page.evaluate(
         """() => [...document.querySelectorAll('#chat .mes:has(.edit_textarea)')]
@@ -1407,7 +1629,7 @@ def exercise_generation_and_actions(
     assistant_message = page.locator(
         '#chat .mes:not([is_user="true"]):not([is_system="true"])'
     ).last
-    assistant_menu = open_message_menu(page, assistant_message, method="keyboard")
+    assistant_menu = open_message_menu(page, assistant_message, method="header-help")
     expected_assistant_actions = [
         "copy", "edit", "rollback", "continue", "regenerate", "next",
         "swipe-left", "swipe-right", "delete",
@@ -1418,8 +1640,25 @@ def exercise_generation_and_actions(
     ):
         raise AssertionError(f"assistant message menu is incomplete: {assistant_menu}")
     close_message_menu(page)
+    assistant_more_menu = open_message_menu(page, assistant_message, method="header-more")
+    if assistant_more_menu["messageIndex"] != assistant_menu["messageIndex"]:
+        raise AssertionError(
+            f"assistant header buttons targeted different messages: {assistant_menu}, {assistant_more_menu}"
+        )
+    close_message_menu(page)
+    assistant_keyboard_menu = open_message_menu(page, assistant_message, method="keyboard")
+    if assistant_keyboard_menu["messageIndex"] != assistant_menu["messageIndex"]:
+        raise AssertionError(
+            f"assistant keyboard menu targeted the wrong message: {assistant_keyboard_menu}"
+        )
+    close_message_menu(page)
 
-    def wait_for_action_change(before: dict, action: str) -> dict:
+    def wait_for_action_change(
+        before: dict,
+        action: str,
+        *,
+        require_stream: bool,
+    ) -> tuple[dict, dict | None]:
         try:
             page.wait_for_function(
                 """before => {
@@ -1450,7 +1689,7 @@ def exercise_generation_and_actions(
                 timeout=45_000,
             )
         except PlaywrightTimeoutError as error:
-            state = signature()
+            state = generation_signature(page)
             state["busy"] = page.locator("body").evaluate(
                 "body => body.classList.contains('homer-generating')"
             )
@@ -1458,16 +1697,17 @@ def exercise_generation_and_actions(
                 f"message {action} did not settle: before={before}, after={state}"
             ) from error
         page.wait_for_timeout(500)
-        after = signature()
+        after = generation_signature(page)
         if not after["isAssistant"] or not after["text"].strip():
             raise AssertionError(
                 f"message {action} did not finish with an assistant message: {after}"
             )
-        return after
+        stream_result = finish_stream_probe(page, before, action) if require_stream else None
+        return after, stream_result
 
     action_results: list[dict] = []
     for action in ("continue", "regenerate", "next"):
-        before = signature()
+        before = generation_signature(page)
         for _ in range(3):
             if not dismiss_extension_notice(page):
                 break
@@ -1478,15 +1718,50 @@ def exercise_generation_and_actions(
         action_menu = open_message_menu(page, assistant_message, method="contextmenu")
         if action_menu["messageRole"] != "assistant":
             raise AssertionError(f"{action} opened a non-assistant menu: {action_menu}")
+        start_stream_probe(page, action)
         page.locator(
             '#homer-message-menu-dialog '
             f'[data-homer-message-menu-action="{action}"]'
         ).click()
-        wait_for_action_change(before, action)
-        action_results.append({"action": f"message-{action}", "result": "generated"})
+        _after, stream_result = wait_for_action_change(
+            before,
+            action,
+            require_stream=True,
+        )
+        action_results.append({
+            "action": f"message-{action}",
+            "result": "generated",
+            "stream": stream_result,
+        })
 
-    for action in ("swipe-right", "swipe-left"):
-        before = signature()
+    before = generation_signature(page)
+    if before["swipes"] and before["swipe"] != before["swipes"] - 1:
+        raise AssertionError(f"new Swipe stream fixture is not on the last candidate: {before}")
+    assistant_message = page.locator(
+        '#chat .mes:not([is_user="true"]):not([is_system="true"])'
+    ).last
+    action_menu = open_message_menu(page, assistant_message, method="contextmenu")
+    button_state = next(item for item in action_menu["actions"] if item["id"] == "swipe-right")
+    if button_state["disabled"]:
+        raise AssertionError(f"swipe-right unexpectedly disabled: {action_menu}")
+    start_stream_probe(page, "swipe-right-new")
+    page.locator(
+        '#homer-message-menu-dialog '
+        '[data-homer-message-menu-action="swipe-right"]'
+    ).click()
+    _after, swipe_stream = wait_for_action_change(
+        before,
+        "swipe-right-new",
+        require_stream=True,
+    )
+    action_results.append({
+        "action": "message-swipe-right",
+        "result": "generated-new-candidate",
+        "stream": swipe_stream,
+    })
+
+    for action in ("swipe-left",):
+        before = generation_signature(page)
         assistant_message = page.locator(
             '#chat .mes:not([is_user="true"]):not([is_system="true"])'
         ).last
@@ -1498,7 +1773,7 @@ def exercise_generation_and_actions(
             '#homer-message-menu-dialog '
             f'[data-homer-message-menu-action="{action}"]'
         ).click()
-        wait_for_action_change(before, action)
+        wait_for_action_change(before, action, require_stream=False)
         action_results.append({"action": f"message-{action}", "result": "switched"})
 
     page.wait_for_function(
@@ -1601,15 +1876,18 @@ def exercise_generation_and_actions(
         )
     return {
         "connection": "homer-cloud",
-        "send": "generated",
+        "send": {"result": "generated", "stream": send_stream},
         "actions": action_results,
         "message_menu": {
             "user_long_press": "pass",
+            "user_header_more": "pass",
+            "assistant_header_help": "pass",
+            "assistant_header_more": "pass",
             "assistant_keyboard": "pass",
             "assistant_contextmenu": "pass",
             "single_delete": "pass",
         },
-        "message_chrome": message_chrome,
+        "message_header": message_header,
         "cloud_messages": cloud_data["total"],
     }
 
@@ -1940,7 +2218,7 @@ def main() -> int:
                 mobile_runtime,
                 "mobile dialogue frame",
             )
-            mobile_message_chrome = assert_message_chrome_hidden(
+            mobile_message_header = assert_message_header_visible(
                 mobile_runtime,
                 "mobile dialogue frame",
             )
@@ -1959,7 +2237,7 @@ def main() -> int:
                     "keyword_injector_panel": "pass",
                     "yuzi_phone_asset_requests": len(mobile_failures["yuzi"]),
                     "message_avatar_layout": mobile_avatar_layout,
-                    "message_chrome": mobile_message_chrome,
+                    "message_header": mobile_message_header,
                     "message_menu": {
                         "long_press": "pass",
                         "safe_area_layout": mobile_menu_layout,

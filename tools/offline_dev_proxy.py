@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import http.client
 import http.server
+import json
 import mimetypes
 import re
 import socketserver
@@ -212,6 +213,26 @@ REPLACED_SECURITY_HEADERS = {
 def _dialogue_public_path(upstream_path: str) -> str:
     path = upstream_path if upstream_path.startswith("/") else "/" + upstream_path
     return DIALOGUE_MOUNT + path
+
+
+def is_dialogue_stream_request(
+    *,
+    target_is_dialogue: bool,
+    method: str,
+    upstream_path: str,
+    request_body: bytes | None,
+) -> bool:
+    """Detect ST chat-completion streams when the runtime drops response headers."""
+
+    if not target_is_dialogue or str(method).upper() != "POST" or not request_body:
+        return False
+    if urlsplit(upstream_path).path != "/api/backends/chat-completions/generate":
+        return False
+    try:
+        payload = json.loads(request_body)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return False
+    return isinstance(payload, dict) and payload.get("stream") is True
 
 
 def _rewrite_dialogue_path_literals(data: bytes) -> bytes:
@@ -648,7 +669,14 @@ def make_handler(
                 raise OverflowError("request body is too large")
             return self.rfile.read(length) if length else None
 
-        def _copy_upstream_headers(self, headers, *, streaming: bool, rewritten: bool = False) -> None:
+        def _copy_upstream_headers(
+            self,
+            headers,
+            *,
+            streaming: bool,
+            rewritten: bool = False,
+            force_event_stream_content_type: bool = False,
+        ) -> None:
             cacheable_dialogue_asset = self._is_cacheable_dialogue_asset()
             for key, value in headers:
                 lower = key.lower()
@@ -663,6 +691,8 @@ def make_handler(
                 # upstream value as well creates duplicate Content-Length
                 # headers that strict HTTP clients reject.
                 if lower == "content-length":
+                    continue
+                if force_event_stream_content_type and lower == "content-type":
                     continue
                 if cacheable_dialogue_asset and lower in {"cache-control", "expires", "pragma"}:
                     continue
@@ -693,6 +723,8 @@ def make_handler(
 
                     value = re.sub(r"(?i)(;\s*Path=)([^;]*)", cookie_path, value)
                 self.send_header(key, value)
+            if force_event_stream_content_type:
+                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
             if cacheable_dialogue_asset:
                 self.send_header("Cache-Control", DIALOGUE_STATIC_CACHE_CONTROL)
             elif rewritten:
@@ -745,10 +777,21 @@ def make_handler(
             try:
                 with UPSTREAM_OPENER.open(request, timeout=300) as response:
                     content_type = str(response.headers.get("Content-Type") or "").lower()
-                    streaming = "text/event-stream" in content_type
+                    forced_dialogue_stream = is_dialogue_stream_request(
+                        target_is_dialogue=target == dialogue_runtime,
+                        method=self.command,
+                        upstream_path=upstream_path or self.path,
+                        request_body=body,
+                    )
+                    streaming = "text/event-stream" in content_type or forced_dialogue_stream
                     if streaming:
                         self.send_response(response.status)
-                        self._copy_upstream_headers(response.getheaders(), streaming=True)
+                        self._copy_upstream_headers(
+                            response.getheaders(),
+                            streaming=True,
+                            force_event_stream_content_type=forced_dialogue_stream
+                            and "text/event-stream" not in content_type,
+                        )
                         self.end_headers()
                         self._stream_response(response)
                         return
