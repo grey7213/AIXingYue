@@ -1,5 +1,5 @@
 import { api, requireAuth, getCachedUser, setCachedUser, clearAuth, ApiError } from '/app/assets/js/app-core.js?v=20260717-handoff-merge';
-import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260711-cloak-theme';
+import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260812-license-removal';
 
 async function loadUser(ctx) {
   if (!requireAuth()) return false;

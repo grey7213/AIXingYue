@@ -301,7 +301,6 @@ def build_frontend_archive(frontend_root: Path, destination: Path) -> dict:
         frontend_root / "index.html",
         frontend_root / "admin.html",
         frontend_root / "app" / "chat.html",
-        frontend_root / "app" / "open-source.html",
     )
     for path in required:
         if not path.is_file():
@@ -337,7 +336,6 @@ def build_frontend_archive(frontend_root: Path, destination: Path) -> dict:
             PurePosixPath("index.html"),
             PurePosixPath("admin.html"),
             PurePosixPath("app/chat.html"),
-            PurePosixPath("app/open-source.html"),
         }
         missing = sorted(str(path) for path in expected if path not in names)
         if missing:
@@ -624,6 +622,11 @@ server {{
 
     location = /robots.txt {{ try_files $uri =404; }}
     location = /.well-known/security.txt {{ try_files $uri =404; }}
+
+    # The retired platform license page must not fall through to the app shell.
+    location = /app/open-source.html {{
+        return 404;
+    }}
 
     # /app/ Web 应用（仿 riliaichat 角色聊天端）
     location /app/ {{
@@ -1087,7 +1090,7 @@ def main() -> int:
                     f"printf '%s  %s\n' '{frontend_package['sha256']}' '{remote_frontend_archive}' | sha256sum -c - && "
                     f"mkdir -p {FRONTEND_REMOTE}/download {FRONTEND_REMOTE}/media-cache && "
                     f"tar -xzf {remote_frontend_archive} -C {FRONTEND_REMOTE} && "
-                    f"rm -f {remote_frontend_archive}",
+                    f"rm -f {remote_frontend_archive} {FRONTEND_REMOTE}/app/open-source.html",
                 )
                 log(f"uploaded {frontend_package['files']} frontend files from verified archive")
                 run(ssh, f"chown -R www-data:www-data {FRONTEND_REMOTE} || true")
@@ -1233,10 +1236,21 @@ def main() -> int:
                 "tr -d '\\r' | grep -iE '^content-type: (text|application)/(javascript|x-javascript)'",
             )
             run(ssh, f"curl -k -fsSI {args.domain}/app/assets/vendor/SPINE-RUNTIMES-LICENSE.txt | head -n 5")
+            run(ssh, f"test ! -e {FRONTEND_REMOTE}/app/open-source.html")
             run(
                 ssh,
-                f"curl -k -fsS {args.domain}/app/open-source.html | "
-                "grep -F 'https://github.com/grey7213/AIXingYue' >/dev/null",
+                f"test \"$(curl -k -sS -o /dev/null -w '%{{http_code}}' "
+                f"{args.domain}/app/open-source.html)\" = 404",
+            )
+            run(
+                ssh,
+                f"! curl -k -fsS {args.domain}/app/assets/js/layout.js | "
+                "grep -F '/app/open-source.html' >/dev/null",
+            )
+            run(
+                ssh,
+                f"! curl -k -fsS {args.domain}/app/info.html | "
+                "grep -F '开源许可与源码' >/dev/null",
             )
         # Keep deploy verification read-only. Registration/email probes send real
         # messages and consume abuse-control quotas, so they belong in an explicit

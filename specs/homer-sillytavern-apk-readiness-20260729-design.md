@@ -15,7 +15,7 @@
 
 - GitHub API 实测：SillyTavern tag `1.18.0` 指向 `51ad27fb86d39a3daca3adaa970375c9670c12df`，仓库许可证为 AGPL-3.0；继续采用固定上游 runtime，不另造聊天内核。
 - 本地锁文件实测 webpack 为 `5.105.4`；部署只允许 `npm ci --omit=dev --no-audit --no-fund`，避免普通 `npm install` 重新解析依赖。
-- TavernHelper 兼容来源为 `N0VI028/JS-Slash-Runner`（manifest `4.8.19`）。其 GitHub license 为 `NOASSERTION`，随包 `LICENSE` 是 AFPL 9；继续保留用户指定固定快照，但在许可页单独披露，不将它误标成 AGPL 或通用开源组件。
+- TavernHelper 兼容来源为 `N0VI028/JS-Slash-Runner`（manifest `4.8.19`）。其 GitHub license 为 `NOASSERTION`，随包 `LICENSE` 是 AFPL 9；继续保留用户指定固定快照及内部许可记录，不将它误标成 AGPL 或通用开源组件。
 - TavernHelper 卡内脚本沿用 Character Card 的 `data.extensions.tavern_helper.scripts` 结构；Homer 只增加专用、安全的编辑投影，不复制扩展自身的高权限安装/执行面板。
 
 ## 页面与状态流
@@ -109,7 +109,7 @@ systemd homer-dialogue.service
 - runtime 源码目录和数据目录分离；源码替换使用版本化临时目录 + 原子切换，数据目录不随部署覆盖。
 - Nginx 的 dialogue location 使用独立 CSP（`frame-ancestors 'self'`）并复用 `offline_dev_proxy.py` 已验证的根相对路径映射；站点全局 `frame-ancestors 'none'` 不套用到该模块响应。
 - 修改远端 Nginx、systemd、runtime 前建立时间戳备份；SSH 使用 keepalive/有限重试，健康检查或传输失败时以独立重连恢复配置/源码链接并重启旧服务，不迁移或删除 SQLite。
-- `/app/open-source.html` 提供 SillyTavern 上游、固定提交、AGPL 文本、修改日期、公开源码仓库和第三方扩展逐项来源/许可证说明。
+- 2026-08-12 起不再发布平台级许可/源码页面：共享侧栏和信息中心移除入口，部署归档不再要求 `app/open-source.html`，解包后显式删除服务器旧文件，并验证直接 URL 为 404。第三方许可证和来源记录继续保留在源码与内部文档中；本 UI 决策不构成许可义务已解除的判断。
 
 ### 子路径启动稳定性
 
@@ -149,7 +149,8 @@ group by u.id
 - `frontend/admin.html`
 - `frontend/assets/js/admin-app.js`
 - `frontend/assets/js/api.js`
-- `frontend/app/open-source.html`
+- `frontend/app/assets/js/layout.js`
+- `frontend/app/info.html`
 - `tools/deploy_ai_fengyue_villainy.py`
 - 离线启动、部署和验证脚本
 
@@ -159,5 +160,5 @@ group by u.id
 2. SillyTavern：上游 selftests + Homer runtime/会话/卡片自测。
 3. 后端：临时 SQLite 覆盖权限、ZIP 安全、事件幂等/脱敏、支付金额聚合。
 4. 浏览器：本地三服务启动，桌面/移动检查首屏视频/截图、逐消息动作、RoleplayHub sandbox、后台列表和扩展导入。
-5. 生产：先 dry-run/生成检查部署包与 Nginx/systemd 文本，再备份上传；验证 8008/8091 监听、服务状态、模块路由、安全头、顶层重定向和公开源码入口。
+5. 生产：先 dry-run/生成检查部署包与 Nginx/systemd 文本，再备份上传；验证 8008/8091 监听、服务状态、模块路由、安全头、顶层重定向，以及许可入口不再渲染且旧直接 URL 返回 404。
 6. 产物：本轮隔离运行数据、浏览器截图和进程登记统一放在 `output/sillytavern-e2e/`；通用页面回归仍可放在 `output/playwright/`，两者均不提交 Git。

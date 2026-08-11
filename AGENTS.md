@@ -3,6 +3,7 @@
 ## Scope
 
 - Web 平台当前正式品牌为“惑梦（Homer）”；积分展示名为“惑梦币”。历史文件名、服务名、数据库名、接口路径和 APK 标识仍保留旧技术命名以保证兼容，除非用户另行要求迁移。
+- 平台级导航和信息页不得向普通用户展示“许可”“开源许可与源码”或源码仓库入口；`/app/open-source.html` 必须保持不存在并返回 404。此规则不影响角色卡/社区自身的开源或闭源属性，也不得删除 `sillytavern-runtime/LICENSE` 等第三方许可证文件。隐藏用户界面不代表已解决 AGPL 或其他第三方许可义务。
 
 - Current workspace contains Android APK reverse engineering artifacts for a CTF sandbox target.
 - Primary APKs:
@@ -64,6 +65,16 @@
 - Before committing, check `git status --short` and avoid staging unrelated user changes.
 
 ## Reusable Pitfalls
+
+- Symptom: 已从前端归档和服务器磁盘删除某个 `/app/*.html` 页面，但直接访问旧 URL 仍返回 200 并显示 Web App 首页。
+  Cause: Nginx 的 `location /app/ { try_files $uri $uri/ /app/index.html; }` 会把不存在的页面回退到 `/app/index.html`，仅删除静态文件不能形成 404。
+  Fix: 对明确退役的页面增加优先级更高的精确 `location = /app/<page>.html { return 404; }`，同时从归档移除文件、部署时删除远端残留，并把直接 URL 状态码写入部署守卫。
+  Verify: 2026-08-12 `/app/open-source.html` 线上返回 404，服务器文件不存在，`layout.js` 无旧链接、`info.html` 无许可卡片；Chromium 1440×900/390×844 均无“许可”文本或旧 href、无横向溢出，console/page error=0。
+
+- Symptom: 重试部署在创建 SQLite 备份时出现 `database or disk is full`，随后连很小的 Nginx 备份也报 `No space left on device`。
+  Cause: `/opt/ai-fengyue-backend/backups/` 长期保留多个约 1.5–1.8 GB 的完整 SQLite 备份；失败的 SQLite backup 还会留下大体积不完整目标文件和 journal。
+  Fix: 先按本次部署时间戳精确识别并删除失败产生的不完整 backup/journal，保留 live SQLite 和最近 `quick_check=ok` 恢复点；若本轮已有有效备份，配置重试只做带小型独立备份的定向部署。历史备份保留策略需另行获得用户授权后处理。
+  Verify: 2026-08-12 仅删除 `...20260812-015441.sqlite3` 及其 journal（约 558 MB），保留 `...20260812-015059.sqlite3`；随后 Nginx 定向部署、`nginx -t`、三服务 active、8008 health、8091 `/csrf-token` 和公网 health 全部通过。磁盘仍仅约 413 MB 可用，后续完整部署前必须先处理备份保留策略。
 
 - Symptom: 删除旧预设助手/全局操作坞后，对话页一直停在加载层；或明明已把 `st-yuzi-phone` 写进默认 disabled，存量账号仍会加载手机弹窗资源。
   Cause: Homer bridge 启动链仍引用已删除的 `presetOverrides`、`restorePresetDefaults()`、`applyPresetOverrides()`，初始化异常发生在 ready class 设置前；同时 SillyTavern 的用户级 `extension_settings.disabledExtensions` 和会话快照会覆盖默认 settings，单改默认 JSON 不能约束存量账号。

@@ -68,7 +68,6 @@ function sidebarUtilityHtml(settings = null) {
       <a href="/app/workshop.html">${escapeHtml(app.shell_workshop_link || '创作')}</a>
       <a href="/app/histories.html">${escapeHtml(app.shell_history_link || '历史')}</a>
       <a href="/app/favorites.html">${escapeHtml(app.shell_favorites_link || '收藏')}</a>
-      <a href="/app/open-source.html">${escapeHtml(app.shell_license_link || '许可')}</a>
     </div>
     <div class="app-shell-tools" aria-label="快捷工具">
       <a href="/app/info.html" title="${escapeHtml(app.shell_notice_title || '公告')}">${svg('M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z')}</a>
