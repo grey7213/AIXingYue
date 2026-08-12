@@ -66,6 +66,11 @@
 
 ## Reusable Pitfalls
 
+- Symptom: 把旧 Compose APK 改成极简 WebView 壳后，签名和 zipalign 都通过，但 `aapt dump badging` 没有 `launchable-activity`；或剥离旧 dex 后仍把新 Activity 放进 `classes6.dex`，形成没有主 `classes.dex` 的异常最小包；中文长路径下 `rmdir /S /Q` 还可能返回 0 但 `res` 仍然存在。
+  Cause: 重复清单补丁先插入新 Activity、后续剥离步骤又按旧候选 Activity 清除 launcher；历史注入逻辑固定写 `classes6.dex`；Windows Junction/传统 Win32 删除在深层中文资源路径上不能可靠遍历。
+  Fix: Web 模式先删除所有候选 Activity 块，再插入唯一 `HomerWebActivity`；打包时过滤全部 `classes*.dex` 并将注入 dex 写成主 `classes.dex`。旧 `smali*`、assets、unknown、lib、build、res 先同盘原子移出 decoded 目录，再用 PowerShell/.NET `\\?\` 长路径 API 清理，最小化重写 `apktool.yml` 和资源目录。
+  Verify: 2026-08-12 最终 APK 仅 12 个 ZIP 条目/一个 `classes.dex`，`aapt` 显示唯一 launcher `org.nebula.horizon.composeai.ctf.HomerWebActivity`、版本 `1.12.21 (261)`、标签“惑梦（Homer）”；v2/v3、zipalign、原证书 SHA-256 通过。Pixel 6 API 33 安装和冷启动成功，前台为 HomerWebActivity，截图为惑梦登录页，logcat 无本应用 FATAL、旧品牌或 17 个旧上游域名。
+
 - Symptom: 模型桩明明逐块发送 SSE，SillyTavern 也设置了 `stream_openai=true`，但浏览器仍在生成结束时一次性显示完整回复，发送/续写/重写/下回/new Swipe 看起来像假流式。
   Cause: SillyTavern 的 `forwardFetchResponse()` 在部分代理链路中会丢失模型响应的 `Content-Type`；旧 `offline_dev_proxy.py` 只按上游响应头判断 `text/event-stream`，缺头时就读取并缓冲完整响应。
   Fix: 代理仅对 dialogue runtime 的精确 `POST /api/backends/chat-completions/generate` 读取请求 JSON，并在严格布尔 `stream: true` 时强制逐块转发/flush、补 `text/event-stream`、省略 `Content-Length`。Homer bridge 同时在连接配置、会话重申、生成开始和 settings 更新时重复锁定 `stream_openai=true`。

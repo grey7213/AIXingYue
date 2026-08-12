@@ -2,6 +2,7 @@ param(
     [switch]$Install,
     [switch]$ForceDecode,
     [switch]$ClearData,
+    [switch]$LegacyRecharge,
     [string]$ServerUrl,
     [string]$Python = "D:\Anconda3\python.exe"
 )
@@ -23,6 +24,9 @@ if ($ForceDecode) {
 }
 if ($ClearData) {
     $ArgsList += "--clear-data"
+}
+if ($LegacyRecharge) {
+    $ArgsList += "--legacy-recharge"
 }
 if ($ServerUrl) {
     $ArgsList += "--server-url"
