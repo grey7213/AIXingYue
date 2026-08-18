@@ -860,6 +860,14 @@ NEW_USER_INITIAL_POINTS=2500
 BETA_MAX_REGISTERED_USERS=0
 ALLOWED_CORS_ORIGINS=https://patcher.villainy.top
 MAX_REQUEST_BODY_BYTES=33554432
+CONTENT_MODE=local_only
+USER_BYOK_ENABLED=false
+PAYMENT_CHANNEL_ENABLED=false
+CTF_DIRECT_RECHARGE_ENABLED=false
+APK_DOWNLOAD_ENABLED=false
+ALLOW_EMAIL_SEND_FAILURE=false
+ALLOW_ANY_REGISTER_CODE=false
+AUTH_COOKIE_SECURE=true
 """
 
 
@@ -887,7 +895,7 @@ def upload_dir(sftp: paramiko.SFTPClient, ssh: paramiko.SSHClient, local_dir: Pa
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Deploy AI Xingyue backend to the Villain Y server.")
-    parser.add_argument("--host", default="45.207.192.148")
+    parser.add_argument("--host", default="38.76.218.46")
     parser.add_argument("--user", default="root")
     parser.add_argument("--key", type=Path, default=DEFAULT_KEY)
     parser.add_argument("--deploy-dir", default="/opt/ai-fengyue-backend")
@@ -1093,6 +1101,14 @@ def main() -> int:
                 "BETA_MAX_REGISTERED_USERS": "0",
                 "ALLOWED_CORS_ORIGINS": "https://patcher.villainy.top",
                 "MAX_REQUEST_BODY_BYTES": "33554432",
+                "CONTENT_MODE": "local_only",
+                "USER_BYOK_ENABLED": "false",
+                "PAYMENT_CHANNEL_ENABLED": "false",
+                "CTF_DIRECT_RECHARGE_ENABLED": "false",
+                "APK_DOWNLOAD_ENABLED": "false",
+                "ALLOW_EMAIL_SEND_FAILURE": "false",
+                "ALLOW_ANY_REGISTER_CODE": "false",
+                "AUTH_COOKIE_SECURE": "true",
             }
             existing_names = {ln.split("=", 1)[0].strip() for ln in lines if "=" in ln and not ln.lstrip().startswith("#")}
             for name, value in defaults.items():

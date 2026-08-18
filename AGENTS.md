@@ -830,3 +830,8 @@
   Cause: SillyTavern 的隐藏 DOM 控件不是稳定的程序化 API，嵌入生命周期和可见性会影响委托点击；`mesid` 又会随消息数组裁剪重排，不能单独作为延迟菜单动作的身份依据。
   Fix: 编辑直接调用上游导出的 `messageEdit(messageIndex)`；菜单同时保存消息对象引用、稳定 Homer 消息 ID 和当前索引，执行前重新解析，找不到即拒绝。普通态只用 Homer CSS 隐藏原生 chrome，保留编辑器 DOM 和事件链。
   Verify: 2026-08-09 原版 SillyTavern 1.18.0 在 1440×900/390×844 真实 Chromium 中，长按用户消息只编辑准确目标；右键/键盘角色菜单的续写、重写、下回、双向候选、单条删除和回溯均通过；常驻 chrome 可见数 0，Yuzi 请求 0，console/page/network error 0。
+
+- Symptom: 新服务器首次部署 patcher Nginx 配置时 `nginx -t` 报 `BIO_new_file("/etc/letsencrypt/ssl-dhparams.pem") failed`，导致 dialogue unit、Nginx 站点和 `current` 指针被回滚。
+  Cause: 新机已有 Let’s Encrypt 证书，但没有 certbot 通常附带的 DH 参数文件；生成的站点配置引用了该路径。
+  Fix: 修改 Nginx 前先做 root-only 时间戳备份，再用 `openssl dhparam -out /etc/letsencrypt/ssl-dhparams.pem 2048` 生成 root:root、0644 的参数文件，确认 `nginx -t` 后重跑部署；不要为了绕过错误删除 `ssl_dhparam` 或覆盖同机其他站点。
+  Verify: 2026-08-18 新机 `nginx -t` 通过，`ai-fengyue-backend.service`、`homer-dialogue.service`、Nginx active，公网 `/health` 返回 200/OK，dialogue 仅监听 `127.0.0.1:8091`，CPA/Grok/Sub2API 容器仍 healthy。

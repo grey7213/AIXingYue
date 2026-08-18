@@ -4,6 +4,7 @@
 
 ## 当前主要入口
 
+- 新服务器迁移与部署：`homer-server-migration-20260818-requirements.md`、`homer-server-migration-20260818-design.md`、`homer-server-migration-20260818-tasks.md`
 - 惑梦消息头与统一流式输出：`homer-message-header-streaming-20260812-requirements.md`、`homer-message-header-streaming-20260812-design.md`、`homer-message-header-streaming-20260812-tasks.md`
 - 惑梦网页端 APK 壳：`homer-web-apk-20260812-requirements.md`、`homer-web-apk-20260812-design.md`、`homer-web-apk-20260812-tasks.md`
 - 惑梦对话消息长按菜单：`homer-dialogue-message-menu-20260809-requirements.md`、`homer-dialogue-message-menu-20260809-design.md`、`homer-dialogue-message-menu-20260809-tasks.md`
