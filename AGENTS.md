@@ -835,3 +835,8 @@
   Cause: 新机已有 Let’s Encrypt 证书，但没有 certbot 通常附带的 DH 参数文件；生成的站点配置引用了该路径。
   Fix: 修改 Nginx 前先做 root-only 时间戳备份，再用 `openssl dhparam -out /etc/letsencrypt/ssl-dhparams.pem 2048` 生成 root:root、0644 的参数文件，确认 `nginx -t` 后重跑部署；不要为了绕过错误删除 `ssl_dhparam` 或覆盖同机其他站点。
   Verify: 2026-08-18 新机 `nginx -t` 通过，`ai-fengyue-backend.service`、`homer-dialogue.service`、Nginx active，公网 `/health` 返回 200/OK，dialogue 仅监听 `127.0.0.1:8091`，CPA/Grok/Sub2API 容器仍 healthy。
+
+- Symptom: 修改 `homer-dialogue` 的 `hostWhitelist` 后重启短暂失败，日志出现 `EACCES: permission denied, open .../config.yaml`。
+  Cause: runtime 配置由 root 管理，但服务账号 `homer-dialogue` 需要读取配置；原子替换临时文件时把权限收紧为 `0640 root:root`，服务账号无法读，且 systemd 会自动重试。
+  Fix: 先把配置备份到 root-only 目录，再按原部署约束恢复 runtime 配置的服务可读权限（当前 release 配置为 `root:root 0644`），重启后确认 `NRestarts=0`、webpack 编译成功和 8091 loopback 监听；不要修改 unit 的沙箱权限来绕过问题。
+  Verify: 2026-08-19 `homer-dialogue.service` active、`NRestarts=0`，配置已启用 `hostWhitelist` 且仅允许 `patcher.villainy.top`、`127.0.0.1`、`localhost`；公网 `/health` 与 WebView runtime session 接口均返回成功。
