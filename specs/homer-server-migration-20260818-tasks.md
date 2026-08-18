@@ -15,9 +15,19 @@
 - [x] Chromium 桌面/390px 登录页截图和溢出检查通过，console/page error 为 0；仅有 Tailwind 浏览器运行时提示和 autocomplete 建议 warning。
 - [x] CPA/Grok/Sub2API Docker 容器保持 healthy，相关 Nginx site symlink 未被替换。
 
+## 备份核验与 APK 发布（2026-08-19）
+
+- [x] 核验 `AIXingYue-main.zip`（2026-08-18，SHA-256 `2B4038421FA7AD8FD95A526F350F762F09E53D34E07BBEE90DCC010FA39253E2`）及离线数据库，确认仅含开发/E2E 数据。
+- [x] 核验 2026-08-01 Homer 交接包及 2026-07-31 开发交接包；均无可恢复的生产用户/订单数据库。
+- [x] 核验角色卡归档（含 8,778 张官方卡）可用于内容重建，但不导入账号、积分或历史会话。
+- [x] 新服务器 live DB 与部署前 SQLite 备份均 `quick_check=ok`，仅保留初始化管理员；未灌入测试库。
+- [x] 公开 APK 四个下载文件完成公网下载与 SHA-256 校验；生产域名 debug 包 `40,674` bytes，local-debug 包 `64,199` bytes。
+- [ ] 邮箱注册：等待新的 Resend API Key 或完整 SMTP 凭据，收到后再写入 env、重启并真实发送验证码验收。
+- [ ] 在线支付：等待 ZPAY PID、商户 Key、网关/支付类型，收到后再配置并用真实小额支付验收回调；不伪造回调。
+
 ## 待用户决定
 
 - [ ] 提供正式管理员登录凭据或授权一次性管理员 API 验证；当前不在回复中猜测默认密码。
 - [ ] 如需开放邮箱注册，提供新的 Resend/SMTP 凭据后单独配置并验收。
 - [ ] 如需恢复角色卡/媒体库，提供正式生产备份；当前 ZIP 不含可投产数据库/媒体库。
-- [ ] 如需公开 APK 下载，明确授权后再将 `APK_DOWNLOAD_ENABLED` 和 Nginx 下载路由按安全方案开启。
+- [x] 已按用户要求公开 APK 下载；`APK_DOWNLOAD_ENABLED=true`，Nginx 下载路由、Content-Type、Content-Disposition、checksum 与 `release.json` 已验证。当前公开产物仍明确标注为 debug 体验包。
