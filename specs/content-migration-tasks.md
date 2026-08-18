@@ -1,5 +1,7 @@
 # AI星月上游内容迁移任务
 
+> 迁移提示（2026-08-18）：旧服务器 `45.207.192.148` 已退役，新机为 `38.76.218.46`。下方 2026-06 的角色/媒体统计属于旧数据，仅作历史记录；新机当前是空的 local-only 初始化库，未恢复生产角色或媒体。任何继续同步前必须先取得用户明确授权并做数据库备份。
+
 | ID | 任务 | 状态 | 验证 |
 |----|------|------|------|
 | CM1 | 梳理当前代理上游的内容接口 | Done | 已定位 `proxy_json()` 和核心路由 |
@@ -28,12 +30,12 @@
 后续低频增量同步建议命令：
 
 ```powershell
-ssh -i 'C:\Users\86180\.ssh\villainy_backup_ed25519' root@45.207.192.148 "python3 /opt/ai-fengyue-backend/sync_upstream_content.py --db /opt/ai-fengyue-backend/data/ai_fengyue.sqlite3 --media-dir /var/www/ai-fengyue-frontend/media-cache --public-base https://patcher.villainy.top --start-page 14 --pages 10 --timeout 45 --retries 2 --retry-sleep 30 --force --no-detail --report /opt/ai-fengyue-backend/data/sync-upstream-report.json"
+ssh -i 'C:\Users\86180\.ssh\villainy_backup_ed25519' root@38.76.218.46 "python3 /opt/ai-fengyue-backend/sync_upstream_content.py --db /opt/ai-fengyue-backend/data/ai_fengyue.sqlite3 --media-dir /var/www/ai-fengyue-frontend/media-cache --public-base https://patcher.villainy.top --start-page 14 --pages 10 --timeout 45 --retries 2 --retry-sleep 30 --force --no-detail --report /opt/ai-fengyue-backend/data/sync-upstream-report.json"
 ```
 
 交互式 SSH 容易在多页长同步时被本地超时中断，导致脚本尚未写出报告。若只是确认上游是否恢复，优先用单页短跑：
 
 ```powershell
-ssh -i 'C:\Users\86180\.ssh\villainy_backup_ed25519' root@45.207.192.148 "python3 /opt/ai-fengyue-backend/sync_upstream_content.py --db /opt/ai-fengyue-backend/data/ai_fengyue.sqlite3 --media-dir /var/www/ai-fengyue-frontend/media-cache --public-base https://patcher.villainy.top --start-page 14 --pages 1 --timeout 30 --retries 1 --retry-sleep 20 --force --no-detail --report /opt/ai-fengyue-backend/data/sync-upstream-report.json"
+ssh -i 'C:\Users\86180\.ssh\villainy_backup_ed25519' root@38.76.218.46 "python3 /opt/ai-fengyue-backend/sync_upstream_content.py --db /opt/ai-fengyue-backend/data/ai_fengyue.sqlite3 --media-dir /var/www/ai-fengyue-frontend/media-cache --public-base https://patcher.villainy.top --start-page 14 --pages 1 --timeout 30 --retries 1 --retry-sleep 20 --force --no-detail --report /opt/ai-fengyue-backend/data/sync-upstream-report.json"
 ```
 

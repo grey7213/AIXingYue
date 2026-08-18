@@ -2,6 +2,12 @@
 
 Updated: 2026-06-22
 
+## 新服务器交接（2026-08-18）
+
+- 当前服务器：`38.76.218.46`；旧服务器 `45.207.192.148` 已退役。
+- 新机安全配置暂不启用 SMTP/Resend：`SMTP_HOST=`、`ALLOW_EMAIL_SEND_FAILURE=false`。
+- 下方 Resend 配置和验证记录是历史操作参考；重新开放邮箱注册前必须提供新的凭据并先备份 `/opt/ai-fengyue-backend/ai-fengyue.env`，不得直接照旧密钥恢复。
+
 ## 当前状态
 
 - 线上后端使用 Resend SMTP：
@@ -55,7 +61,7 @@ nslookup -type=TXT send.villainy.top
 ## DNS 生效后切换发件人
 
 ```powershell
-ssh -i 'C:\Users\86180\.ssh\villainy_backup_ed25519' root@45.207.192.148 "cd /opt/ai-fengyue-backend && cp ai-fengyue.env ai-fengyue.env.bak-resend-domain-$(date +%Y%m%d-%H%M%S) && python3 - <<'PY'
+ssh -i 'C:\Users\86180\.ssh\villainy_backup_ed25519' root@38.76.218.46 "cd /opt/ai-fengyue-backend && cp ai-fengyue.env ai-fengyue.env.bak-resend-domain-$(date +%Y%m%d-%H%M%S) && python3 - <<'PY'
 from pathlib import Path
 p=Path('ai-fengyue.env')
 lines=p.read_text(encoding='utf-8', errors='replace').splitlines()
@@ -81,6 +87,6 @@ curl.exe -k -sS -H 'Content-Type: application/json' --data-raw '{"email":"你的
 服务验证：
 
 ```powershell
-ssh -i 'C:\Users\86180\.ssh\villainy_backup_ed25519' root@45.207.192.148 "systemctl is-active ai-fengyue-backend.service nginx; curl -fsS http://127.0.0.1:8008/health"
+ssh -i 'C:\Users\86180\.ssh\villainy_backup_ed25519' root@38.76.218.46 "systemctl is-active ai-fengyue-backend.service nginx; curl -fsS http://127.0.0.1:8008/health"
 curl.exe -k -sS https://patcher.villainy.top/health
 ```
