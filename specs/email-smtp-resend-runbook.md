@@ -2,6 +2,13 @@
 
 Updated: 2026-06-22
 
+## 2026-08-19 当前状态覆盖
+
+- 新服务器 `38.76.218.46` 已写入新的 Resend 凭据（密钥值不记录在文档中）。
+- Resend API 已验证 `villainy.top` 状态为 `verified`；当前发件人配置为 `AI星月 <noreply@villainy.top>`。
+- `ALLOW_EMAIL_SEND_FAILURE=false` 保持不变；后端、Nginx、dialogue 均 active。
+- 需要指定一个测试收件箱完成真实验证码投递验收；未在未确认收件人的情况下发送测试邮件。
+
 ## 新服务器交接（2026-08-18）
 
 - 当前服务器：`38.76.218.46`；旧服务器 `45.207.192.148` 已退役。

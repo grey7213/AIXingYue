@@ -23,8 +23,17 @@
 - [x] 新服务器 live DB 与部署前 SQLite 备份均 `quick_check=ok`，仅保留初始化管理员；未灌入测试库。
 - [x] 旧记录中的 `45.207.192.148` SSH 连接复核为超时；未从旧主机取回任何数据。
 - [x] 公开 APK 四个下载文件完成公网下载与 SHA-256 校验；生产域名 debug 包 `40,674` bytes，local-debug 包 `64,199` bytes。
-- [ ] 邮箱注册：等待新的 Resend API Key 或完整 SMTP 凭据，收到后再写入 env、重启并真实发送验证码验收。
-- [ ] 在线支付：等待 ZPAY PID、商户 Key、网关/支付类型，收到后再配置并用真实小额支付验收回调；不伪造回调。
+- [x] 邮箱注册配置：Resend 凭据已写入并完成 provider/domain 验证；真实收件箱投递仍待验收。
+- [x] 在线支付配置：ZPAY 凭据已写入并完成非财务跳转验证；真实小额支付回调仍待验收。
+
+## 邮箱与 ZPAY 配置（2026-08-19）
+
+- [x] 在写入前创建 root-only env 备份：`/root/homer-pre-mail-zpay-20260818-182926/ai-fengyue.env`（权限 `600`）。
+- [x] Resend API 凭据已写入服务器 env（不记录密钥）；Resend API 返回 `villainy.top` 为 `verified`，发件人使用 `noreply@villainy.top`，`ALLOW_EMAIL_SEND_FAILURE=false` 保持失败即拒绝。
+- [ ] 邮箱真实投递验收：等待用户提供一个收件测试邮箱；未在未确认收件人的情况下发送外部测试邮件。
+- [x] ZPAY 已开启并写入服务器 env（不记录 PID/Key）：HTTPS 网关 `zpayz.cn`、支付宝类型；`deposit-meta` 返回 `mode=zpay_direct`、在线支付可用、`1 CNY=1000` 惑梦币。
+- [x] ZPAY 无副作用配置验收：签名长度 32、生成支付 URL 不包含商户 Key、网关返回 `302` 至官方 `api.z-pay.cn`；伪造签名通知被拒绝。
+- [ ] ZPAY 最终财务验收：需要用户完成一笔真实小额支付，确认异步通知、订单状态和恰好一次积分入账；禁止伪造成功回调。
 
 ## 待用户决定
 
