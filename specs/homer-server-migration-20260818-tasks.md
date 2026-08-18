@@ -34,6 +34,7 @@
 - [x] ZPAY 已开启并写入服务器 env（不记录 PID/Key）：HTTPS 网关 `zpayz.cn`、支付宝类型；`deposit-meta` 返回 `mode=zpay_direct`、在线支付可用、`1 CNY=1000` 惑梦币。
 - [x] ZPAY 无副作用配置验收：签名长度 32、生成支付 URL 不包含商户 Key、网关返回 `302` 至官方 `api.z-pay.cn`；伪造签名通知被拒绝。
 - [ ] ZPAY 最终财务验收：需要用户完成一笔真实小额支付，确认异步通知、订单状态和恰好一次积分入账；禁止伪造成功回调。
+- [ ] 正式模型出口：新库当前 `api_settings=0`、`user_model_presets=0`，需要恢复生产模型预设或提供新的 OpenAI/Anthropic 兼容 Base URL、Key 和模型列表。
 
 ## 待用户决定
 
