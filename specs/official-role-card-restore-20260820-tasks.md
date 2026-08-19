@@ -11,7 +11,7 @@ Updated: 2026-08-20
 | ORC5 | 生成并校验目标封面归档 | Done | 8551 文件；425,184,870 bytes；归档 SHA-256 `4b2f4f634e0da3e1195aa654e0b1a88dfa291d85509b3e106e1974a4e24d1d58`；无缺失/不安全路径 |
 | ORC6 | 创建生产备份并执行角色恢复 | Done | 生产备份 `/opt/ai-fengyue-backend/data/backups/ai_fengyue-before-official-role-restore-20260819-194035.sqlite3`；quick_check=ok；线上导入 8778 张 |
 | ORC7 | 验证数据库、服务、API、封面和浏览器 | Done | API 全库 8778、校园标签 1962、详情/封面 200；桌面/390px 登录态浏览器无 overflow/console/page error；服务与内外 health 正常 |
-| ORC8 | 更新 AGENTS/运维记录、提交并推送 | In Progress | 已补充踩坑与恢复记录；待提交本次稳定文件并检查远端推送 |
+| ORC8 | 更新 AGENTS/运维记录、提交并推送 | Done | commit `ad4464c` 已推送 `origin/main`；角色 ZIP、数据库、封面包和临时报告未入 Git；用户 Tavo 未跟踪文件保留 |
 
 ## 当前发现
 
