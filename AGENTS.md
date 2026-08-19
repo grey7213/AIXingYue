@@ -840,3 +840,8 @@
   Cause: runtime 配置由 root 管理，但服务账号 `homer-dialogue` 需要读取配置；原子替换临时文件时把权限收紧为 `0640 root:root`，服务账号无法读，且 systemd 会自动重试。
   Fix: 先把配置备份到 root-only 目录，再按原部署约束恢复 runtime 配置的服务可读权限（当前 release 配置为 `root:root 0644`），重启后确认 `NRestarts=0`、webpack 编译成功和 8091 loopback 监听；不要修改 unit 的沙箱权限来绕过问题。
   Verify: 2026-08-19 `homer-dialogue.service` active、`NRestarts=0`，配置已启用 `hostWhitelist` 且仅允许 `patcher.villainy.top`、`127.0.0.1`、`localhost`；公网 `/health` 与 WebView runtime session 接口均返回成功。
+
+- Symptom: 官方角色卡恢复脚本显示导入失败，报 `sqlite3.DatabaseError: not authorized`，但事务数据已经写入。
+  Cause: SQLite authorizer 为写事务设置后，部分 Python/SQLite 构建在提交后仍将该回调用于新的保护表读取；旧脚本在同一连接上做 post-commit guard，误把只读查询拒绝。
+  Fix: 写事务提交后关闭/保留写连接，使用新的只读 SQLite 连接执行 `business_guard` 和完整 `verify_database`；不要因为该错误重复导入，先核对备份、行数、编号和 quick_check。
+  Verify: 2026-08-20 线上 `local_apps=8778`、`content_versions=8780`、`role_card_annotations=8778`，独立 verify 全部 mismatch=0、quick_check=ok；用户数/积分与恢复前一致。修复已写入 `tools/restore_official_role_cards.py`。
