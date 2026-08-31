@@ -614,6 +614,7 @@ def dialogue_proxy_directives(port: int, upstream_path: str = "/") -> str:
         add_header Referrer-Policy "same-origin" always;
         add_header Permissions-Policy "camera=(), geolocation=(), payment=(), usb=()" always;
         add_header Content-Security-Policy "{dialogue_csp}" always;
+        expires $homer_dialogue_asset_expires;
 """
 
 
@@ -666,8 +667,75 @@ def dialogue_nginx_locations(port: int) -> str:
 """
 
 
-def patcher_server_config(domain_name: str, port: int, dialogue_port: int = 8091) -> str:
-    return f"""server {{
+def env_flag_enabled(env_text: str, name: str, default: bool = False) -> bool:
+    """读取 env 文本里某个布尔开关的实际值，最后一次赋值生效。"""
+    value = None
+    for line in env_text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, raw = stripped.split("=", 1)
+        if key.strip() == name:
+            value = raw.strip().strip("'\"")
+    if value is None:
+        return default
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
+def download_locations(apk_download_enabled: bool) -> str:
+    """/download/ 路由必须跟随 APK_DOWNLOAD_ENABLED，否则每次部署都会覆盖手工开关。"""
+    if not apk_download_enabled:
+        return """    # APK 下载渠道关闭（APK_DOWNLOAD_ENABLED=false）。保留文件目录但不对公网发包，避免旧链接继续分发。
+    location /download/ {
+        return 404;
+    }
+"""
+    return """    # APK 下载渠道开启（APK_DOWNLOAD_ENABLED=true）。APK 单独匹配以保留 Android 媒体类型和下载
+    # disposition，校验和/release.json 保持可直接读取。
+    location ~* ^/download/.*\\.apk$ {
+        try_files $uri =404;
+        types { application/vnd.android.package-archive apk; }
+        default_type application/vnd.android.package-archive;
+        add_header Content-Disposition "attachment" always;
+        add_header X-Content-Type-Options "nosniff" always;
+    }
+
+    location /download/ {
+        try_files $uri =404;
+        types { text/plain sha256; application/json json; }
+        default_type application/octet-stream;
+        add_header X-Content-Type-Options "nosniff" always;
+        expires 1h;
+    }
+"""
+
+
+def patcher_server_config(
+    domain_name: str,
+    port: int,
+    dialogue_port: int = 8091,
+    apk_download_enabled: bool = False,
+) -> str:
+    return f"""# 对话运行时给自己的静态资源统一发 Cache-Control: public, max-age=0，于是每次进对话
+# 都要把 440+ 个 JS/CSS 重新验证一遍。实测服务端处理只要 1-4ms，但客户端每个往返约
+# 160ms（RTT 69ms），而请求链有约 190 层串行深度 —— 所以成本全在往返次数上，返回
+# 304 也照样花一个往返。这里按风险分档给真实缓存：
+#   webfonts/img/sounds 1h  —— 实质不变，拿到旧的最多是外观问题
+#   css/lib/scripts     10m —— 收益最大的一档；代价是部署新 runtime 后最多 10 分钟内
+#                              可能拿到旧 JS，10 分钟自动自愈，硬刷新立即生效
+# API 路径（/module/dialogue/api/ 等）落在 default off，绝不缓存。
+# `expires` 支持变量，所以用 map 而不是复制整段 proxy 指令。
+map $uri $homer_dialogue_asset_expires {{
+    default                                       off;
+    ~^/module/dialogue/webfonts/                  1h;
+    ~^/module/dialogue/img/                       1h;
+    ~^/module/dialogue/sounds/                    1h;
+    ~^/module/dialogue/css/                       10m;
+    ~^/module/dialogue/lib/                       10m;
+    ~^/module/dialogue/scripts/                   10m;
+}}
+
+server {{
     listen 80;
     listen [::]:80;
     server_name {domain_name};
@@ -675,8 +743,11 @@ def patcher_server_config(domain_name: str, port: int, dialogue_port: int = 8091
 }}
 
 server {{
-    listen 443 ssl;
-    listen [::]:443 ssl;
+    # http2 是监听套接字级别的参数，同机 5 个站共用 :443，所以这里一开全站都变 HTTP/2。
+    # 这是必须的：对话运行时一次要拉 400+ 个 ESM 模块，HTTP/1.1 每源 6 条连接会让它们
+    # 排成 80 多轮，实测排队累计 332s 而服务端 TTFB 中位数只有 158ms。
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
     server_name {domain_name};
     ssl_certificate /etc/letsencrypt/live/{domain_name}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/{domain_name}/privkey.pem;
@@ -689,6 +760,18 @@ server {{
 
     client_max_body_size 32M;
 
+    # nginx.conf 里有 gzip on，但 gzip_types 整行是注释掉的，nginx 默认只压 text/html，
+    # 于是 css/js/json 全部裸传（app.css 127KB、tailwindcss-browser.js 407KB）。按站点
+    # 作用域补齐，不去改 nginx.conf，免得动到同机其他站。
+    # 故意不含 text/event-stream：压缩它会缓冲，直接把 SSE 流式输出弄坏。
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 5;
+    gzip_min_length 512;
+    gzip_types text/plain text/css text/xml text/javascript
+               application/javascript application/json application/xml
+               application/rss+xml application/manifest+json image/svg+xml;
+
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-Frame-Options "DENY" always;
@@ -699,13 +782,18 @@ server {{
 {proxy_locations(port)}
 {dialogue_nginx_locations(dialogue_port)}
 
-    # APK 下载渠道暂时关闭。保留文件目录但不对公网发包，避免旧链接继续分发。
-    location /download/ {{
-        return 404;
-    }}
+{download_locations(apk_download_enabled)}
 
     # 静态资源：短期缓存 + 验证（每次刷新会问服务器是否更新，但 304 仍然很快）
     location /assets/ {{
+        try_files $uri =404;
+        expires 1h;
+    }}
+
+    # /app/assets/ 不在 /assets/ 前缀下，必须单独声明，否则会落到 location /app/
+    # 里、一个 Cache-Control 都没有，只能靠浏览器启发式缓存（约 (now-Last-Modified)
+    # 的 10%），改了 CSS 也可能几小时看不到。更长前缀优先于 /app/，所以放在这里即可。
+    location /app/assets/ {{
         try_files $uri =404;
         expires 1h;
     }}
@@ -730,13 +818,18 @@ server {{
     }}
 
     # /app/ Web 应用（仿 riliaichat 角色聊天端）
+    # expires epoch => Cache-Control: no-cache，浏览器每次都带 ETag 回来验证（命中就是
+    # 304，很便宜）。HTML 里存着 ?v= 版本指针，一旦 HTML 本身被缓存，改静态资源后 bump
+    # 版本号也没用 —— 浏览器根本不会重新取 HTML，也就看不到新指针。
     location /app/ {{
         try_files $uri $uri/ /app/index.html;
+        expires epoch;
     }}
 
-    # 前端单页应用回退
+    # 前端单页应用回退。同上：营销页 HTML 也必须每次验证。
     location / {{
         try_files $uri $uri/ /index.html;
+        expires epoch;
     }}
 }}
 """
@@ -1118,18 +1211,27 @@ def main() -> int:
             if changed_env:
                 upload_text(sftp, env_path, "\n".join(lines) + "\n", 0o600)
                 log("updated production security defaults in env (secret value not logged)")
+            effective_env = "\n".join(lines) + "\n"
         else:
             log(f"creating env placeholder: {env_path}")
             template = env_template()
             if args.admin_emails:
                 template = template.replace("ADMIN_EMAILS=local@ctf.test", f"ADMIN_EMAILS={args.admin_emails}")
             upload_text(sftp, env_path, template, 0o600)
+            effective_env = template
+
+        apk_download_enabled = env_flag_enabled(effective_env, "APK_DOWNLOAD_ENABLED", False)
+        log(f"APK download channel from env: {'enabled' if apk_download_enabled else 'disabled'}")
 
         log(f"writing systemd unit: {unit_path}")
         upload_text(sftp, unit_path, service_unit(args.deploy_dir, args.port))
 
         log(f"writing patcher nginx site: {PATCHER_NGINX_CONF}")
-        upload_text(sftp, PATCHER_NGINX_CONF, patcher_server_config(args.domain_name, args.port, args.dialogue_port))
+        upload_text(
+            sftp,
+            PATCHER_NGINX_CONF,
+            patcher_server_config(args.domain_name, args.port, args.dialogue_port, apk_download_enabled),
+        )
         run(ssh, f"[ -L /etc/nginx/sites-enabled/patcher.conf ] && rm -f /etc/nginx/sites-enabled/patcher.conf || true")
         run(ssh, f"ln -sf {PATCHER_NGINX_CONF} /etc/nginx/sites-enabled/ai-fengyue-patcher.conf")
 

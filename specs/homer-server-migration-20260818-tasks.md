@@ -46,5 +46,21 @@
 - [ ] 邮箱真实投递验收：需要用户提供一个可查看的测试收件箱；当前 provider/domain 已验证，失败即拒绝注册码发送。
 - [ ] 如需恢复角色卡/媒体库，提供正式生产备份；当前 ZIP 不含可投产数据库/媒体库。
 - [ ] ZPAY 最终财务验收：需要用户实际完成一笔小额支付，确认异步通知、订单状态和恰好一次积分入账；不能伪造回调。
-- [ ] 正式发布 APK：当前公开包为 debug 签名体验包；需要原发布 keystore 才能生成可覆盖旧安装的正式包。
-- [x] 已按用户要求公开 APK 下载；`APK_DOWNLOAD_ENABLED=true`，Nginx 下载路由、Content-Type、Content-Disposition、checksum 与 `release.json` 已验证。当前公开产物仍明确标注为 debug 体验包。
+- [x] 正式发布 APK（2026-08-25 完成）：原发布 keystore 并未丢失，是 `output/zip-1-repack/zip1-repack.keystore`（被 `.gitignore` 挡住所以先前误判为不存在）。五个历史公开包证书指纹全为 `429b…f320`，与该 keystore 一致。已用 `assembleRelease` + zipalign + apksigner(v2/v3) 出 `homer-1.13.0-262-release-signed.apk`（42,095 bytes，sha256 `e9e25c3f…47bf2`，包名 `org.nebula.horizon.composeai`，262/1.13.0），并已发布为 canonical。
+- [x] 已按用户要求公开 APK 下载；`APK_DOWNLOAD_ENABLED=true`，Nginx 下载路由、Content-Type、Content-Disposition、checksum 与 `release.json` 已验证。**2026-08-25 更正**：08-20 的角色卡恢复部署把 Nginx 重写回了 `/download/ → 404`，公开下载实际中断了 5 天；已修 `deploy_ai_fengyue_villainy.py` 让该路由跟随 `APK_DOWNLOAD_ENABLED`，canonical 也已从 debug 体验包换成正式签名包。
+
+## 2026-08-25 补记（APK 正式化与两处部署回退修复）
+
+- [x] 覆盖安装实测：模拟器先装已发布的 261（`homer-web-apk-signed.apk`），再不卸载直接装 262，`Success`；`firstInstallTime` 保留、`lastUpdateTime` 更新，确认为原地升级而非重装。
+- [x] 从公网 URL 下载后再装一遍：下载物 sha256 与本地构建一致，覆盖 261 装成 262 成功。
+- [x] 冷启动实测：前台为 `HomerActivity`，加载线上 `/app/login.html`（服务器 access log 记到 UA `HomerAndroid/1.13.0`），logcat 无 FATAL。
+- [x] 静态审计：17 个 ZIP 条目、单个 `classes.dex`、无 `lib/`；dex 内只有 `https://patcher.villainy.top/` 与 `/app/` 两个 URL；旧/新服务器 IP、CelestiAI、`sk-` key、Resend/ZPAY/SMTP、ADMIN_EMAILS、私钥头、旧品牌命中均为 0。Manifest 无 `debuggable`，`allowBackup=false`、`usesCleartextTraffic=false`。
+- [x] 单元测试 `clean test`：debug/release 各 10 个（PatchSlotState 3 / PatchVerifier 3 / SafeUrls 4），0 failure 0 error。
+- [x] Nginx `/download/` 路由恢复并落进部署模板（`env_flag_enabled()` + `download_locations()`），生成结果与线上 diff 只差目标那一段，`nginx -t` 通过。
+- [x] 首页/dashboard 下载文案与事实改回开放态，`download_facts` 从错的「v1.0.0 / Android 5.0+ / ARM,ARM64」改成「v1.13.0 / Android 8.0+ / 全机型通用」；1440 与 390px 真实浏览器验证 0 console/page error、无横向溢出。
+- [x] `homer-dialogue` hostWhitelist 恢复，并把根因修在仓库 `sillytavern-runtime/config.yaml`（部署会直接打包它）。Host 探测：白名单内 302，`evil.example.com`/`villainy.top` 403。IP 字面量放行是 `host-validation-middleware` 的设计（只防 DNS rebinding），非配置问题。
+- [ ] APK 内登录后的真实对话验收：缺可用测试账号；未猜测生产密码，也未注册测试账号污染生产库。
+- [ ] `zip1-repack.keystore` 离线备份：全盘只有一份且不在 `E:\homer-backups\` 里，磁盘损坏即永久失去签名身份。
+- [ ] 旧 debug 体验包（`homer-android-1.13.0-{app-,local-,}debug.apk`）仍留在 `/download/`；它们是 `.debug` 包名，装了会并存出第二个应用。待确认后用 `publish_homer_apk.py --prune-debug` 下架。
+- [ ] 生产后端跑的是未提交代码：`/opt/ai-fengyue-backend/ai_fengyue_local_server.py` 与工作区文件逐字节一致，含约 217 行未提交的 SillyTavern bridge 改动（08-20 上线）。需要补提交，否则无法从 git 复现或回滚。
+

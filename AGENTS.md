@@ -66,6 +66,16 @@
 
 ## Reusable Pitfalls
 
+- Symptom: 从生产服务器往本机拉备份时，单流 scp 只有约 0.85 MB/s，加到 4 路、6 路并发总吞吐完全不变；换 paramiko SFTP 反而掉到 0.46 MB/s；Windows 侧 `rsync` 直接 exit 127。
+  Cause: 瓶颈是链路本身而不是并发数或协议，堆并发无效。`C:\Program Files\OpenSSH\bin\rsync.exe` 缺 `cygcrypto-1.1.dll` 起不来；scp 的 `host:path` 解析器还会把 Windows 盘符 `E:\...` 当成远端主机名。
+  Fix: 在这条链路上，压缩比才是唯一杠杆。服务器端先 `zstd` 打包再传，且对含跨文件重复的数据（SQLite 里 `content_versions` 是 `local_apps` 的版本快照、媒体库有大量重复图）必须开 `--long=31`（2 GB 窗口）：DB 2.32 GB 从 366 MB 降到 301 MB、媒体库从 367 MB 降到 337 MB。JPG 类数据压缩级别提高几乎无收益（-8 到 -19 只省 1 MB 多花 43s），只有数据库值得上 `-12`。传输用 Git 自带 scp，并以 `cwd=目标目录` + 相对文件名规避盘符解析。
+  Verify: 2026-08-24 `tools/backup_homer_production.py` 一次拉全 7 个归档，665.6 MB 覆盖 3.51 GB 源数据；7/7 服务器端 sha256 == 本地 sha256 且本地真解压成功，数据库解压后 `quick_check`/`integrity_check` 均 `ok`、`local_apps=8778` 与快照一致；全程未停服，backend/dialogue/nginx 保持 active，内外 `/health` OK。
+
+- Symptom: `--long=31` 压出来的 `.zst` 在别的机器上解压报 `Frame requires too much memory for decoding` / `Window size larger than maximum: 2147483648 > 134217728`，看起来像归档损坏。
+  Cause: zstd 解压端默认窗口上限 128 MB，压缩时用的大窗口必须在解压时显式声明，这不是文件坏了。
+  Fix: 命令行 `zstd -d --long=31`，Python `zstandard.ZstdDecompressor(max_window_size=2**31)`。凡是用大窗口压的备份，必须把这条写进备份目录里的 `RESTORE.md`，否则事后没人知道怎么解。
+  Verify: 2026-08-24 三条路径实测：`zstd -d --long=31` 通过、`zstd -d` 失败并自带 `Use --long=31` 提示、Python zstandard 0.23.0 带 `max_window_size` 通过。
+
 - Symptom: 把旧 Compose APK 改成极简 WebView 壳后，签名和 zipalign 都通过，但 `aapt dump badging` 没有 `launchable-activity`；或剥离旧 dex 后仍把新 Activity 放进 `classes6.dex`，形成没有主 `classes.dex` 的异常最小包；中文长路径下 `rmdir /S /Q` 还可能返回 0 但 `res` 仍然存在。
   Cause: 重复清单补丁先插入新 Activity、后续剥离步骤又按旧候选 Activity 清除 launcher；历史注入逻辑固定写 `classes6.dex`；Windows Junction/传统 Win32 删除在深层中文资源路径上不能可靠遍历。
   Fix: Web 模式先删除所有候选 Activity 块，再插入唯一 `HomerWebActivity`；打包时过滤全部 `classes*.dex` 并将注入 dex 写成主 `classes.dex`。旧 `smali*`、assets、unknown、lib、build、res 先同盘原子移出 decoded 目录，再用 PowerShell/.NET `\\?\` 长路径 API 清理，最小化重写 `apktool.yml` 和资源目录。
@@ -845,3 +855,53 @@
   Cause: SQLite authorizer 为写事务设置后，部分 Python/SQLite 构建在提交后仍将该回调用于新的保护表读取；旧脚本在同一连接上做 post-commit guard，误把只读查询拒绝。
   Fix: 写事务提交后关闭/保留写连接，使用新的只读 SQLite 连接执行 `business_guard` 和完整 `verify_database`；不要因为该错误重复导入，先核对备份、行数、编号和 quick_check。
   Verify: 2026-08-20 线上 `local_apps=8778`、`content_versions=8780`、`role_card_annotations=8778`，独立 verify 全部 mismatch=0、quick_check=ok；用户数/积分与恢复前一致。修复已写入 `tools/restore_official_role_cards.py`。
+
+- Symptom: 手工在服务器上开的 Nginx `/download/` 路由和 `homer-dialogue` 的 `hostWhitelist`，过几天自己变回关闭态，没有任何人改过它们。
+  Cause: `deploy_ai_fengyue_villainy.py` 每次部署都整份重写 `ai-fengyue-patcher.conf`，而模板里 `/download/` 是写死的 `return 404`；dialogue 的 `config.yaml` 同样直接打包仓库里的 `sillytavern-runtime/config.yaml`。运行开关 `APK_DOWNLOAD_ENABLED=true` 只影响后端文案，管不到 Nginx。所以 2026-08-20 的角色卡恢复部署（当天跑了 4 次）静默回退了 08-18/08-19 两处手工加固。
+  Fix: 凡是「部署会重新生成」的文件，配置必须回到生成源，不能只改服务器。Nginx 侧新增 `env_flag_enabled()` + `download_locations()`，部署时先读远端 env 的实际值再决定生成开放还是 404 的块；dialogue 侧直接改仓库 `sillytavern-runtime/config.yaml` 的 `hostWhitelist`。改现网前先 `diff` 生成结果与线上配置，确认只有目标那一段不同，再 root-only 备份 + `nginx -t` + reload。
+  Verify: 2026-08-25 生成的开放版配置 `nginx -t` 通过，与线上 diff 只有 `/download/` 一段；`env_flag_enabled` 7/7 用例通过。公网 `ai-xingyue-latest.apk` 返回 200 + `application/vnd.android.package-archive` + `attachment`，`release.json` 为 `application/json`。dialogue 恢复后 `NRestarts=0`、webpack 5.105.4 编译成功、仅监听 `127.0.0.1:8091`，Host 探测 `patcher.villainy.top`/`127.0.0.1`/`localhost` 302、`evil.example.com`/`villainy.top` 403。
+
+- Symptom: 判断「原发布 keystore 已丢失，只能换包名重新发应用」，于是把公开下载包做成 debug 签名体验包。
+  Cause: 只在新建的 Gradle 工程 `E:\homer-apk-clean` 里找签名配置，没有搜 `output/`。历史上所有公开分发包都是 `zip1_repack_pipeline.py` 用 `output/zip-1-repack/zip1-repack.keystore` 签的，口令就写在该脚本里；`output/` 被 `.gitignore` 挡住，所以 `git ls-files` 看不到，容易误判成不存在。
+  Fix: 判断证书是否可用要以「已发布产物的证书指纹」为准 —— 把历史 APK 逐个 `apksigner verify --print-certs` 比对，再反查哪个 keystore 能签出同一指纹。读这个 keystore 必须用 JDK 17+ 的 keytool（PKCS12 + PBES2），系统 PATH 上的 JDK 1.8 会报 `Invalid keystore format`。正式包走 `assembleRelease`（debug 构建带 `applicationIdSuffix .debug`，装出来是并存的第二个应用，覆盖不了）。
+  Verify: 2026-08-25 五个历史公开包证书指纹全为 `429b…f320`，与 `zip1-repack.keystore` 一致。`assembleRelease` + zipalign + apksigner(v2/v3) 出 `homer-1.13.0-262-release-signed.apk`，包名 `org.nebula.horizon.composeai`、262/1.13.0。模拟器先装已发布的 261 再直接覆盖装 262 成功，`firstInstallTime` 保留、`lastUpdateTime` 更新，证明是原地升级。该 keystore 全盘只有一份且不在备份里，需离线单独保管。
+
+- Symptom: `aapt` / `apksigner` 通过 Python `subprocess` 读 `E:\酒馆开发\...` 下的 APK 时报 `Unable to open ... Illegal byte sequence` / `no AndroidManifest.xml found`，同一个命令在 shell 里传相对路径却正常。
+  Cause: 这两个工具拿不到非 ASCII 路径，仓库根目录本身含中文。
+  Fix: 读取前先把 APK 复制到 `tempfile.TemporaryDirectory()` 的 ASCII 路径再调工具（`tools/publish_homer_apk.py` 的 `inspect_apk` 就是这么做的），不要靠 cwd + 相对路径去绕。
+  Verify: 2026-08-25 `publish_homer_apk.py` 能正确读出 `E:\酒馆开发\output\homer-release\` 下 APK 的包名、版本、证书指纹和 debuggable 标记。
+
+- Symptom: `/app/explore.html` 和 `/app/farm.html` 的左侧导航被撑开，每项比别的页面高出一截；其余带侧栏的页面正常。
+  Cause: 全局 `box-sizing: border-box` 此前只由 `tailwindcss-browser.js` 的 preflight 提供，`app.css` 自己没有复位。这两个页面是唯二带侧栏又不加载 Tailwind 的（`chat.html`/`data-merge.html`/`app/index.html` 也不加载但没有侧栏），所以 `.app-nav__item` 的 `height:38px` + `padding:9px` 按 content-box 算成 56px，11 项跨度从 438px 变成 636px。
+  Fix: 在 `frontend/app/assets/css/app.css` 顶部自带 `*,*::before,*::after{box-sizing:border-box}`。外壳的盒模型不能依赖一个必须先执行的浏览器端 Tailwind 运行时——否则任何新页面忘了加 script 就会静默错版。不要靠给这两页补 Tailwind 运行时来绕（那是几百 KB 的 JIT，且原设计就没打算加）。改 CSS 后 `frontend/app/*.html` 的 `app.css?v=` 必须统一 bump，之前散成 3 个版本号会让不同页面命中不同缓存副本、症状更难复现。
+  Verify: 2026-08-26 本地登录态下 15 个带侧栏页面全部 itemH=38px / span=438px / 无横向溢出 / 0 console-page error；改前 explore 与 farm 实测 content-box、56px、636px。生产用 route-fulfill 造一个只加载线上 app.css、不加载 Tailwind 的同源页面复验，box-sizing=border-box、itemH=38px。
+
+- Symptom: 前端明明改好并部署了，用户仍然看到旧布局；给静态资源 bump `?v=` 版本号也不生效。
+  Cause: `/app/` 下的 HTML 和 `/app/assets/` 在 Nginx 里**一个 `Cache-Control` 都没有**（`location /assets/` 只匹配站点根下的 `/assets/`，`/app/assets/` 会落到 `location /app/`）。没有 Cache-Control 时浏览器用启发式缓存，约 `(now − Last-Modified) × 10%`，能达十几小时。而版本指针 `?v=` 是写在 HTML 里的 —— HTML 被缓存住，bump 版本号等于没做，浏览器根本不会重新取 HTML 去发现新指针。
+  Fix: 在部署模板里新增 `location /app/assets/ { try_files $uri =404; expires 1h; }`（前缀比 `/app/` 长所以优先），并给 `location /app/` 和 `location /` 加 `expires epoch` → `Cache-Control: no-cache`，HTML 每次带 ETag 回源验证。用 `expires` 而不是 `add_header Cache-Control`：nginx 里子 location 一旦出现任何 `add_header`，父级那六个安全头（HSTS/CSP/X-Frame-Options…）会全部丢失，`expires` 走的是另一套机制不受影响。也不要在 server 级统一加，会连带污染 `/module/dialogue/` 代理和 API 响应。
+  Verify: 2026-08-26 `nginx -t` 通过、与线上 diff 只有缓存这三处。改后实测 HTML（`/`、`/index.html`、`/dashboard.html`、`/app/`、`/app/explore.html`）为 `no-cache`，`/app/assets/*` 与 `/assets/*` 为 `max-age=3600`，`/download/` 不变，`/module/dialogue/` 仍 302；带 `If-None-Match` 的条件请求返回 304（不重传正文）。注意新头对**已经存在于用户浏览器缓存里的旧条目不追溯生效**，所以变更当次仍需硬刷新一次。
+
+- Symptom: 登录后点「开启我的角色」，`/app/chat.html` 卡在「加载中 · 正在进入对话…」半分钟以上。
+  Cause: 三层叠加，且**服务端完全不慢**（loopback 取 `/script.js` 只要 1.3–3.9ms）。① 全站只有 HTTP/1.1（`listen 443 ssl` 没带 `http2`），嵌入的 SillyTavern 一次要拉 460+ 个 ESM 模块，每源 6 条连接把它们排成 80 多轮，实测排队累计 **332s**、单请求 responseEnd p90 达 2.2s；② 运行时给自己所有静态资源发 `Cache-Control: public, max-age=0`，每次进对话都要把 440+ 个文件重新验证一遍，而客户端每个往返约 160ms（RTT 69ms），返回 304 也照样花一个往返；③ 运行时用根相对 URL 请求 `/scripts/*`、`/lib/*` 等，被 Nginx 307 弹回 `/module/dialogue/...`，每次开对话白花 89 个重定向往返。主线程只占 22%（`Performance.getMetrics` 的 `TaskDuration` 6.7s / 30s），所以不是 CPU 问题。
+  Fix: ① `listen 443 ssl http2`（注意这是**监听套接字级**参数，同机 5 个站共用 :443，开了全都变 HTTP/2 —— 需用户确认，改前先拷 `/etc/nginx` 到临时目录用 `nginx -t -p` 离线验证，并把 `modules` 软链过去否则 dlopen 失败）；② 用 `map $uri` + `expires $var` 分档给运行时静态资源真实缓存（webfonts/img/sounds 1h，css/lib/scripts 10m，API 落 default off），不要用 `add_header`（子 location 一出现 add_header 就会丢掉父级全部安全头）；③ `public/index.html` 的 `runtimeRootPaths` 从 `['/api','/csrf-token']` 扩到含 `/scripts /lib /css /locales /img /version /user /thumbnail` 等 —— 重写后落地 URL 与 307 目标完全一致，所以模块身份和 cookie 路径都不变。另外 `nginx.conf` 里 `gzip on` 但 `gzip_types` 是注释掉的（默认只压 text/html），按站点作用域补齐，**不要包含 `text/event-stream`**，压缩它会缓冲、直接弄坏 SSE 流式输出。
+  Verify: 2026-08-26 冷启动 54.4s → 29.4s，重复进对话 27.0s → 12.0s；排队 332s → 0.4s，重定向 89 → 62，18 个扩展仍全部激活、0 失败、0 page error；五个站 ALPN 均为 h2 且首页均 200；`If-None-Match` 返回 304。本机 `curl` 是 Schannel 构建、不带 HTTP2 feature，会谎报 `http/1.1`，要用 `openssl s_client -alpn h2` 或浏览器 `nextHopProtocol` 判断。
+
+- Symptom: 给 SillyTavern 的扩展加载加 `<link rel=modulepreload>` 预热后，18 个扩展全部 `Could not activate extension`，加载时间从 32s 恶化到 87.9s，而注入的 preload link 一个都不剩。
+  Cause: `addExtensionScript` 用的是根相对 `/scripts/extensions/...`，在嵌入 iframe 里会被 Nginx **307** 弹到 `/module/dialogue/scripts/...`。**preload 不能跨重定向**——它按原始 URL 记账，重定向后视为不匹配，报 `net::ERR_ABORTED` 并触发 `onerror`（我的 `onerror` 又把 link 移除了，所以现场看不到）。失败的 preload 还会把这些 URL 在 module map 里标记为 errored，随后的 `<script type=module src=同一 URL>` 直接复用错误结果，于是全军覆没。
+  Fix: 回滚。要预热必须先让请求 URL 不再经过 307（例如把 `addExtensionScript` 改成 base 相对，靠已有的 `<base href="/module/dialogue/">` 解析），再谈 preload。**改 vendored runtime 前必须先在本地或用 Playwright `add_init_script` 在真实站点上干跑同一套逻辑**——我这次是直接推生产，导致约 4 分钟内所有进对话的用户拿到坏的运行时；更糟的是当时刚给 `scripts/` 开了 10 分钟缓存，抓到坏 `extensions.js` 的浏览器最长 10 分钟才自愈。
+  Verify: 2026-08-26 从 `/root/homer-push-backup-*-extensions.js` 恢复后 hash 回到 git HEAD `28b34470`，冷启动 31.3s、18/18 激活、0 失败。后续的 `runtimeRootPaths` 改动改用「先 `add_init_script` 干跑 A/B、确认 0 page error 再推」的流程，上线后实测无回归。
+
+- Symptom: 想给 SillyTavern 运行时做前端性能改动，但单次墙钟测量在 25s~80s 之间乱跳，无法判断改动是变快还是变慢。
+  Cause: 这条中美链路 RTT 约 69ms 且抖动极大，而运行时一次要 400+ 个请求、约 190 层串行依赖深度，所以链路抖动会被放大几十倍。服务器侧其实是空的（load average 0.02、dialogue 进程 0.2% CPU、8 核），瓶颈全在客户端往返，因此**任何单次 before/after 对比都不可信**。我一度据此报出「54s→29s」，那是两个不同时间点的测量，不是受控对比。
+  Fix: ① 用 `pg.route(...).fulfill(body=本地文件)` 把改后的 JS 顶替线上那一份 —— 既能在真实生产环境验证，又完全不碰服务器，这是改 vendored runtime 前的强制步骤；② 一次登录后 `context.storage_state()` 复用会话，把登录排除在测量外；③ **交错跑 3 轮 prod/patched 取中位数**，不要先跑完 3 轮 A 再跑 3 轮 B；④ 结论优先看确定性指标（重定向条数、请求数、`Cache-Control` 值、Chrome 的 queueing 累计、扩展激活窗口），墙钟只作为辅证。
+  Verify: 2026-08-27 交错 3 轮实测扩展并行化：activation window 中位数 28.2s→18.2s（3/3 轮都更快），iframe 中位数 54.3s→46.2s；同期单次测量在 42~58s 间波动，若只跑一轮会得出相反结论。
+
+- Symptom: 嵌入运行时里 `modulepreload` 一律失败（`ERR_ABORTED`），预热反而拖慢并让扩展全部激活失败。
+  Cause: `extensions.js` 用根相对 `/scripts/extensions/...` 加载扩展，被 Nginx 307 弹到 `/module/dialogue/...`。**preload 不能跨重定向** —— 它按原始 URL 记账，重定向后视为不匹配并 abort，同时把该 URL 在 module map 里标成 errored，后续 `<script type=module>` 复用错误结果。
+  Fix: 先加 `extensionAssetUrl()` 用 `new URL(path, document.baseURI)` 解析（`index.html` 的 `<base href>` 在生产是 `/module/dialogue/`，独立部署时是 `/`，所以对上游无副作用），把 `extensions.js` 里 5 处根相对 URL 全部改掉 —— **必须全改，混用会让同一模块在 module map 里注册两次、扩展初始化两遍**。URL 不再经过 307 后 preload 才可用。然后把 `activateExtensions()` 的串行 `await` 改成按 `loading_order` 分组并行，并在激活前 `prefetchExtensionAssets()` 一次性预热整个模块图（preload 只取不执行，不改变激活顺序）。
+  Verify: 2026-08-27 base 相对 `modulepreload` 实测 `onload` 且 200（改前同一 URL 是 `error`+307）。重定向 64→32。交错 3 轮：18/18 激活、0 失败、0 page error、18 条 preload 注入；activation window 中位数 28.2s→18.2s。上线后线上复验 18/18、0 失败、preloads=18。
+
+- Symptom: 要验证 APK 里打包的 WebView 页面（`assets/offline/`）的 DOM 和点击行为，但截图看不清、`uiautomator dump` 只给出一个 `NAF="true"` 的空 WebView 节点、盲点坐标怎么试都不触发。
+  Cause: WebView 默认不向 accessibility 暴露内部节点，所以 uiautomator 拿不到；release 构建里 `setWebContentsDebuggingEnabled(BuildConfig.DEBUG)` 又把远程调试关了；而快照页是在真运行时就绪前短暂显示的，靠计时+坐标去点根本对不准。
+  Fix: 编 debug 变体（`applicationIdSuffix .debug` 可与 release 并存，调试开关自动为 true）→ `adb shell cat /proc/net/unix | grep webview_devtools` 拿到 `webview_devtools_remote_<pid>`（注意要用**当前**进程的 pid，旧进程的 socket 会残留）→ `adb forward tcp:9333 localabstract:webview_devtools_remote_<pid>` → 用 `tools/webview_cdp.py` 走裸 CDP `Runtime.evaluate`。**Playwright 的 `connect_over_cdp` 连不上 Android WebView**，它要 `Browser.setDownloadBehavior` 而 WebView 未实现，会报 `Browser context management is not supported`。点击效果不要靠截图判断，用 **nginx access log** 做黑盒断言。
+  Verify: 2026-08-28 CDP 读到离线页 11 个导航项、`HomerNative.openPath` 为 function、历史条目状态正确；点「我的」后日志出现 `GET /app/me.html`，点历史条目出现 `GET /app/chat.html?app_id=…&conversation_id=…`，9 个越权路径（`/admin.html`、`/module/dialogue/`、`javascript:`、`file://`、`//evil.invalid`、`../admin.html` 等）产生 0 条请求。
