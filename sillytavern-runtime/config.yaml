@@ -65,9 +65,12 @@ homerBridge:
   requestTimeoutMs: 3000
   loginUrl: http://127.0.0.1:8000/app/login.html
 hostWhitelist:
-  enabled: false
+  enabled: true
   scan: true
-  hosts: []
+  hosts:
+    - patcher.villainy.top
+    - 127.0.0.1
+    - localhost
 privateAddressWhitelist:
   enabled: false
   allowUnresolvedHosts: false

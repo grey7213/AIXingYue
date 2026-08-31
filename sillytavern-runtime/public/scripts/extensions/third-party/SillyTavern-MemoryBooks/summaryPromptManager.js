@@ -5,6 +5,7 @@ import { getRequestHeaders } from '../../../../script.js';
 import { getBuiltInPresetPrompts, getDefaultPrompt } from './utils.js';
 import { FILE_NAMES, SCHEMA, DISPLAY_NAME_DEFAULTS, DISPLAY_NAME_I18N_KEYS } from './constants.js';
 import { translate } from '../../../i18n.js';
+import { userFileExists } from './userFiles.js';
 
 const MODULE_NAME = 'STMemoryBooks-SummaryPromptManager';
 const PROMPTS_FILE = FILE_NAMES.PROMPTS_FILE;
@@ -113,16 +114,19 @@ async function loadOverrides(settings = null) {
     let data = null;
 
     try {
-        const response = await fetch(`/user/files/${PROMPTS_FILE}`, {
-            method: 'GET',
-            credentials: 'include',
-            headers: getRequestHeaders(),
-        });
-
-        if (!response.ok) {
+        const exists = await userFileExists(PROMPTS_FILE);
+        if (!exists) {
             // File does not exist. Always create with built-ins (and migrate legacy custom prompts)
             mustWrite = true;
         } else {
+            const response = await fetch(`/user/files/${PROMPTS_FILE}`, {
+                method: 'GET',
+                credentials: 'include',
+                headers: getRequestHeaders(),
+            });
+            if (!response.ok) {
+                throw new Error(`Failed to load prompts: ${response.status} ${response.statusText}`);
+            }
             const text = await response.text();
             data = JSON.parse(text);
             if (!validatePromptsFile(data)) {

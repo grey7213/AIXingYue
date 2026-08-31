@@ -29,7 +29,7 @@ from spine_media_support import (
 
 
 MEDIA_RULES = {
-    "bgm": {"mimes": {"audio/mpeg", "audio/mp3"}, "max_size": 30 * 1024 * 1024},
+    "bgm": {"mimes": {"audio/mpeg", "audio/mp3", "audio/ogg"}, "max_size": 30 * 1024 * 1024},
     "portrait": {"mimes": {"image/png", "image/jpeg", "image/webp", "image/gif"}, "max_size": 20 * 1024 * 1024},
     "background": {"mimes": {"image/png", "image/jpeg", "image/webp", "image/gif", "video/mp4", "video/webm"}, "max_size": 80 * 1024 * 1024},
     "spine": {"mimes": set(SPINE_MIMES), "max_size": SPINE_MAX_UPLOAD_BYTES},
@@ -78,6 +78,8 @@ MAX_CARD_EXPERIENCE_UNKNOWN_BYTES = 256_000
 MAX_STRUCTURED_COMPONENT_BYTES = 100_000
 MAX_STRUCTURED_COMPONENT_ITEMS = 200
 MAX_STRUCTURED_MAP_DEPTH = 7
+MAX_GALGAME_MAPPINGS = 80
+ASSET_BUNDLE_PATH_PREFIX = "/media-cache/card-assets/ready/"
 DEFAULT_STALE_SECONDS = 24 * 60 * 60
 
 _OMIT = object()
@@ -244,6 +246,17 @@ def _clean_emotion(value: object) -> str:
     return str(value or "").strip()[:40]
 
 
+def _clean_stage_asset_metadata(value: object) -> dict[str, str]:
+    """Only persist the small, declarative tags used by the card stage."""
+    raw = value if isinstance(value, dict) else {}
+    limits = {"emotion": 40, "speaker": 80, "scene": 80}
+    return {
+        key: str(raw.get(key) or "").strip()[:limit]
+        for key, limit in limits.items()
+        if key in raw
+    }
+
+
 
 def _sniff_mime(head: bytes) -> str:
     if head.startswith(b"\x89PNG\r\n\x1a\n"):
@@ -256,6 +269,8 @@ def _sniff_mime(head: bytes) -> str:
         return "image/webp"
     if head.startswith(b"ID3") or (len(head) >= 2 and head[0] == 0xFF and head[1] & 0xE0 == 0xE0):
         return "audio/mpeg"
+    if head.startswith(b"OggS"):
+        return "audio/ogg"
     if head.startswith(b"PK\x03\x04"):
         return "application/zip"
     if len(head) >= 12 and head[4:8] == b"ftyp":
@@ -345,7 +360,7 @@ class CardMediaService:
             raise CardMediaError("invalid sha256")
         asset_id = f"asset-{uuid.uuid4()}"
         extension = {
-            "audio/mpeg": ".mp3", "audio/mp3": ".mp3", "image/png": ".png",
+            "audio/mpeg": ".mp3", "audio/mp3": ".mp3", "audio/ogg": ".ogg", "image/png": ".png",
             "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif",
             "video/mp4": ".mp4", "video/webm": ".webm",
             "application/zip": ".spine.zip", "application/x-zip-compressed": ".spine.zip",
@@ -476,9 +491,11 @@ class CardMediaService:
         if len(assets) != len(asset_ids):
             raise CardMediaError("one or more media assets are missing or not owned")
         allowed = {row["id"]: row["kind"] for row in assets}
-        # 客户端提交的情绪/姿态标签（galgame 立绘切换用），按 asset_id 收集。
-        requested_emotions = {
-            _clean_id(item.get("id"), "asset_id"): _clean_emotion((item.get("metadata") or {}).get("emotion"))
+        # Only these declarative tags may flow from a card pack into persisted
+        # media metadata. They drive portrait/scene selection without executing
+        # card-supplied code.
+        requested_metadata = {
+            _clean_id(item.get("id"), "asset_id"): _clean_stage_asset_metadata(item.get("metadata"))
             for item in requested[:200]
             if isinstance(item, dict) and isinstance(item.get("metadata"), dict)
         }
@@ -491,11 +508,12 @@ class CardMediaService:
                 f"UPDATE card_media_assets SET app_id=?, draft_id=NULL, updated_at=? WHERE owner_user_id=? AND draft_id=? AND status='ready' AND id IN ({marks})",
                 (app, now, owner, draft, *asset_ids),
             )
-        # 将情绪标签持久化进 DB metadata，保证读取时可用于立绘切换。
+        # Persist stage tags so reload, rewind and candidate switching can
+        # resolve the same scene/portrait from the latest assistant message.
         persisted: list[sqlite3.Row] = []
         for row in assets:
-            emotion = requested_emotions.get(row["id"])
-            if emotion is None:
+            changes = requested_metadata.get(row["id"])
+            if changes is None:
                 persisted.append(row)
                 continue
             try:
@@ -504,16 +522,17 @@ class CardMediaService:
                 current = {}
             if not isinstance(current, dict):
                 current = {}
-            if emotion:
-                current["emotion"] = emotion
-            else:
-                current.pop("emotion", None)
+            for key, value in changes.items():
+                if value:
+                    current[key] = value
+                else:
+                    current.pop(key, None)
             self.conn.execute(
                 "UPDATE card_media_assets SET metadata=?, updated_at=? WHERE id=? AND owner_user_id=?",
                 (json.dumps(current, ensure_ascii=False, separators=(",", ":")), now, row["id"], owner),
             )
             persisted.append(self._owned_asset(row["id"], owner))
-        if commit and (asset_ids or requested_emotions):
+        if commit and (asset_ids or requested_metadata):
             self.conn.commit()
         return {"media_assets": [_asset_dict(row) for row in persisted], "world_info": world_info, "card_experience": experience}
 
@@ -1086,7 +1105,7 @@ def normalize_card_experience(value: object, allowed_assets: dict[str, str], wor
 
     layout = str(stage_raw.get("layout") or "standard")
     stage = {**_preserved_unknown_fields(stage_raw, {
-        "enabled", "layout", "chat_width", "background_asset_id", "portrait_asset_id",
+        "enabled", "layout", "orientation", "chat_width", "background_asset_id", "portrait_asset_id",
         "show_portrait", "portrait_position", "portrait_width", "portrait_opacity",
         "show_avatars", "avatar_position", "accent_color", "user_bubble_color",
         "assistant_bubble_color", "text_color", "bubble_radius", "font_scale",
@@ -1094,6 +1113,7 @@ def normalize_card_experience(value: object, allowed_assets: dict[str, str], wor
     }, unknown_budget),
         "enabled": bool(stage_raw.get("enabled")),
         "layout": layout if layout in STAGE_LAYOUTS else "standard",
+        "orientation": "landscape" if stage_raw.get("orientation") == "landscape" else "default",
         "chat_width": int(_component_number(stage_raw.get("chat_width", 72), 35, 100, 72)),
         "background_asset_id": stage_background,
         "portrait_asset_id": stage_portrait,
@@ -1190,14 +1210,18 @@ def normalize_card_experience(value: object, allowed_assets: dict[str, str], wor
     galgame_raw = raw.get("galgame") if isinstance(raw.get("galgame"), dict) else {}
     galgame = {
         **_preserved_unknown_fields(galgame_raw, {
-            "enabled", "dialogue_position", "portrait_layout", "default_portrait_id",
+            "enabled", "theme", "dialogue_position", "portrait_layout", "default_portrait_id",
             "default_background_id", "portrait_directive", "background_directive",
+            "speaker_directive", "affiliation_directive", "mood_directive", "bgm_directive",
+            "scene_bgm_map", "mood_bgm_map", "show_stage_actions",
             "hide_bubble_avatar", "typewriter",
         }, unknown_budget),
         **_normalize_galgame(galgame_raw, allowed_assets),
     }
+    asset_bundle = _normalize_asset_bundle(raw.get("asset_bundle"))
     return {**_preserved_unknown_fields(raw, {
         "version", "stage", "structured_components", "bgm", "ui_rules", "sidebars", "galgame",
+        "asset_bundle", "chat_shell",
     }, unknown_budget),
         "version": 2,
         "stage": stage,
@@ -1215,12 +1239,33 @@ def normalize_card_experience(value: object, allowed_assets: dict[str, str], wor
         "ui_rules": sorted(rules, key=lambda item: (item["order"], item["name"])),
         "sidebars": sorted(sidebars, key=lambda item: (item["order"], item["name"])),
         "galgame": galgame,
+        "asset_bundle": asset_bundle,
         "chat_shell": _normalize_chat_shell(raw.get("chat_shell")),
     }
 
 
 DEFAULT_PORTRAIT_DIRECTIVE = r"\[(?:立绘|portrait|图)[:：]\s*([^\]]+)\]"
 DEFAULT_BACKGROUND_DIRECTIVE = r"\[(?:背景|bg|scene)[:：]\s*([^\]]+)\]"
+DEFAULT_SPEAKER_DIRECTIVE = r"\[(?:说话者|speaker|角色)[:：]\s*([^\]]+)\]"
+DEFAULT_AFFILIATION_DIRECTIVE = r"\[(?:身份|affiliation|组织)[:：]\s*([^\]]+)\]"
+DEFAULT_MOOD_DIRECTIVE = r"\[(?:气氛|mood|情绪)[:：]\s*([^\]]+)\]"
+DEFAULT_BGM_DIRECTIVE = r"\[(?:BGM|音乐|music)[:：]\s*([^\]]+)\]"
+
+
+def _normalize_asset_bundle(value: object) -> dict:
+    """只允许引用惑梦已安装、同源公开的版本化角色资源包。"""
+    raw = value if isinstance(value, dict) else {}
+    manifest_url = str(raw.get("manifest_url") or "").strip()[:2048]
+    if not manifest_url.startswith(ASSET_BUNDLE_PATH_PREFIX) or ".." in manifest_url:
+        manifest_url = ""
+    return {
+        "enabled": bool(raw.get("enabled")) and bool(manifest_url),
+        "manifest_url": manifest_url,
+        "expected_id": _clean_id(raw.get("expected_id"), "bundle_id", optional=True),
+        "default_background_id": _clean_id(raw.get("default_background_id"), "asset_id", optional=True),
+        "default_portrait_id": _clean_id(raw.get("default_portrait_id"), "asset_id", optional=True),
+        "default_bgm_id": _clean_id(raw.get("default_bgm_id"), "asset_id", optional=True),
+    }
 
 
 def _normalize_galgame(value: object, allowed_assets: dict[str, str]) -> dict:
@@ -1243,15 +1288,39 @@ def _normalize_galgame(value: object, allowed_assets: dict[str, str]) -> dict:
             return fallback
         return pattern
 
+    def _bgm_map(candidate: object) -> dict[str, str]:
+        if not isinstance(candidate, dict):
+            return {}
+        output: dict[str, str] = {}
+        for raw_key, raw_target in list(candidate.items())[:MAX_GALGAME_MAPPINGS]:
+            key = str(raw_key or "").strip().lower()[:80]
+            if not key or key in _UNSAFE_JSON_KEYS:
+                continue
+            target = _clean_id(raw_target, "bgm_asset_id", optional=True)
+            if not target:
+                continue
+            if allowed_assets.get(target) != "bgm":
+                raise CardMediaError("galgame BGM mapping target is invalid")
+            output[key] = target
+        return output
+
     layout = raw.get("portrait_layout")
     return {
         "enabled": bool(raw.get("enabled")),
+        "theme": "archive" if raw.get("theme") == "archive" else "standard",
         "dialogue_position": "top" if raw.get("dialogue_position") == "top" else "bottom",
         "portrait_layout": layout if layout in {"center", "left", "right", "dual"} else "center",
         "default_portrait_id": default_portrait,
         "default_background_id": default_background,
         "portrait_directive": _directive(raw.get("portrait_directive"), DEFAULT_PORTRAIT_DIRECTIVE),
         "background_directive": _directive(raw.get("background_directive"), DEFAULT_BACKGROUND_DIRECTIVE),
+        "speaker_directive": _directive(raw.get("speaker_directive"), DEFAULT_SPEAKER_DIRECTIVE),
+        "affiliation_directive": _directive(raw.get("affiliation_directive"), DEFAULT_AFFILIATION_DIRECTIVE),
+        "mood_directive": _directive(raw.get("mood_directive"), DEFAULT_MOOD_DIRECTIVE),
+        "bgm_directive": _directive(raw.get("bgm_directive"), DEFAULT_BGM_DIRECTIVE),
+        "scene_bgm_map": _bgm_map(raw.get("scene_bgm_map")),
+        "mood_bgm_map": _bgm_map(raw.get("mood_bgm_map")),
+        "show_stage_actions": raw.get("show_stage_actions") is not False,
         "hide_bubble_avatar": raw.get("hide_bubble_avatar") is not False,
         "typewriter": raw.get("typewriter") is not False,
     }

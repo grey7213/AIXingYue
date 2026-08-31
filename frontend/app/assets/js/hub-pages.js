@@ -1,5 +1,5 @@
 import { api, requireAuth, getCachedUser, setCachedUser, clearAuth, ApiError } from '/app/assets/js/app-core.js?v=20260717-handoff-merge';
-import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260812-license-removal';
+import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260831-silvercat-v1';
 
 async function loadUser(ctx) {
   if (!requireAuth()) return false;
@@ -84,7 +84,10 @@ export function historiesPage() {
     appNavText(key, fallback = '') { return appNavText(this, key, fallback); },
     chatText(key, fallback = '') { return chatText(this, key, fallback); },
     conversationHref(c) {
-      return `/app/chat.html?conv_id=${encodeURIComponent(c?.id || '')}`;
+      const params = new URLSearchParams();
+      if (c?.app_id) params.set('app_id', String(c.app_id));
+      if (c?.id) params.set('conversation_id', String(c.id));
+      return `/app/chat.html?${params}`;
     },
     conversationTitle(c) {
       return c?.app_name || c?.title || this.chatText('unnamed_conversation', '未命名会话');

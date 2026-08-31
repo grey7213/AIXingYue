@@ -310,16 +310,17 @@ select.xy-input option:hover {
 /* 加载动画 */
 .xy-loading {
   display: inline-block;
-  width: 16px;
-  height: 16px;
-  border: 2px solid rgba(255, 255, 255, 0.25);
-  border-top-color: white;
-  border-radius: 50%;
-  animation: xy-spin .7s linear infinite;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 6px;
+  background: url('/assets/img/brand/pull-refresh-active-64.png?v=20260831-silvercat-v1') center / contain no-repeat;
+  animation: xy-loader-breathe .9s ease-in-out infinite;
 }
 
-@keyframes xy-spin {
-  to { transform: rotate(360deg); }
+@keyframes xy-loader-breathe {
+  0%, 100% { opacity: .72; transform: translateY(1px) scale(.94); }
+  50% { opacity: 1; transform: translateY(-1px) scale(1); }
 }
 
 /* 链接 */
@@ -1274,9 +1275,9 @@ select.xy-input option {
   color: var(--fy-text);
 }
 
-nav.fixed,
-.fixed.top-0.inset-x-0,
-.md\:hidden.fixed {
+nav.fixed:not(.xy-global-topbar):not(.xy-admin-mobilebar),
+.fixed.top-0.inset-x-0:not(.xy-global-topbar):not(.xy-admin-mobilebar),
+.md\:hidden.fixed:not(.xy-admin-mobilebar) {
   background: rgba(255, 255, 255, .88) !important;
   border-color: var(--fy-border) !important;
   backdrop-filter: blur(12px);
@@ -1327,4 +1328,13 @@ aside.md\:flex button[class*="bg-violet"] {
     padding-top: 7rem !important;
     padding-bottom: 4rem !important;
   }
+}
+/* Software-wide top bar treatment: an opaque-enough upper edge for legibility
+   that fades into the page instead of becoming a solid card. */
+.xy-global-topbar {
+  background: linear-gradient(180deg, rgba(10, 4, 32, .78) 0%, rgba(10, 4, 32, .52) 58%, rgba(10, 4, 32, .14) 100%) !important;
+  border-color: rgba(196, 181, 253, .14) !important;
+  -webkit-backdrop-filter: blur(16px) saturate(132%);
+  backdrop-filter: blur(16px) saturate(132%);
+  box-shadow: 0 10px 28px rgba(3, 2, 12, .12);
 }

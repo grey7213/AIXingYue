@@ -29,6 +29,8 @@ export const CHAT_SHELL_LIMITS = Object.freeze({
 });
 export const STAGE_LAYOUTS = Object.freeze(['standard', 'landscape', 'split', 'visual_novel']);
 export const STRUCTURED_COMPONENT_TYPES = Object.freeze(['map', 'inventory', 'relationship', 'skill_tree', 'status']);
+export const GALGAME_MAP_LIMIT = 80;
+export const ASSET_BUNDLE_LIMIT = 1000;
 
 export const STAGE_THEME_PRESETS = Object.freeze([
   Object.freeze({ id: 'warm', name: '暖金', accent_color: '#d7b878', user_bubble_color: '#5b4635', assistant_bubble_color: '#211d19', text_color: '#fff8ed' }),
@@ -82,6 +84,19 @@ const clamp = (value, min, max, fallback) => {
 const text = (value, max = 200) => String(value == null ? '' : value).trim().slice(0, max);
 const idText = (value, fallback = '') => text(value, 96).replace(/[^\w:.-]/g, '-') || fallback;
 const sourceText = (value, max) => (typeof value === 'string' ? value.replace(/\0/g, '').slice(0, max) : '');
+const UNSAFE_OBJECT_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
+
+function normalizeBgmMap(raw) {
+  const output = Object.create(null);
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return output;
+  for (const [rawKey, rawValue] of Object.entries(raw).slice(0, GALGAME_MAP_LIMIT)) {
+    const key = text(rawKey, 80).toLowerCase();
+    const target = idText(rawValue);
+    if (!key || !target || UNSAFE_OBJECT_KEYS.has(key)) continue;
+    output[key] = target;
+  }
+  return output;
+}
 
 export function newStableId(prefix = 'item') {
   if (globalThis.crypto?.randomUUID) return `${prefix}-${globalThis.crypto.randomUUID()}`;
@@ -104,7 +119,33 @@ export function defaultCardExperience() {
     ui_rules: [],
     sidebars: [],
     galgame: defaultGalgame(),
+    asset_bundle: defaultAssetBundle(),
     chat_shell: defaultChatShell(),
+  };
+}
+
+export function defaultAssetBundle() {
+  return {
+    enabled: false,
+    manifest_url: '',
+    expected_id: '',
+    default_background_id: '',
+    default_portrait_id: '',
+    default_bgm_id: '',
+  };
+}
+
+export function normalizeAssetBundle(raw) {
+  const fallback = defaultAssetBundle();
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return fallback;
+  const manifestUrl = text(raw.manifest_url, 2048);
+  return {
+    enabled: !!raw.enabled && !!manifestUrl,
+    manifest_url: manifestUrl,
+    expected_id: idText(raw.expected_id),
+    default_background_id: idText(raw.default_background_id),
+    default_portrait_id: idText(raw.default_portrait_id),
+    default_bgm_id: idText(raw.default_bgm_id),
   };
 }
 
@@ -148,6 +189,7 @@ export function defaultStage() {
   return {
     enabled: false,
     layout: 'standard',
+    orientation: 'default', // default | landscape
     chat_width: 72,
     background_asset_id: '',
     portrait_asset_id: '',
@@ -192,6 +234,7 @@ export function normalizeStage(raw) {
   return {
     enabled: !!raw.enabled,
     layout: STAGE_LAYOUTS.includes(raw.layout) ? raw.layout : fallback.layout,
+    orientation: raw.orientation === 'landscape' ? 'landscape' : 'default',
     chat_width: Math.round(clamp(raw.chat_width, 35, 100, fallback.chat_width)),
     background_asset_id: idText(raw.background_asset_id),
     portrait_asset_id: idText(raw.portrait_asset_id),
@@ -249,6 +292,7 @@ export function normalizeStructuredComponents(raw) {
 export function defaultGalgame() {
   return {
     enabled: false,
+    theme: 'standard', // standard | archive
     dialogue_position: 'bottom', // bottom | top
     portrait_layout: 'center', // center | left | right | dual
     default_portrait_id: '',
@@ -256,6 +300,13 @@ export function defaultGalgame() {
     // 情绪切换：AI 回复里出现 pattern（默认 [立绘:xxx]）时，按标签匹配立绘素材的 metadata.emotion。
     portrait_directive: '\\[(?:立绘|portrait|图)[:：]\\s*([^\\]]+)\\]',
     background_directive: '\\[(?:背景|bg|scene)[:：]\\s*([^\\]]+)\\]',
+    speaker_directive: '\\[(?:说话者|speaker|角色)[:：]\\s*([^\\]]+)\\]',
+    affiliation_directive: '\\[(?:身份|affiliation|组织)[:：]\\s*([^\\]]+)\\]',
+    mood_directive: '\\[(?:气氛|mood|情绪)[:：]\\s*([^\\]]+)\\]',
+    bgm_directive: '\\[(?:BGM|音乐|music)[:：]\\s*([^\\]]+)\\]',
+    scene_bgm_map: Object.create(null),
+    mood_bgm_map: Object.create(null),
+    show_stage_actions: true,
     hide_bubble_avatar: true,
     typewriter: true,
   };
@@ -269,12 +320,20 @@ export function normalizeGalgame(raw) {
   const portraitLayout = layouts.includes(raw.portrait_layout) ? raw.portrait_layout : 'center';
   return {
     enabled: !!raw.enabled,
+    theme: raw.theme === 'archive' ? 'archive' : 'standard',
     dialogue_position: dialoguePosition,
     portrait_layout: portraitLayout,
     default_portrait_id: idText(raw.default_portrait_id),
     default_background_id: idText(raw.default_background_id),
     portrait_directive: text(raw.portrait_directive || fallback.portrait_directive, 500),
     background_directive: text(raw.background_directive || fallback.background_directive, 500),
+    speaker_directive: text(raw.speaker_directive || fallback.speaker_directive, 500),
+    affiliation_directive: text(raw.affiliation_directive || fallback.affiliation_directive, 500),
+    mood_directive: text(raw.mood_directive || fallback.mood_directive, 500),
+    bgm_directive: text(raw.bgm_directive || fallback.bgm_directive, 500),
+    scene_bgm_map: normalizeBgmMap(raw.scene_bgm_map),
+    mood_bgm_map: normalizeBgmMap(raw.mood_bgm_map),
+    show_stage_actions: raw.show_stage_actions !== false,
     hide_bubble_avatar: raw.hide_bubble_avatar !== false,
     typewriter: raw.typewriter !== false,
   };
@@ -311,9 +370,14 @@ export function normalizeAssetMetadata(metadata, raw = {}) {
 
 
 export function normalizeMediaAssets(value) {
+  return normalizeMediaAssetsWithLimit(value, 200);
+}
+
+export function normalizeMediaAssetsWithLimit(value, maximum = 200) {
   if (!Array.isArray(value)) return [];
   const seen = new Set();
-  return value.slice(0, 200).map(normalizeMediaAsset).filter((asset) => {
+  const limit = Math.max(1, Math.min(ASSET_BUNDLE_LIMIT, Number(maximum) || 200));
+  return value.slice(0, limit).map(normalizeMediaAsset).filter((asset) => {
     if (!asset || seen.has(asset.id)) return false;
     seen.add(asset.id);
     return true;
@@ -398,6 +462,7 @@ export function normalizeCardExperience(raw) {
     ui_rules: (Array.isArray(raw.ui_rules) ? raw.ui_rules : []).slice(0, 40).map(normalizeUiRule).filter(Boolean).sort((a, b) => a.order - b.order),
     sidebars: (Array.isArray(raw.sidebars) ? raw.sidebars : []).slice(0, 20).map(normalizeSidebar).filter(Boolean).sort((a, b) => a.order - b.order),
     galgame: normalizeGalgame(raw.galgame),
+    asset_bundle: normalizeAssetBundle(raw.asset_bundle),
     chat_shell: normalizeChatShell(raw.chat_shell),
   };
 }
@@ -474,9 +539,16 @@ export function stripExperienceDirectives(input, experience) {
     const regex = safeRegExp(sidebar.open_pattern, sidebar.flags.includes('g') ? sidebar.flags : `${sidebar.flags}g`);
     if (regex) output = output.replace(regex, '');
   }
-  // galgame 立绘/背景指令标记不应显示在正文里。
+  // galgame 舞台状态指令标记不应显示在正文里。
   if (config.galgame?.enabled) {
-    for (const directive of [config.galgame.portrait_directive, config.galgame.background_directive]) {
+    for (const directive of [
+      config.galgame.portrait_directive,
+      config.galgame.background_directive,
+      config.galgame.speaker_directive,
+      config.galgame.affiliation_directive,
+      config.galgame.mood_directive,
+      config.galgame.bgm_directive,
+    ]) {
       const regex = safeRegExp(directive, 'ig');
       if (regex) output = output.replace(regex, '');
     }
@@ -484,9 +556,9 @@ export function stripExperienceDirectives(input, experience) {
   return output.replace(/\n{3,}/g, '\n\n').trim();
 }
 
-// 从一段文本里解析 galgame 指令（立绘/背景标签），返回捕获到的标签文本。
+// 从一段文本里解析 galgame 指令，返回最后一组完整舞台标签。
 export function parseGalgameDirectives(input, galgame) {
-  const result = { portrait: '', background: '' };
+  const result = { portrait: '', background: '', speaker: '', affiliation: '', mood: '', bgm: '' };
   if (!galgame || !galgame.enabled) return result;
   const grab = (pattern) => {
     const regex = safeRegExp(pattern, 'ig');
@@ -503,5 +575,9 @@ export function parseGalgameDirectives(input, galgame) {
   };
   result.portrait = grab(galgame.portrait_directive);
   result.background = grab(galgame.background_directive);
+  result.speaker = grab(galgame.speaker_directive);
+  result.affiliation = grab(galgame.affiliation_directive);
+  result.mood = grab(galgame.mood_directive);
+  result.bgm = grab(galgame.bgm_directive);
   return result;
 }

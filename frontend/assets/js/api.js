@@ -202,8 +202,12 @@ export const api = {
     globalPresets: () => request('/admin/api/global-presets'),
     importGlobalPromptPreset: (payload) =>
       request('/admin/api/global-presets/import-prompt', { method: 'POST', body: payload }),
+    importGlobalPresetBundle: (payload) =>
+      request('/admin/api/global-presets/import-bundle', { method: 'POST', body: payload }),
     importGlobalRegexPreset: (payload) =>
       request('/admin/api/global-presets/import-regex', { method: 'POST', body: payload }),
+    importGlobalRegexJson: (payload) =>
+      request('/admin/api/global-presets/import-regex-json', { method: 'POST', body: payload }),
     saveGlobalPreset: (kind, presetId, payload) =>
       request(`/admin/api/global-presets/${encodeURIComponent(kind)}/${encodeURIComponent(presetId)}`, { method: 'POST', body: { preset: payload } }),
     activateGlobalPreset: (kind, presetId) =>

@@ -4,13 +4,13 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>管理后台 - 惑梦（Homer）</title>
-  <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
-  <link rel="icon" href="/favicon.ico">
-  <link rel="apple-touch-icon" sizes="180x180" href="/assets/img/apple-touch-icon.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png?v=20260831-silvercat-v1">
+  <link rel="icon" href="/favicon.ico?v=20260831-silvercat-v1">
+  <link rel="apple-touch-icon" sizes="180x180" href="/assets/img/apple-touch-icon.png?v=20260831-silvercat-v1">
   <script src="/assets/vendor/tailwindcss-browser.js?v=20260713-local"></script>
-  <link rel="stylesheet" href="/assets/css/custom.css?v=20260703-fengyue-ui2">
-  <link rel="stylesheet" href="/assets/css/admin.css?v=20260711-reference-ui1">
-  <script type="module" src="/assets/js/admin-app.js?v=20260728-model-discovery"></script>
+  <link rel="stylesheet" href="/assets/css/custom.css?v=20260831-silvercat-v1">
+  <link rel="stylesheet" href="/assets/css/admin.css?v=20260817-mobile-model-pricing">
+  <script type="module" src="/assets/js/admin-app.js?v=20260817-preset-pricing"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
 <body class="xy-admin min-h-screen">
@@ -20,6 +20,12 @@
     <!-- Toast -->
     <template x-if="toast">
       <div class="xy-toast" :class="`xy-toast-${toast.type}`" x-text="toast.message"></div>
+    </template>
+    <template x-if="loading">
+      <div class="xy-admin-loading" role="status" aria-live="polite">
+        <span class="xy-loading"></span>
+        <span>正在处理…</span>
+      </div>
     </template>
 
     <!-- 未授权提示 -->
@@ -47,7 +53,7 @@
         <!-- 侧栏 -->
         <aside class="xy-admin-sidebar hidden md:flex flex-col w-64 p-5">
           <a href="/" class="flex items-center gap-3 mb-8">
-            <img src="/assets/img/logo-64.png?v=20260627-logo" alt="惑梦（Homer）" class="w-10 h-10 drop-shadow-[0_0_12px_rgba(168,85,247,0.55)]">
+            <img src="/assets/img/logo-64.png?v=20260831-silvercat-v1" alt="惑梦（Homer）" class="w-10 h-10 drop-shadow-[0_0_12px_rgba(168,85,247,0.55)]">
             <div>
               <div class="font-bold text-base xy-gradient-text">惑梦（Homer）</div>
               <div class="text-[10px] text-slate-400">管理后台</div>
@@ -74,7 +80,7 @@
         <div class="xy-admin-mobilebar md:hidden fixed top-0 inset-x-0 z-30">
           <div class="flex items-center justify-between p-4">
             <div class="flex items-center gap-2">
-              <img src="/assets/img/logo-64.png?v=20260627-logo" alt="惑梦（Homer）" class="w-8 h-8">
+              <img src="/assets/img/logo-64.png?v=20260831-silvercat-v1" alt="惑梦（Homer）" class="w-8 h-8">
               <span class="font-bold text-sm">管理后台</span>
             </div>
             <select @change="switchTab($event.target.value)" class="xy-input text-sm py-2 px-3 bg-black/40">
@@ -86,7 +92,7 @@
         </div>
 
         <!-- 主内容 -->
-        <div class="xy-admin-main flex-1 px-4 py-6 sm:px-6 md:px-8 md:py-7 pt-24 md:pt-7 overflow-x-auto">
+        <div class="xy-admin-main flex-1 px-4 py-6 sm:px-6 md:px-8 md:py-7 pt-24 md:pt-7 overflow-x-hidden">
           <!-- 统计 -->
           <div x-show="activeTab === 'stats'">
             <div class="flex items-center justify-between mb-6">
@@ -681,8 +687,62 @@
                       </div>
                       <div>
                         <label class="xy-label">模型列表（每行一个，或用逗号分隔）</label>
-                        <textarea class="xy-input" style="min-height:90px" x-model="preset.modelsText" placeholder="gpt-4o-mini&#10;gpt-4o&#10;gemini-2.5-flash"></textarea>
+                        <textarea class="xy-input" style="min-height:90px" x-model="preset.modelsText" @change="syncModelConfigs(preset)" placeholder="gpt-4o-mini&#10;gpt-4o&#10;gemini-2.5-flash"></textarea>
                         <div class="text-xs text-slate-500 mt-1">用户在编辑器里会看到「供应商 / 模型」的可搜索条目，所有模型共用这个供应商的 Base URL 和 API Key。</div>
+                      </div>
+                      <div class="rounded-xl border border-violet-300/20 bg-violet-400/5 p-4 space-y-3">
+                        <div class="flex items-start justify-between gap-3 flex-wrap">
+                          <div>
+                            <div class="text-sm font-semibold text-white">逐模型预设与计价</div>
+                            <div class="text-xs text-slate-500 mt-1">每个模型只能绑定一个预设；输入和输出分别计价。</div>
+                          </div>
+                          <button type="button" class="xy-btn xy-btn-ghost text-xs" @click="syncModelConfigs(preset)">同步模型列表</button>
+                        </div>
+                        <template x-if="!(preset.modelConfigs || []).length">
+                          <div class="text-xs text-slate-500 rounded-lg border border-dashed border-white/10 p-3">填写模型列表后点击“同步模型列表”。</div>
+                        </template>
+                        <div class="space-y-3">
+                          <template x-for="config in (preset.modelConfigs || [])" :key="config.model">
+                            <div class="xy-admin-model-card rounded-lg border border-white/10 bg-white p-3 space-y-3">
+                              <div class="grid md:grid-cols-2 gap-3">
+                                <div>
+                                  <label class="xy-label">模型 ID</label>
+                                  <input class="xy-input" :value="config.model" disabled>
+                                </div>
+                                <div>
+                                  <label class="xy-label">用户看到的名称</label>
+                                  <input class="xy-input" x-model="config.display_name" :placeholder="config.model">
+                                </div>
+                              </div>
+                              <div>
+                                <label class="xy-label">该模型唯一使用的预设</label>
+                                <select class="xy-input" x-model="config.preset_id">
+                                  <template x-for="option in globalPromptPresetOptions()" :key="option.id">
+                                    <option :value="option.id" x-text="option.name || option.id"></option>
+                                  </template>
+                                </select>
+                              </div>
+                              <div class="grid md:grid-cols-3 gap-3">
+                                <div>
+                                  <label class="xy-label">计价方式</label>
+                                  <select class="xy-input" x-model="config.pricing.mode">
+                                    <option value="per_request">按次</option>
+                                    <option value="per_token">按量（1M Token）</option>
+                                  </select>
+                                </div>
+                                <div>
+                                  <label class="xy-label" x-text="config.pricing.mode === 'per_token' ? '输入价 / 1M Token' : '输入一次价格'"></label>
+                                  <input type="number" min="0" step="0.01" class="xy-input" x-model.number="config.pricing.input_price">
+                                </div>
+                                <div>
+                                  <label class="xy-label" x-text="config.pricing.mode === 'per_token' ? '输出价 / 1M Token' : '输出一次价格'"></label>
+                                  <input type="number" min="0" step="0.01" class="xy-input" x-model.number="config.pricing.output_price">
+                                </div>
+                              </div>
+                              <div class="text-xs text-violet-300" x-text="modelPricingHint(config)"></div>
+                            </div>
+                          </template>
+                        </div>
                       </div>
                       <template x-if="preset.catalog_meta || preset.probe_summary">
                         <div class="rounded-lg border border-white/10 bg-black/15 p-3 space-y-2">
@@ -887,16 +947,16 @@
             <div class="flex items-start justify-between gap-4 mb-6 flex-wrap">
               <div>
                 <h1 class="text-2xl font-bold xy-gradient-text">全局预设</h1>
-                <p class="text-sm text-slate-400 mt-1">提示词与正则独立管理；启用新项会停用同类旧项，但不会删除旧记录。</p>
+                <p class="text-sm text-slate-400 mt-1">导入一个 SillyTavern JSON 时自动拆出提示词预设和附带正则；模型配置中每个模型只能绑定一个预设。</p>
               </div>
               <div class="flex items-center gap-2 flex-wrap">
                 <label class="xy-btn xy-btn-ghost text-sm cursor-pointer">
-                  导入提示词 JSON
+                  导入预设 JSON（自动识别正则）
                   <input type="file" accept=".json,application/json" class="hidden" @change="importGlobalPromptFile">
                 </label>
                 <label class="xy-btn xy-btn-ghost text-sm cursor-pointer">
-                  导入正则 ZIP
-                  <input type="file" accept=".zip,application/zip" class="hidden" @change="importGlobalRegexFile">
+                  导入正则 ZIP / JSON
+                  <input type="file" accept=".zip,.json,application/zip,application/json" class="hidden" @change="importGlobalRegexFile">
                 </label>
                 <button type="button" class="xy-btn xy-btn-ghost text-sm" @click="loadGlobalPresets" :disabled="loading">刷新</button>
               </div>
@@ -1974,7 +2034,7 @@
                         </td>
                         <td>
                           <div class="flex items-center gap-3 min-w-72">
-                            <img :src="app.cover || app.icon || '/assets/img/apk/avatar.webp'" class="w-12 h-12 rounded-lg object-cover bg-black/30" alt="" onerror="this.src='/assets/img/apk/avatar.webp'">
+                            <img :src="app.cover || app.icon || '/assets/img/apk/avatar.webp?v=20260831-silvercat-v1'" class="w-12 h-12 rounded-lg object-cover bg-black/30" alt="" onerror="this.src='/assets/img/apk/avatar.webp?v=20260831-silvercat-v1'">
                             <div class="min-w-0">
                               <div class="font-semibold truncate" x-text="app.name || '未命名角色'"></div>
                               <code class="block text-[11px] text-violet-300/75 truncate" x-text="app.display_id ? ('ID: ' + app.display_id) : app.id"></code>

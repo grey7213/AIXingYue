@@ -1,5 +1,5 @@
 import { api, requireAuth, getCachedUser, setCachedUser, clearAuth, formatDateTime, ApiError } from '/app/assets/js/app-core.js?v=20260717-handoff-merge';
-import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260812-license-removal';
+import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260831-silvercat-v1';
 
 function mePage() {
   return {
@@ -58,7 +58,7 @@ function mePage() {
     },
 
     profileAvatar() {
-      return this.profileForm.avatar_url || this.user?.avatar_url || this.user?.avatar || '/assets/img/apk/default_avatar.png?v=20260627-logo';
+      return this.profileForm.avatar_url || this.user?.avatar_url || this.user?.avatar || '/assets/img/apk/default_avatar.png?v=20260831-silvercat-v1';
     },
 
     profileDisplayId() {
@@ -66,7 +66,7 @@ function mePage() {
     },
 
     onAvatarError(event) {
-      if (event?.target) event.target.src = '/assets/img/apk/default_avatar.png?v=20260627-logo';
+      if (event?.target) event.target.src = '/assets/img/apk/default_avatar.png?v=20260831-silvercat-v1';
     },
 
     async onAvatarChange(event) {

@@ -1,5 +1,5 @@
 import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js?v=20260717-handoff-merge';
-import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260812-license-removal';
+import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260831-silvercat-v1';
 
 const BASE_SEEDS = [
   { kind: 'carrot', apiKind: 'code_carrot', name: '代码胡萝卜', cost: 50, rewardCoins: 90, rewardXp: 10, durationSeconds: 3 * 3600, durationLabel: '3 小时' },
@@ -211,6 +211,9 @@ function farmPage() {
       const serverTime = parseTime(raw.server_time || raw.serverTime || outer.server_time || outer.serverTime);
       if (serverTime) this.serverOffsetMs = serverTime - Date.now();
       this.nowMs = Date.now() + this.serverOffsetMs;
+      if (raw.account_balance) this.applyCredits(raw.account_balance);
+      else if (profile.points != null) this.points = intValue(profile.points, this.points);
+      // 农场币是独立货币，与账号积分分开显示。
       this.coins = intValue(profile.coins ?? profile.farm_coins, this.coins);
       this.xp = intValue(profile.xp ?? profile.experience, this.xp);
       this.energy = intValue(profile.energy, this.energy);
@@ -218,7 +221,6 @@ function farmPage() {
       this.energyUpdatedAt = parseTime(profile.energy_updated_at || profile.energyUpdatedAt);
       this.nextEnergyAt = parseTime(profile.next_energy_at || profile.nextEnergyAt);
       this.streakDays = intValue(profile.streak_days ?? profile.streakDays, this.streakDays || 1);
-      if (raw.account_balance) this.applyCredits(raw.account_balance);
       this.stealsLeft = intValue(raw.steals_remaining ?? raw.steals_left ?? raw.stealsLeft ?? profile.steals_remaining ?? profile.steals_left, this.stealsLeft);
       this.dailyRewardPoints = intValue(raw.daily_reward_points ?? raw.daily_points ?? raw.daily_reward?.points, this.dailyRewardPoints);
       if (raw.daily_reward && ('claimed' in raw.daily_reward || 'is_claimed' in raw.daily_reward)) this.dailyClaimed = boolValue(raw.daily_reward.claimed ?? raw.daily_reward.is_claimed);

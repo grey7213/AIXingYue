@@ -55,6 +55,8 @@ let tokenRefreshTimer = null;
 let generationSettleTimer = null;
 let suppressSync = false;
 let generationBusy = false;
+let generationSnapshot = null;
+let generationRecoveryChain = Promise.resolve();
 let rollbackBusy = false;
 let lastSyncSignature = '';
 let eventHandlersInstalled = false;
@@ -66,6 +68,7 @@ let messagePressTimer = null;
 let messagePressStart = null;
 let messagePressTarget = null;
 let suppressMessageClickUntil = 0;
+let presentationModeBridgeInstalled = false;
 const MESSAGE_LONG_PRESS_DELAY = 520;
 const MESSAGE_LONG_PRESS_MOVE_TOLERANCE = 12;
 let extensionSettingsBridgeInstalled = false;
@@ -90,6 +93,12 @@ let runtimeUiData = {
     mods: [],
     activeModIds: [],
 };
+let managedConversation = null;
+const SESSION_PREFETCH_LIMIT = 2;
+const SESSION_CACHE_TTL_MS = 30_000;
+const sessionPrefetchCache = new Map();
+let sessionPrefetchTimer = null;
+let hostStateNotifyTimer = null;
 
 const DEFAULT_MODEL_SETTINGS = Object.freeze({
     model_id: '',
@@ -108,6 +117,45 @@ function unwrap(payload) {
 
 function runtimeGate() {
     return document.querySelector('#homer-runtime-gate');
+}
+
+function installEmbeddedComposerPolicy() {
+    if (requestedEmbed !== '1' || document.documentElement.dataset.homerComposerPolicy === '1') {
+        return;
+    }
+    document.documentElement.dataset.homerComposerPolicy = '1';
+    const style = document.createElement('style');
+    style.dataset.homerComposerPolicy = '1';
+    style.textContent = [
+        '#send_textarea ~ .autoComplete-wrap',
+        '#send_textarea + .autoComplete-wrap',
+        '.autoComplete-wrap:has(+ #send_textarea)',
+        '.slashCommandBrowser',
+    ].join(',') + '{display:none !important;visibility:hidden !important;pointer-events:none !important;}';
+    (document.head || document.documentElement).append(style);
+    const updateComposer = () => {
+        const composer = document.querySelector('#send_textarea');
+        if (composer instanceof HTMLTextAreaElement && composer.placeholder !== '输入想发送的消息') {
+            composer.placeholder = '输入想发送的消息';
+        }
+    };
+    const hideAutocomplete = () => {
+        document.querySelectorAll('.autoComplete-wrap,.slashCommandBrowser').forEach(node => {
+            node.style.setProperty('display', 'none', 'important');
+            node.setAttribute('aria-hidden', 'true');
+        });
+    };
+    hideAutocomplete();
+    updateComposer();
+    new MutationObserver(() => {
+        hideAutocomplete();
+        updateComposer();
+    }).observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['placeholder'],
+    });
 }
 
 function setRuntimeGate(title, detail, { error = false } = {}) {
@@ -162,6 +210,10 @@ async function requestJson(url, options = {}) {
     }
     if (!response.ok || payload?.result === 'failure') {
         const message = payload?.error?.message || payload?.message || payload?.error || `HTTP ${response.status}`;
+        // 只抛，不在这里弹持久错误条。requestJson 有 26 个调用点，很多是
+        // 探测性/可容错的（例如 fetchSession 的嵌入式端点失败后还有回退），
+        // 在最底层弹条会把这些正常回退渲染成一条不消失的「对话服务连接失败」。
+        // 需要提示的调用点自己走 showHostNotice。
         throw new Error(String(message));
     }
     return unwrap(payload);
@@ -621,6 +673,7 @@ function notifyHostConversation(type = 'ready') {
     if (type === 'ready') {
         notifyHost('ready', payload);
     }
+    scheduleHostStateNotify(0, type);
 }
 
 function notifyHostLoading(message) {
@@ -635,6 +688,167 @@ function notifyHostError() {
         message: '对话准备失败，请重试。',
     });
 }
+
+function hostMessageSnapshot(message, index) {
+    const swipes = Array.isArray(message?.swipes) ? message.swipes.map(item => String(item)) : [];
+    const swipeIndex = Math.max(0, Math.min(Number(message?.swipe_id || 0), Math.max(0, swipes.length - 1)));
+    const content = String(swipes.length ? swipes[swipeIndex] : message?.mes || '').slice(0, 60_000);
+    const rawCreatedAt = message?.extra?.homer_created_at || message?.send_date || 0;
+    const parsedCreatedAt = typeof rawCreatedAt === 'number'
+        ? rawCreatedAt
+        : Date.parse(String(rawCreatedAt || ''));
+    return {
+        id: String(
+            message?.extra?.homer_message_id
+            || message?.extra?.homer_sync_id
+            || `${launch?.conversation_id || 'conversation'}-${index}`,
+        ).slice(0, 180),
+        role: message?.is_user ? 'user' : 'assistant',
+        content,
+        created_at: Number.isFinite(parsedCreatedAt) ? parsedCreatedAt : 0,
+        swipes: swipes.slice(0, 100),
+        swipe_index: swipeIndex,
+    };
+}
+
+function hostConversationSnapshot(conversation) {
+    return {
+        id: String(conversation?.id || conversation?.conversation_id || '').slice(0, 160),
+        app_id: String(conversation?.app_id || '').slice(0, 160),
+        title: String(conversation?.title || conversation?.app_name || '角色对话').slice(0, 120),
+        app_name: String(conversation?.app_name || conversation?.title || '角色对话').slice(0, 120),
+        app_icon: String(conversation?.app_icon || '').slice(0, 2_000),
+        last_message: String(conversation?.last_message || '').slice(0, 240),
+        updated_at: Number(conversation?.updated_at || 0),
+        pinned: Boolean(conversation?.pinned),
+    };
+}
+
+function notifyHostState(reason = 'update') {
+    if (!canNotifyHost() || !launch?.conversation_id) return;
+    const context = getContext();
+    const chat = Array.isArray(context?.chat) ? context.chat : [];
+    const conversation = currentConversationRecord() || launch?.conversation || {};
+    notifyHost('state', {
+        reason: String(reason || 'update').slice(0, 40),
+        state: {
+            app_id: String(launch?.app_id || '').slice(0, 160),
+            conversation_id: String(launch?.conversation_id || '').slice(0, 160),
+            title: currentRoleName(),
+            avatar: String(launch?.conversation?.app_icon || '').slice(0, 2_000),
+            conversation: hostConversationSnapshot(conversation),
+            conversations: runtimeUiData.conversations.slice(0, 100).map(hostConversationSnapshot),
+            messages: chat
+                .filter(message => !message?.is_system)
+                .slice(-120)
+                .map(hostMessageSnapshot),
+            models: runtimeUiData.models.slice(0, 100).map(model => ({
+                id: String(model?.id || '').slice(0, 160),
+                name: String(model?.name || model?.model || model?.id || '未命名模型').slice(0, 160),
+                model: String(model?.model || '').slice(0, 160),
+                price_label: String(model?.price_label || '').slice(0, 120),
+            })),
+            model_default_id: String(runtimeUiData.modelDefaultId || '').slice(0, 160),
+            model_settings: { ...conversationModelSettings() },
+            generating: Boolean(generationBusy),
+        },
+    });
+}
+
+function scheduleHostStateNotify(delay = 80, reason = 'update') {
+    if (!canNotifyHost()) return;
+    window.clearTimeout(hostStateNotifyTimer);
+    hostStateNotifyTimer = window.setTimeout(() => {
+        hostStateNotifyTimer = null;
+        notifyHostState(reason);
+    }, Math.max(0, Number(delay) || 0));
+}
+
+function openHostRequestedSettings(section) {
+    const target = String(section || 'drawer');
+    if (target === 'drawer') {
+        setDrawerOpen('right');
+        return;
+    }
+    returnToDesktopNavigation();
+    if (target === 'model') {
+        document.querySelector('#homer-model-dialog')?.showModal();
+        return;
+    }
+    if (target === 'preset') {
+        setPanelOpen(true);
+        return;
+    }
+    if (target === 'memory') {
+        document.querySelector('#homer-memory-dialog')?.showModal();
+        return;
+    }
+    if (target === 'mod') {
+        document.querySelector('#homer-mod-dialog')?.showModal();
+    }
+}
+
+async function receiveHostCommand(event) {
+    if (!canNotifyHost() || event.origin !== window.location.origin || event.source !== window.parent) {
+        return;
+    }
+    const message = event.data;
+    if (!message || message.channel !== HOST_CHANNEL || message.version !== 1) {
+        return;
+    }
+    if (message.type === 'request-state') {
+        notifyHostState('requested');
+        return;
+    }
+    if (message.type === 'open-settings') {
+        openHostRequestedSettings(message.section);
+        return;
+    }
+    if (message.type === 'model-settings') {
+        await persistModelSettings(message.settings || {});
+        buildRuntimeUi();
+        notifyHostState('model-settings');
+        return;
+    }
+    if (message.type === 'switch-conversation') {
+        await switchConversation({
+            id: String(message.conversation_id || ''),
+            app_id: String(message.app_id || ''),
+        });
+        return;
+    }
+    if (message.type === 'message-action') {
+        const context = getContext();
+        const messageId = String(message.message_id || '');
+        const index = context.chat.findIndex(item => stableHomerMessageId(item) === messageId
+            || cloudHomerMessageId(item) === messageId);
+        const target = index >= 0 ? messageMenuTargetForIndex(index) : null;
+        if (target) await handleMessageMenuAction(String(message.action || ''), target);
+        return;
+    }
+    if (message.type !== 'draft') return;
+    const content = String(message.content || '').slice(0, 10_000);
+    if (!content) return;
+    const composer = document.querySelector('#send_textarea');
+    if (!(composer instanceof HTMLTextAreaElement)) return;
+    composer.value = content;
+    composer.dispatchEvent(new Event('input', { bubbles: true }));
+    if (message.submit === true) {
+        requestAnimationFrame(() => {
+            const sendButton = document.querySelector('#send_but');
+            if (sendButton instanceof HTMLElement && !sendButton.matches(':disabled')) {
+                sendButton.click();
+            }
+        });
+    }
+}
+
+window.addEventListener('message', event => {
+    void receiveHostCommand(event).catch(error => {
+        console.warn(`${MODULE_ID}: host command failed`, error);
+        notifyHost('command-error', { message: String(error?.message || '操作失败').slice(0, 200) });
+    });
+});
 
 const TECHNICAL_NOTICE_PATTERN = /(?:\bMVU\b|\bSillyTavern\b|\bTavern Helper\b|脚本加载|扩展加载|插件加载|构建信息|build\s*(?:info|version)|extension\s+(?:loaded|installed))/i;
 
@@ -667,6 +881,7 @@ function showHostNotice(message, level = 'info') {
         stack.setAttribute('aria-atomic', 'false');
         root.append(stack);
     }
+    stack.replaceChildren();
     const notice = createElement('div', 'homer-notice', text);
     notice.dataset.level = ['success', 'warning', 'error'].includes(level) ? level : 'info';
     stack.append(notice);
@@ -792,8 +1007,83 @@ async function fetchSession(appId = '', conversationId = '') {
     if (conversationId) {
         params.set('conversation_id', conversationId);
     }
-    const suffix = params.size ? `?${params.toString()}` : '';
-    return requestJson(`/api/homer/session${suffix}`);
+    // `URLSearchParams.prototype.size` only exists from Chrome 113. Android
+    // WebView lags well behind that (the API 33 system image ships 109), and on
+    // those builds `params.size` is undefined, so the query string was silently
+    // dropped: the backend then answered without a `launch` payload and the app
+    // died on "没有可启动的角色会话". Deriving the suffix from the serialized
+    // string works on every engine.
+    const query = params.toString();
+    const suffix = query ? `?${query}` : '';
+    try {
+        const embedded = await requestJson(`/api/homer/session${suffix}`);
+        if (embedded?.launch) return embedded;
+    } catch (error) {
+        // 嵌入式端点失败是预期路径之一，下面还有站点侧回退，这里只记日志。
+        console.debug(`${MODULE_ID}: embedded session endpoint unavailable, falling back`, error);
+    }
+    // LAN/mobile proxies can route the embedded namespace before the Homer
+    // backend route is ready. Fall back to the site-owned session endpoint,
+    // which carries the same authorization and launch payload.
+    const fallback = new URLSearchParams(params);
+    fallback.set('launch_only', '1');
+    return requestJson(`/console/api/web/dialogue/session?${fallback.toString()}`);
+}
+
+function sessionCacheKey(appId = '', conversationId = '') {
+    return `${String(appId).trim()}::${String(conversationId).trim()}`;
+}
+
+function invalidateCachedSession(appId = '', conversationId = '') {
+    sessionPrefetchCache.delete(sessionCacheKey(appId, conversationId));
+}
+
+function prefetchSession(appId = '', conversationId = '') {
+    const key = sessionCacheKey(appId, conversationId);
+    if (!appId || !conversationId) {
+        return Promise.resolve(null);
+    }
+    const cached = sessionPrefetchCache.get(key);
+    if (cached && cached.expiresAt > Date.now()) {
+        return cached.promise;
+    }
+    sessionPrefetchCache.delete(key);
+    const promise = fetchSession(appId, conversationId).catch(error => {
+        sessionPrefetchCache.delete(key);
+        throw error;
+    });
+    sessionPrefetchCache.set(key, {
+        promise,
+        expiresAt: Date.now() + SESSION_CACHE_TTL_MS,
+    });
+    return promise;
+}
+
+async function takePrefetchedSession(appId = '', conversationId = '') {
+    const key = sessionCacheKey(appId, conversationId);
+    const promise = prefetchSession(appId, conversationId);
+    try {
+        return await promise;
+    } finally {
+        // A prefetched payload contains private messages and can be large. Use
+        // it once, then release it instead of keeping a second chat in memory.
+        sessionPrefetchCache.delete(key);
+    }
+}
+
+function scheduleSessionPrefetch() {
+    window.clearTimeout(sessionPrefetchTimer);
+    sessionPrefetchTimer = window.setTimeout(() => {
+        const currentId = String(launch?.conversation_id || '');
+        const candidates = runtimeUiData.conversations
+            .filter(item => String(item?.id || item?.conversation_id || '') !== currentId)
+            .slice(0, SESSION_PREFETCH_LIMIT);
+        for (const item of candidates) {
+            const appId = String(item?.app_id || '').trim();
+            const conversationId = String(item?.id || item?.conversation_id || '').trim();
+            void prefetchSession(appId, conversationId).catch(() => {});
+        }
+    }, 650);
 }
 
 function setAccessClasses(user) {
@@ -855,7 +1145,7 @@ function applyConnectionConfiguration() {
     const composer = document.querySelector('#send_textarea');
     if (composer instanceof HTMLTextAreaElement) {
         composer.disabled = false;
-        composer.placeholder = '输入想发送的消息，或输入 /? 获取帮助';
+        composer.placeholder = '输入想发送的消息';
     }
     saveSettingsDebounced();
 }
@@ -867,7 +1157,7 @@ function reaffirmConversationConnection() {
     const composer = document.querySelector('#send_textarea');
     if (composer instanceof HTMLTextAreaElement) {
         composer.disabled = false;
-        composer.placeholder = '输入想发送的消息，或输入 /? 获取帮助';
+        composer.placeholder = '输入想发送的消息';
     }
 }
 
@@ -1141,11 +1431,25 @@ async function selectLaunchCharacter(context, characterId, options = {}) {
     throw new Error('当前角色会话仍在保存，请稍后重试');
 }
 
-async function openLaunchCharacterChat(characterId) {
+async function openLaunchCharacterChat(characterId, { reuseActiveCharacter = false } = {}) {
     const context = getContext();
     const localChatName = `Homer-${String(launch.conversation_id).replace(/[^a-zA-Z0-9_-]/g, '')}`;
     let character = context.characters?.[characterId];
     enableEmbeddedCardCapabilities(character);
+    if (reuseActiveCharacter && String(context.characterId) === String(characterId)) {
+        // Switching between two cloud conversations of the same card must not
+        // re-select/unshallow the character, rescan its worldbook, or re-run
+        // already enabled card scripts. Only bind the new local mirror; the
+        // cloud payload replaces its messages immediately afterwards.
+        installCsrfAjaxBridge();
+        if (typeof context.bindCharacterChatWithoutLoad === 'function') {
+            await context.bindCharacterChatWithoutLoad(localChatName);
+        } else {
+            await context.openCharacterChat(localChatName, { persistCharacter: false });
+        }
+        setOnlineStatus(conversationModelSettings().model_id || 'homer-cloud');
+        return;
+    }
     // Establish the active character without loading its previous local ST chat.
     // The product opens the cloud-bound mirror below, so loading both chats adds
     // a redundant message render, sprite scan and CHAT_CHANGED lifecycle.
@@ -1175,6 +1479,71 @@ function getManagedCoverUrl() {
     return siteAssetUrl(raw);
 }
 
+// 生成失败恢复。上游返回空回复时 SillyTavern 会留下一条空的 assistant 占位，
+// 用户看到的是「发出去了但永远没有回复」。这里在 GENERATION_STARTED 时拍一份
+// 快照，结束时若检测到空占位/多出的用户消息，就整轮回滚并明确提示。
+function cloneGenerationMessages(messages) {
+    try {
+        return structuredClone(Array.isArray(messages) ? messages : []);
+    } catch {
+        try {
+            return JSON.parse(JSON.stringify(Array.isArray(messages) ? messages : []));
+        } catch {
+            return [];
+        }
+    }
+}
+
+function isAssistantChatMessage(message) {
+    return Boolean(message) && !message.is_user && !message.is_system
+        && String(message.role || 'assistant').toLowerCase() !== 'user';
+}
+
+function selectedChatMessageContent(message) {
+    if (!message) {
+        return '';
+    }
+    const swipes = Array.isArray(message.swipes) ? message.swipes : [];
+    if (swipes.length) {
+        const swipeIndex = Math.max(0, Math.min(Number(message.swipe_id || 0), swipes.length - 1));
+        return String(swipes[swipeIndex] ?? '');
+    }
+    return String(message.mes ?? message.content ?? '');
+}
+
+function isEmptyGeneratedAssistant(message) {
+    if (!isAssistantChatMessage(message)) {
+        return false;
+    }
+    const content = selectedChatMessageContent(message).replace(/​/g, '').trim();
+    return ['', '...', '…'].includes(content);
+}
+
+function captureGenerationSnapshot(type) {
+    const context = getContext();
+    return {
+        type: String(type || ''),
+        chatId: String(context.chatId || ''),
+        chat: cloneGenerationMessages(context.chat),
+        launchMessages: cloneGenerationMessages(launch?.messages),
+    };
+}
+
+function generationNeedsRecovery(snapshot, currentChat) {
+    if (!snapshot || !Array.isArray(currentChat)) {
+        return false;
+    }
+    const lastMessage = currentChat.at(-1);
+    if (isEmptyGeneratedAssistant(lastMessage)) {
+        return true;
+    }
+    if (currentChat.length > snapshot.chat.length && lastMessage?.is_user) {
+        return true;
+    }
+    return ['regenerate', 'swipe'].includes(snapshot.type)
+        && currentChat.length < snapshot.chat.length;
+}
+
 async function syncLaunchCharacterAvatar(character, force = false) {
     const coverUrl = getManagedCoverUrl();
     const avatar = String(character?.avatar || '').trim();
@@ -1186,17 +1555,25 @@ async function syncLaunchCharacterAvatar(character, force = false) {
         return false;
     }
 
-    const coverResponse = await fetch(coverUrl, {
-        method: 'GET',
-        cache: 'no-store',
-        credentials: 'include',
-    });
-    if (!coverResponse.ok) {
-        throw new Error(`角色卡封面读取失败（HTTP ${coverResponse.status}）`);
-    }
-    const coverBlob = await coverResponse.blob();
-    if (!String(coverBlob.type || '').toLowerCase().startsWith('image/')) {
-        throw new Error('角色卡封面响应不是图像');
+    let coverBlob;
+    try {
+        const coverResponse = await fetch(coverUrl, {
+            method: 'GET',
+            cache: 'no-store',
+            credentials: 'include',
+        });
+        if (!coverResponse.ok) {
+            console.warn(`${MODULE_ID}: cover unavailable (HTTP ${coverResponse.status})`);
+            return false;
+        }
+        coverBlob = await coverResponse.blob();
+        if (!String(coverBlob.type || '').toLowerCase().startsWith('image/')) {
+            console.warn(`${MODULE_ID}: cover response is not an image; keeping the card avatar`);
+            return false;
+        }
+    } catch (error) {
+        console.warn(`${MODULE_ID}: cover synchronization skipped`, error);
+        return false;
     }
 
     const formData = new FormData();
@@ -1211,7 +1588,8 @@ async function syncLaunchCharacterAvatar(character, force = false) {
         cache: 'no-store',
     });
     if (!uploadResponse.ok) {
-        throw new Error(`角色卡头像写入失败（HTTP ${uploadResponse.status}）`);
+        console.warn(`${MODULE_ID}: avatar upload skipped (HTTP ${uploadResponse.status})`);
+        return false;
     }
     accountStorage.setItem(markerKey, coverUrl);
 
@@ -1254,7 +1632,7 @@ async function importLaunchCardJson(card, preservedName) {
     return `${String(result.file_name).replace(/\.png$/i, '')}.png`;
 }
 
-async function importLaunchCharacter() {
+async function importLaunchCharacter({ reuseActiveCharacter = false } = {}) {
     const context = getContext();
     const card = cloneCardWithMarker(launch.card);
     const safeKey = String(launch.app_id || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80) || 'character';
@@ -1298,7 +1676,9 @@ async function importLaunchCharacter() {
                 }
             }
         }
-        await openLaunchCharacterChat(characterId);
+        await openLaunchCharacterChat(characterId, {
+            reuseActiveCharacter: reuseActiveCharacter && !metadataChanged,
+        });
         return;
     }
 
@@ -1382,7 +1762,7 @@ function initialGreetingMessage() {
     };
 }
 
-async function loadCloudChat() {
+async function loadCloudChat({ emitChatChanged = false } = {}) {
     suppressSync = true;
     const context = getContext();
     const messages = Array.isArray(launch.messages)
@@ -1402,21 +1782,22 @@ async function loadCloudChat() {
     };
     delete context.chatMetadata.homer_preset_overrides;
     context.chatMetadata.homer_model_settings = { ...conversationModelSettings() };
-    try {
-        // Finish the local compatibility mirror before the host announces
-        // interactivity. Native generation intentionally refuses to start
-        // while this save lock is active, so deferring it can drop a user's
-        // first send even though the cloud message itself was accepted.
-        await context.saveMetadata();
-        await context.saveChat();
-    } catch (error) {
-        console.warn(`${MODULE_ID}: local chat mirror was not saved; cloud sync remains active`, error);
-    }
+    // The cloud conversation is authoritative. Paint it immediately; a fresh
+    // embedded page must not block interactivity on two redundant writes to
+    // SillyTavern's compatibility mirror. Normal generation/save hooks keep
+    // that mirror current after the user actually changes the conversation.
     await context.printMessages();
+    if (emitChatChanged) {
+        performance.mark('homer-switch-messages');
+    }
     queueMessageMenuRender();
+    if (emitChatChanged) {
+        await eventSource.emit(event_types.CHAT_CHANGED, context.chatId);
+    }
     await eventSource.emit(event_types.CHAT_LOADED, context.chatId);
     suppressSync = false;
     scheduleSync(100);
+    scheduleHostStateNotify(0, 'chat-loaded');
 }
 
 function serializeChat() {
@@ -1438,6 +1819,52 @@ function serializeChat() {
             ),
         },
     }));
+}
+
+async function recoverFailedGeneration(snapshot) {
+    const context = getContext();
+    if (!snapshot || String(context.chatId || '') !== snapshot.chatId) {
+        return false;
+    }
+    if (!generationNeedsRecovery(snapshot, context.chat)) {
+        scheduleSync(100);
+        return false;
+    }
+
+    const previousSuppressSync = suppressSync;
+    suppressSync = true;
+    try {
+        context.chat.splice(0, context.chat.length, ...cloneGenerationMessages(snapshot.chat));
+        if (Array.isArray(launch?.messages)) {
+            launch.messages.splice(
+                0,
+                launch.messages.length,
+                ...cloneGenerationMessages(snapshot.launchMessages),
+            );
+        }
+        try {
+            await context.saveChat();
+        } catch (error) {
+            console.warn(`${MODULE_ID}: failed generation mirror was not saved locally`, error);
+        }
+        await context.printMessages();
+        dialogueEventLogMuted += 1;
+        try {
+            await eventSource.emit(event_types.CHAT_LOADED, context.chatId);
+        } finally {
+            dialogueEventLogMuted = Math.max(0, dialogueEventLogMuted - 1);
+        }
+    } finally {
+        suppressSync = previousSuppressSync;
+    }
+
+    lastSyncSignature = '';
+    await syncCloudChat();
+    const errorMessage = '模型未返回有效回复，本轮消息已撤回。请稍后重试或切换模型。';
+    showHostNotice(errorMessage, 'error');
+    updateRuntimeStatus('生成失败，消息已撤回', 'warning');
+    queueMessageMenuRender();
+    return true;
 }
 
 async function syncCloudChat() {
@@ -1687,6 +2114,13 @@ async function persistModelSettings(settings) {
     };
     await persistRuntimeVariables();
     applyConnectionConfiguration();
+    if (launch?.conversation_id) {
+        launch.runtime_config = await requestJson(
+            `/api/homer/conversations/${encodeURIComponent(launch.conversation_id)}/runtime-config`,
+        );
+        renderPresetLists(presetSearchQuery);
+    }
+    scheduleHostStateNotify(0, 'model-settings');
 }
 
 function payloadList(payload) {
@@ -1730,6 +2164,8 @@ async function loadConversationHistory() {
             document.querySelector('#homer-history-count'),
             document.querySelector('#homer-history-list'),
         );
+        scheduleHostStateNotify(0, 'history');
+        scheduleSessionPrefetch();
     } catch (error) {
         console.warn(`${MODULE_ID}: conversation history load failed`, error);
     }
@@ -1760,20 +2196,13 @@ function presetGroups() {
     const preset = launch?.runtime_config?.preset && typeof launch.runtime_config.preset === 'object'
         ? launch.runtime_config.preset
         : {};
-    const definitions = [
-        {
-            kind: 'card_prompt',
-            label: '角色卡预设',
-            description: '创作者为当前角色版本绑定的全部条目',
-            config: preset.card_prompt || {},
-        },
-        {
-            kind: 'global_prompt',
-            label: '官方公开预设',
-            description: '后台明确允许用户查看和切换的条目',
-            config: preset.global_prompt || preset.prompt || {},
-        },
-    ];
+    const current = preset.current_prompt || preset.prompt || {};
+    const definitions = [{
+        kind: String(current.kind || 'global_prompt'),
+        label: '当前预设',
+        description: '当前模型实际使用的唯一预设',
+        config: current,
+    }];
     return definitions.map(group => {
         const config = group.config && typeof group.config === 'object' ? group.config : {};
         const presetId = String(config.preset_id || '');
@@ -1913,7 +2342,7 @@ function renderPresetContainer(container, groups, query, quick = false) {
             section.append(createElement(
                 'div',
                 'homer-empty',
-                group.kind === 'card_prompt' ? '当前角色版本没有绑定预设条目' : '后台暂未公开可见条目',
+                '当前预设没有向用户开放可切换条目',
             ));
         }
         sections.push(section);
@@ -1932,9 +2361,14 @@ function renderPresetLists(filter = presetSearchQuery) {
     const quick = document.querySelector('#homer-preset-quick-list');
     const full = document.querySelector('#homer-preset-full-list');
     const count = document.querySelector('#homer-preset-count');
+    const summary = document.querySelector('#homer-preset-summary');
+    const toggleable = entries.filter(item => item.toggleable);
+    const enabledCount = toggleable.filter(item => item.enabled).length;
     if (count) {
-        const toggleable = entries.filter(item => item.toggleable);
-        count.textContent = `${toggleable.filter(item => item.enabled).length}/${toggleable.length} 可切换项已开启`;
+        count.textContent = `${enabledCount}/${toggleable.length} 可切换项已开启`;
+    }
+    if (summary) {
+        summary.textContent = `${enabledCount}/${toggleable.length} 已开启 · 仅本次会话`;
     }
     renderPresetContainer(quick, groups, query, true);
     renderPresetContainer(full, groups, query, false);
@@ -1951,12 +2385,8 @@ function updateRuntimeStatus(text, state = 'online') {
 
 function setPanelOpen(open) {
     const panel = document.querySelector('#homer-preset-panel');
-    const ball = document.querySelector('#homer-preset-ball');
     if (panel) {
         panel.hidden = !open;
-    }
-    if (ball) {
-        ball.setAttribute('aria-expanded', String(open));
     }
     if (open) {
         renderPresetLists();
@@ -2152,22 +2582,12 @@ async function truncateAfterMessage(target, actionLabel = '继续操作') {
 }
 
 function messageMenuActions(resolved) {
-    const actions = [
+    return [
         { id: 'copy', label: '复制', icon: 'fa-regular fa-copy' },
-        { id: 'edit', label: '编辑', icon: 'fa-solid fa-pen' },
+        { id: 'edit', label: '改写', icon: 'fa-solid fa-pen' },
         { id: 'rollback', label: '回溯', icon: 'fa-solid fa-clock-rotate-left', cloud: true },
+        { id: 'delete', label: '删除', icon: 'fa-regular fa-trash-can', cloud: true, danger: true },
     ];
-    if (!resolved.isUser) {
-        actions.push(
-            { id: 'continue', label: '续写', icon: 'fa-solid fa-forward-step' },
-            { id: 'regenerate', label: '重写', icon: 'fa-solid fa-rotate' },
-            { id: 'next', label: '下回续写', icon: 'fa-solid fa-angles-right' },
-            { id: 'swipe-left', label: '上一候选', icon: 'fa-solid fa-chevron-left' },
-            { id: 'swipe-right', label: '下一候选', icon: 'fa-solid fa-chevron-right' },
-        );
-    }
-    actions.push({ id: 'delete', label: '删除', icon: 'fa-regular fa-trash-can', cloud: true, danger: true });
-    return actions;
 }
 
 function ensureMessageMenuDialog() {
@@ -2177,29 +2597,11 @@ function ensureMessageMenuDialog() {
     }
     dialog = createElement('dialog', 'homer-message-menu-dialog');
     dialog.id = 'homer-message-menu-dialog';
-    dialog.setAttribute('aria-labelledby', 'homer-message-menu-title');
+    dialog.setAttribute('aria-label', '消息操作');
     const shell = createElement('section', 'homer-message-menu__shell');
-    const head = createElement('header', 'homer-message-menu__head');
-    const copy = createElement('div', 'homer-message-menu__heading');
-    copy.append(
-        createElement('div', 'homer-message-menu__eyebrow', '消息操作'),
-        createElement('h2', 'homer-message-menu__title', '角色回复'),
-        createElement('div', 'homer-message-menu__meta'),
-    );
-    copy.querySelector('.homer-message-menu__title').id = 'homer-message-menu-title';
-    const close = createElement('button', 'homer-message-menu__close', '×');
-    close.type = 'button';
-    close.setAttribute('aria-label', '关闭消息菜单');
-    close.addEventListener('click', () => closeMessageMenu());
-    head.append(copy, close);
     const actions = createElement('div', 'homer-message-menu__actions');
     actions.setAttribute('role', 'menu');
-    const hint = createElement(
-        'p',
-        'homer-message-menu__hint',
-        '长按气泡或在电脑上右键，可随时再次打开。',
-    );
-    shell.append(head, actions, hint);
+    shell.append(actions);
     dialog.append(shell);
     dialog.addEventListener('click', event => {
         if (event.target === dialog) {
@@ -2295,16 +2697,10 @@ function renderMessageMenuDialog() {
         return;
     }
     activeMessageMenuTarget = resolved;
-    const title = dialog.querySelector('.homer-message-menu__title');
-    const meta = dialog.querySelector('.homer-message-menu__meta');
     const actions = dialog.querySelector('.homer-message-menu__actions');
     const swipes = Array.isArray(resolved.message?.swipes) ? resolved.message.swipes : [];
     const swipeCount = Math.max(swipes.length, 1);
     const swipeIndex = Math.max(0, Math.min(Number(resolved.message?.swipe_id || 0), swipeCount - 1));
-    title.textContent = resolved.isUser ? '用户输入' : '角色回复';
-    meta.textContent = !resolved.isUser && swipeCount > 1
-        ? `候选 ${swipeIndex + 1} / ${swipeCount}`
-        : `第 ${resolved.messageIndex + 1} 条消息`;
     dialog.dataset.messageIndex = String(resolved.messageIndex);
     dialog.dataset.messageId = cloudHomerMessageId(resolved.message) || resolved.messageId || '';
     dialog.dataset.messageRole = resolved.isUser ? 'user' : 'assistant';
@@ -2740,7 +3136,8 @@ function installMessageMenu() {
     if (chat.dataset.homerMessageMenuInstalled !== 'true') {
         chat.dataset.homerMessageMenuInstalled = 'true';
         chat.addEventListener('pointerdown', event => {
-            if (event.button !== 0 || event.isPrimary === false || isInteractiveMessageTarget(event.target)) {
+            const touchLike = event.pointerType === 'touch' || event.pointerType === 'pen';
+            if ((!touchLike && event.button !== 0) || event.isPrimary === false || isInteractiveMessageTarget(event.target)) {
                 return;
             }
             const element = eventMessageElement(event);
@@ -2931,21 +3328,28 @@ function setDrawerOpen(side = '') {
     const left = root.querySelector('#homer-left-drawer');
     const right = root.querySelector('#homer-right-drawer');
     const backdrop = root.querySelector('#homer-drawer-backdrop');
+    const desktopLayout = window.matchMedia('(min-width: 761px)').matches;
     const leftOpen = side === 'left';
     const rightOpen = side === 'right';
     left?.classList.toggle('is-open', leftOpen);
     right?.classList.toggle('is-open', rightOpen);
     left?.setAttribute('aria-hidden', String(!leftOpen));
     right?.setAttribute('aria-hidden', String(!rightOpen));
+    const desktopLeftOpen = leftOpen && desktopLayout;
     if (backdrop) {
-        backdrop.hidden = !leftOpen && !rightOpen;
+        backdrop.hidden = (desktopLeftOpen && !rightOpen) || (!leftOpen && !rightOpen);
     }
     document.body.classList.toggle('homer-drawer-open', leftOpen || rightOpen);
+    document.body.classList.toggle('homer-left-drawer-open', leftOpen);
     if (leftOpen || rightOpen) {
         window.setTimeout(() => {
-            (leftOpen ? left : right)?.querySelector('button, a, select, input')?.focus();
+            (rightOpen ? right : left)?.querySelector('button, a, select, input')?.focus();
         }, 160);
     }
+}
+
+function returnToDesktopNavigation() {
+    setDrawerOpen();
 }
 
 function createSettingButton(icon, label, description, id = '') {
@@ -3014,7 +3418,7 @@ function createRangeField({ key, label, hint, min, max, step, value }) {
 }
 
 function openMemoryBooks() {
-    setDrawerOpen();
+    returnToDesktopNavigation();
     const startedAt = Date.now();
     const tryOpen = () => {
         const item = document.querySelector('#stmb-menu-item');
@@ -3057,7 +3461,7 @@ function buildModelDialog() {
     for (const model of runtimeUiData.models) {
         const option = document.createElement('option');
         option.value = String(model?.id || '');
-        option.textContent = `${String(model?.name || model?.model || model?.id || '未命名模型')}`
+        option.textContent = `${String(model?.name || model?.model || model?.id || '未命名模型')}${model?.price_label ? ` · ${model.price_label}` : ''}`
             + `${model?.model && model.model !== model.name ? ` · ${model.model}` : ''}`;
         option.selected = option.value === settings.model_id;
         select.append(option);
@@ -3269,6 +3673,388 @@ function buildModDialog() {
     return dialog;
 }
 
+function currentConversationRecord() {
+    return runtimeUiData.conversations.find(item => (
+        String(item?.id || '') === String(launch?.conversation_id || '')
+    )) || launch?.conversation || null;
+}
+
+function updateConversationTitle(title) {
+    const clean = String(title || '').trim();
+    if (!clean) return;
+    if (launch?.conversation) launch.conversation.title = clean;
+    const record = runtimeUiData.conversations.find(item => String(item?.id || '') === String(launch?.conversation_id || ''));
+    if (record) record.title = clean;
+    const role = document.querySelector('#homer-right-drawer .homer-drawer__role');
+    if (role) role.textContent = clean;
+    populateHistoryList(
+        document.querySelector('#homer-history-count'),
+        document.querySelector('#homer-history-list'),
+    );
+    notifyHost('title', { title: clean });
+}
+
+function updatePresentationModeControl(detail = {}) {
+    const control = document.querySelector('#homer-presentation-mode-toggle');
+    const button = control?.querySelector('button');
+    if (!control || !button) return;
+    const visualAvailable = detail.visualAvailable !== false;
+    const mode = detail.mode === 'tavern' ? 'tavern' : 'visual_novel';
+    control.dataset.mode = mode;
+    control.hidden = !visualAvailable;
+    const targetMode = mode === 'tavern' ? 'visual_novel' : 'tavern';
+    const targetLabel = targetMode === 'tavern' ? '酒馆模式' : '视觉小说';
+    button.dataset.presentationMode = targetMode;
+    button.textContent = targetLabel;
+    button.setAttribute('aria-label', `切换到${targetLabel}`);
+    button.title = `切换到${targetLabel}`;
+}
+
+function installPresentationModeBridge() {
+    if (presentationModeBridgeInstalled) return;
+    presentationModeBridgeInstalled = true;
+    document.addEventListener('homer-presentation-mode-state', event => {
+        updatePresentationModeControl(event?.detail || {});
+    });
+}
+
+function buildPresentationModeToggle() {
+    const section = createElement('aside', 'homer-presentation-mode-toggle');
+    section.id = 'homer-presentation-mode-toggle';
+    section.dataset.mode = 'tavern';
+    section.hidden = true;
+    const button = createElement('button', '', '视觉小说');
+    button.type = 'button';
+    button.dataset.presentationMode = 'visual_novel';
+    button.setAttribute('aria-label', '切换到视觉小说');
+    button.addEventListener('click', () => {
+        const mode = String(button.dataset.presentationMode || 'visual_novel');
+        document.dispatchEvent(new CustomEvent('homer-presentation-mode-request', {
+            detail: { mode },
+        }));
+    });
+    section.append(button);
+    window.setTimeout(() => {
+        document.dispatchEvent(new CustomEvent('homer-presentation-mode-query'));
+    }, 0);
+    return section;
+}
+
+function openRenameDialog(conversation = currentConversationRecord()) {
+    managedConversation = conversation;
+    const dialog = document.querySelector('#homer-rename-dialog');
+    const input = dialog?.querySelector('input');
+    if (!(dialog instanceof HTMLDialogElement) || !(input instanceof HTMLInputElement)) return;
+    input.value = String(conversation?.title || conversation?.app_name || '');
+    dialog.showModal();
+    window.setTimeout(() => input.select(), 60);
+}
+
+function buildRenameDialog() {
+    const dialog = createElement('dialog', 'homer-site-dialog homer-rename-dialog');
+    dialog.id = 'homer-rename-dialog';
+    dialog.dataset.modal = 'rename';
+    const form = createElement('form', 'homer-site-dialog__surface');
+    form.method = 'dialog';
+    const head = createElement('header', 'homer-rename-dialog__head');
+    head.append(createElement('strong', '', '聊天名称'));
+    const save = createElement('button', 'homer-primary-button', '保存');
+    save.type = 'submit';
+    save.value = 'save';
+    head.append(save);
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.maxLength = 80;
+    input.placeholder = '给聊天取个名字';
+    form.append(head, input);
+    dialog.append(form);
+    form.addEventListener('submit', async event => {
+        event.preventDefault();
+        const conversation = managedConversation || currentConversationRecord();
+        const title = input.value.replace(/\s+/g, ' ').trim();
+        if (!title) {
+            showHostNotice('请输入聊天名称', 'warning');
+            return;
+        }
+        save.disabled = true;
+        try {
+            const result = await requestJson(`/api/homer/conversations/${encodeURIComponent(conversation.id)}/rename`, {
+                method: 'POST',
+                body: JSON.stringify({ title }),
+            });
+            conversation.title = result?.conversation?.title || title;
+            if (String(conversation.id) === String(launch?.conversation_id || '')) {
+                updateConversationTitle(conversation.title);
+            }
+            dialog.close();
+            await loadConversationHistory();
+            showHostNotice('聊天名称已保存', 'success');
+        } catch (error) {
+            showHostNotice(String(error?.message || '改名失败'), 'error');
+        } finally {
+            save.disabled = false;
+        }
+    });
+    dialog.addEventListener('click', event => {
+        if (event.target === dialog) dialog.close();
+    });
+    return dialog;
+}
+
+async function exportConversation(conversation) {
+    const result = await requestJson(`/api/homer/conversations/${encodeURIComponent(conversation.id)}/export`, {
+        method: 'POST',
+        body: '{}',
+    });
+    const blob = new Blob([JSON.stringify(result, null, 2)], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${String(conversation.title || conversation.app_name || '聊天').replace(/[\\/:*?"<>|]/g, '_')}.json`;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function deleteManagedConversation(conversation) {
+    const accepted = await confirmHomerAction({
+        id: 'homer-delete-conversation-dialog',
+        eyebrow: '会话管理',
+        title: '删除这段聊天？',
+        notice: '删除后将无法恢复，其他历史会话不会受到影响。',
+        confirmLabel: '删除',
+        danger: true,
+    });
+    if (!accepted) return;
+    await requestJson(`/api/homer/conversations/${encodeURIComponent(conversation.id)}/delete`, {
+        method: 'POST', body: '{}',
+    });
+    const wasCurrent = String(conversation.id) === String(launch?.conversation_id || '');
+    runtimeUiData.conversations = runtimeUiData.conversations.filter(item => String(item?.id || '') !== String(conversation.id));
+    if (wasCurrent) {
+        const next = runtimeUiData.conversations[0];
+        if (next) await switchConversation(next);
+        else await startNewConversation();
+    } else {
+        populateHistoryList(document.querySelector('#homer-history-count'), document.querySelector('#homer-history-list'));
+    }
+    showHostNotice('聊天已删除', 'success');
+}
+
+function buildConversationManagerDialog() {
+    const dialog = createElement('dialog', 'homer-site-dialog homer-chat-manage-dialog');
+    dialog.id = 'homer-chat-manage-dialog';
+    dialog.dataset.modal = 'chat-manage';
+    dialog.setAttribute('aria-label', '会话管理');
+    const surface = createElement('section', 'homer-site-dialog__surface');
+    const actions = createElement('div', 'homer-chat-manage__actions');
+    const definitions = [
+        ['pin', '置顶'], ['rename', '改名'], ['new', '开始新聊天'], ['copy', '复制聊天'], ['export', '导出'],
+    ];
+    for (const [action, label] of definitions) {
+        const button = createElement('button', '', label);
+        button.type = 'button';
+        button.dataset.action = action;
+        actions.append(button);
+    }
+    const remove = createElement('button', 'homer-chat-manage__danger', '删除');
+    remove.type = 'button';
+    remove.dataset.action = 'delete';
+    surface.append(actions, remove);
+    dialog.append(surface);
+    dialog.addEventListener('click', async event => {
+        if (event.target === dialog) {
+            dialog.close();
+            return;
+        }
+        const button = event.target instanceof Element ? event.target.closest('[data-action]') : null;
+        if (!(button instanceof HTMLButtonElement) || !managedConversation) return;
+        const conversation = managedConversation;
+        const action = button.dataset.action;
+        dialog.close();
+        try {
+            if (action === 'rename') return openRenameDialog(conversation);
+            if (action === 'new') return void startNewConversation();
+            if (action === 'pin') {
+                const pinned = !Boolean(conversation.pinned);
+                await requestJson(`/api/homer/conversations/${encodeURIComponent(conversation.id)}/pin`, {
+                    method: 'POST', body: JSON.stringify({ pinned }),
+                });
+                await loadConversationHistory();
+                showHostNotice(pinned ? '聊天已置顶' : '已取消置顶', 'success');
+                return;
+            }
+            if (action === 'copy') {
+                const result = await requestJson(`/api/homer/conversations/${encodeURIComponent(conversation.id)}/copy`, {
+                    method: 'POST', body: '{}',
+                });
+                await loadConversationHistory();
+                showHostNotice('聊天副本已创建', 'success');
+                const copied = result?.conversation;
+                if (copied) await switchConversation(copied);
+                return;
+            }
+            if (action === 'export') {
+                await exportConversation(conversation);
+                showHostNotice('聊天已导出', 'success');
+                return;
+            }
+            if (action === 'delete') await deleteManagedConversation(conversation);
+        } catch (error) {
+            showHostNotice(String(error?.message || '会话操作失败'), 'error');
+        }
+    });
+    return dialog;
+}
+
+function openConversationManager(conversation) {
+    managedConversation = conversation;
+    const dialog = document.querySelector('#homer-chat-manage-dialog');
+    const pin = dialog?.querySelector('[data-action="pin"]');
+    if (pin) pin.textContent = conversation?.pinned ? '取消置顶' : '置顶';
+    dialog?.showModal();
+}
+
+async function importConversationFile(file) {
+    const text = await file.text();
+    let payload;
+    try {
+        payload = JSON.parse(text);
+    } catch {
+        throw new Error('聊天文件不是有效的 JSON');
+    }
+    if (!payload || typeof payload !== 'object' || !Array.isArray(payload.messages)) {
+        throw new Error('聊天文件缺少 messages 列表');
+    }
+    payload.conversation = {
+        ...(payload.conversation || {}),
+        app_id: payload?.conversation?.app_id || launch?.app_id || '',
+        app_name: payload?.conversation?.app_name || launch?.conversation?.app_name || '',
+        app_icon: payload?.conversation?.app_icon || launch?.conversation?.app_icon || '',
+    };
+    return requestJson('/api/homer/conversations/import', {
+        method: 'POST', body: JSON.stringify(payload),
+    });
+}
+
+function buildNewConversationMenu() {
+    const dialog = createElement('dialog', 'homer-site-dialog homer-new-chat-dialog');
+    dialog.id = 'homer-new-chat-dialog';
+    dialog.dataset.modal = 'new-chat';
+    const surface = createElement('section', 'homer-site-dialog__surface homer-new-chat-menu');
+    const create = createElement('button', '', '创建聊天');
+    const importButton = createElement('button', '', '导入聊天');
+    create.type = importButton.type = 'button';
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,application/json';
+    input.hidden = true;
+    create.addEventListener('click', () => { dialog.close(); void startNewConversation(); });
+    importButton.addEventListener('click', () => input.click());
+    input.addEventListener('change', async () => {
+        const file = input.files?.[0];
+        if (!file) return;
+        dialog.close();
+        try {
+            const result = await importConversationFile(file);
+            await loadConversationHistory();
+            const conversation = result?.conversation;
+            if (conversation) await switchConversation(conversation);
+            showHostNotice('聊天已导入', 'success');
+        } catch (error) {
+            showHostNotice(String(error?.message || '导入聊天失败'), 'error');
+        } finally {
+            input.value = '';
+        }
+    });
+    surface.append(create, importButton, input);
+    dialog.append(surface);
+    dialog.addEventListener('click', event => { if (event.target === dialog) dialog.close(); });
+    return dialog;
+}
+
+function buildAttachmentDialog() {
+    const dialog = createElement('dialog', 'homer-site-dialog homer-attachment-dialog');
+    dialog.id = 'homer-attachment-dialog';
+    dialog.dataset.modal = 'attachments';
+    dialog.setAttribute('aria-label', '添加内容');
+    const surface = createElement('section', 'homer-site-dialog__surface');
+    const grid = createElement('div', 'homer-attachment-grid');
+    const definitions = [
+        ['gallery', '▧', '相册'], ['camera', '◉', '拍照'], ['image', '◇', '生图'],
+    ];
+    for (const [action, icon, label] of definitions) {
+        const button = createElement('button');
+        button.type = 'button';
+        button.dataset.action = action;
+        button.append(createElement('span', 'homer-attachment-icon', icon), createElement('span', '', label));
+        grid.append(button);
+    }
+    const ai = createElement('button', 'homer-ai-help', '◌  AI帮答');
+    ai.type = 'button';
+    ai.dataset.action = 'ai-help';
+    surface.append(grid, ai);
+    dialog.append(surface);
+    dialog.addEventListener('click', event => {
+        if (event.target === dialog) { dialog.close(); return; }
+        const button = event.target instanceof Element ? event.target.closest('[data-action]') : null;
+        if (!button) return;
+        const action = button.dataset.action;
+        dialog.close();
+        if (action === 'gallery') {
+            document.querySelector('#file_form_input')?.click();
+        } else if (action === 'camera') {
+            const camera = document.createElement('input');
+            camera.type = 'file'; camera.accept = 'image/*'; camera.capture = 'environment';
+            camera.addEventListener('change', () => {
+                const target = document.querySelector('#file_form_input');
+                if (target instanceof HTMLInputElement && camera.files?.length) {
+                    try { target.files = camera.files; target.dispatchEvent(new Event('change', { bubbles: true })); } catch { target.click(); }
+                }
+            }, { once: true });
+            camera.click();
+        } else if (action === 'ai-help') {
+            document.querySelector('#option_impersonate')?.click();
+        } else {
+            const imageButton = [...document.querySelectorAll('button, a, [role="button"]')].find(item => /生图|生成图片|image generation/i.test(String(item.textContent || item.getAttribute('title') || '')));
+            if (imageButton instanceof HTMLElement) imageButton.click();
+            else showHostNotice('当前模型没有启用生图能力', 'warning');
+        }
+    });
+    return dialog;
+}
+
+function buildMemoryDialog() {
+    const dialog = createElement('dialog', 'homer-site-dialog homer-memory-dialog');
+    dialog.id = 'homer-memory-dialog';
+    dialog.dataset.modal = 'memory-settings';
+    const surface = createElement('section', 'homer-site-dialog__surface');
+    surface.append(
+        createDialogHeader('CURRENT CHAT', '长记忆', '关闭长记忆', () => dialog.close()),
+        createElement('p', 'homer-sheet-dialog__notice', '记忆只绑定当前会话，不展示角色卡世界书正文。'),
+    );
+    const card = createElement('button', 'homer-memory-card');
+    card.type = 'button';
+    card.append(createElement('strong', '', 'Memory Books'), createElement('small', '', '自动整理本次对话中的长期事实'));
+    card.addEventListener('click', () => { dialog.close(); openMemoryBooks(); });
+    surface.append(card);
+    dialog.append(surface);
+    dialog.addEventListener('click', event => { if (event.target === dialog) dialog.close(); });
+    return dialog;
+}
+
+function bindComposerAttachmentButton() {
+    const button = document.querySelector('#options_button');
+    if (!(button instanceof HTMLElement) || button.dataset.homerAttachmentBound === '1') return;
+    button.dataset.homerAttachmentBound = '1';
+    button.setAttribute('aria-label', '添加内容');
+    button.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        document.querySelector('#options')?.classList.remove('openDrawer');
+        document.querySelector('#homer-attachment-dialog')?.showModal();
+    }, { capture: true });
+}
+
 function populateHistoryList(historyCount, historyList) {
     if (!(historyCount instanceof HTMLElement) || !(historyList instanceof HTMLElement)) {
         return;
@@ -3276,19 +4062,17 @@ function populateHistoryList(historyCount, historyList) {
     historyCount.textContent = String(runtimeUiData.conversations.length);
     historyList.replaceChildren();
     for (const conversation of runtimeUiData.conversations) {
-        const item = createElement('button', 'homer-history-item');
-        item.type = 'button';
+        const item = createElement('div', 'homer-history-item');
+        item.dataset.conversationId = String(conversation?.id || conversation?.conversation_id || '');
+        item.dataset.appId = String(conversation?.app_id || '');
         item.classList.toggle(
             'is-active',
             String(conversation?.id || '') === String(launch?.conversation_id || ''),
         );
         const avatar = createElement('span', 'homer-history-item__avatar');
-        const avatarUrl = siteAssetUrl(conversation?.app_icon);
-        if (avatarUrl) {
-            avatar.style.backgroundImage = `url("${avatarUrl.replaceAll('"', '%22')}")`;
-        } else {
-            avatar.textContent = String(conversation?.app_name || '角').slice(0, 1);
-        }
+        const avatarUrl = siteAssetUrl(conversation?.app_icon)
+            || siteUrl('/assets/img/apk/avatar.webp?v=20260831-silvercat-v1');
+        avatar.style.backgroundImage = `url("${avatarUrl.replaceAll('"', '%22')}")`;
         const copy = createElement('span', 'homer-history-item__copy');
         const itemHead = createElement('span', 'homer-history-item__head');
         itemHead.append(
@@ -3299,8 +4083,18 @@ function populateHistoryList(historyCount, historyList) {
             itemHead,
             createElement('small', '', String(conversation?.last_message || '开始新的故事').slice(0, 72)),
         );
-        item.append(avatar, copy);
-        item.addEventListener('click', () => void switchConversation(conversation));
+        const main = createElement('button', 'homer-history-item__main');
+        main.type = 'button';
+        main.append(avatar, copy);
+        main.addEventListener('click', () => void switchConversation(conversation));
+        const more = createElement('button', 'homer-history-item__more', '⋮');
+        more.type = 'button';
+        more.setAttribute('aria-label', `管理 ${String(conversation?.title || conversation?.app_name || '会话')}`);
+        more.addEventListener('click', event => {
+            event.stopPropagation();
+            openConversationManager(conversation);
+        });
+        item.append(main, more);
         historyList.append(item);
     }
     if (!historyList.children.length) {
@@ -3323,12 +4117,13 @@ function buildRuntimeUi() {
     const menu = createElement('button', 'homer-header-button', '☰');
     menu.type = 'button';
     menu.setAttribute('aria-label', '打开导航与历史会话');
-    menu.addEventListener('click', () => setDrawerOpen('left'));
-    const title = createElement('div', 'homer-chat-header__title');
-    title.append(
-        createElement('strong', '', roleName),
-        createElement('small', '', '当前对话已云端同步'),
-    );
+    menu.addEventListener('click', () => {
+        const leftDrawer = document.querySelector('#homer-left-drawer');
+        setDrawerOpen(leftDrawer?.classList.contains('is-open') ? '' : 'left');
+    });
+    const title = createElement('div', 'homer-chat-header__title homer-chat-header__title--empty');
+    title.id = 'homer-conversation-title';
+    title.setAttribute('aria-hidden', 'true');
     const settingsButton = createElement('button', 'homer-header-button', '⚙');
     settingsButton.type = 'button';
     settingsButton.setAttribute('aria-label', '打开对话设置');
@@ -3340,18 +4135,19 @@ function buildRuntimeUi() {
     backdrop.type = 'button';
     backdrop.hidden = true;
     backdrop.setAttribute('aria-label', '关闭侧栏');
-    backdrop.addEventListener('click', () => setDrawerOpen());
+    backdrop.addEventListener('click', () => {
+        const rightIsOpen = document.querySelector('#homer-right-drawer')?.classList.contains('is-open');
+        rightIsOpen ? returnToDesktopNavigation() : setDrawerOpen();
+    });
 
     const leftDrawer = createElement('aside', 'homer-drawer homer-drawer--left');
     leftDrawer.id = 'homer-left-drawer';
     leftDrawer.setAttribute('aria-label', '导航与历史会话');
     leftDrawer.setAttribute('aria-hidden', 'true');
     const leftHead = createElement('header', 'homer-drawer__head');
+    leftHead.classList.add('homer-drawer__head--left');
     const brand = createElement('div');
-    brand.append(
-        createElement('span', 'homer-drawer__eyebrow', 'HOMER'),
-        createElement('h2', 'homer-drawer__title', '绘梦酒馆'),
-    );
+    brand.append(createElement('h2', 'homer-drawer__title', '惑梦（Homer）'));
     const leftClose = createElement('button', 'homer-icon-button', '×');
     leftClose.type = 'button';
     leftClose.setAttribute('aria-label', '关闭导航');
@@ -3376,9 +4172,18 @@ function buildRuntimeUi() {
     }
     const historySection = createElement('section', 'homer-history');
     const historyHead = createElement('div', 'homer-history__head');
+    const historyMeta = createElement('span', 'homer-history__meta');
     const historyCount = createElement('span', '', '0');
     historyCount.id = 'homer-history-count';
-    historyHead.append(createElement('h3', '', '历史会话'), historyCount);
+    const newConversation = createElement('button', 'homer-history__new', '+');
+    newConversation.id = 'homer-history-new';
+    newConversation.type = 'button';
+    newConversation.setAttribute('aria-label', '为当前角色新建对话');
+    newConversation.addEventListener('click', () => {
+        document.querySelector('#homer-new-chat-dialog')?.showModal();
+    });
+    historyMeta.append(historyCount, newConversation);
+    historyHead.append(createElement('h3', '', '历史会话'), historyMeta);
     const historyList = createElement('div', 'homer-history__list');
     historyList.id = 'homer-history-list';
     populateHistoryList(historyCount, historyList);
@@ -3398,7 +4203,7 @@ function buildRuntimeUi() {
     const rightClose = createElement('button', 'homer-icon-button', '×');
     rightClose.type = 'button';
     rightClose.setAttribute('aria-label', '关闭设置');
-    rightClose.addEventListener('click', () => setDrawerOpen());
+    rightClose.addEventListener('click', returnToDesktopNavigation);
     rightHead.append(settingCopy, rightClose);
     const settingList = createElement('div', 'homer-setting-list');
     const currentModel = selectedModel();
@@ -3410,8 +4215,19 @@ function buildRuntimeUi() {
     );
     modelButton.querySelector('.homer-setting-row__description').id = 'homer-model-summary';
     modelButton.addEventListener('click', () => {
-        setDrawerOpen();
+        returnToDesktopNavigation();
         document.querySelector('#homer-model-dialog')?.showModal();
+    });
+    const presetButton = createSettingButton(
+        '☷',
+        '预设开关',
+        '仅作用于当前对话',
+        'homer-open-preset-settings',
+    );
+    presetButton.querySelector('.homer-setting-row__description').id = 'homer-preset-summary';
+    presetButton.addEventListener('click', () => {
+        returnToDesktopNavigation();
+        setPanelOpen(true);
     });
     const favoritesLink = document.createElement('a');
     favoritesLink.className = 'homer-setting-row';
@@ -3431,7 +4247,10 @@ function buildRuntimeUi() {
         'Memory Books · 当前对话记忆',
         'homer-open-memory-books',
     );
-    memoryButton.addEventListener('click', openMemoryBooks);
+    memoryButton.addEventListener('click', () => {
+        returnToDesktopNavigation();
+        document.querySelector('#homer-memory-dialog')?.showModal();
+    });
     const modButton = createSettingButton(
         '◇',
         'Mod',
@@ -3440,35 +4259,20 @@ function buildRuntimeUi() {
     );
     modButton.querySelector('.homer-setting-row__description').id = 'homer-mod-summary';
     modButton.addEventListener('click', () => {
-        setDrawerOpen();
+        returnToDesktopNavigation();
         document.querySelector('#homer-mod-dialog')?.showModal();
     });
-    settingList.append(modelButton, favoritesLink, memoryButton, modButton);
+    settingList.append(modelButton, presetButton, favoritesLink, memoryButton, modButton);
     rightDrawer.append(
         rightHead,
-        createElement('p', 'homer-drawer__role', roleName),
+        createElement('p', 'homer-drawer__role', String(launch?.conversation?.title || roleName)),
         settingList,
         createElement(
             'p',
             'homer-privacy-note',
-            '角色卡世界书正文受创作者保护。你只能通过悬浮球调整创作者允许开放的预设开关。',
+            '角色卡世界书正文受创作者保护。你只能通过预设开关调整创作者允许开放的条目。',
         ),
     );
-
-    const ball = createElement('button', 'homer-preset-ball');
-    ball.id = 'homer-preset-ball';
-    ball.type = 'button';
-    ball.setAttribute('aria-label', '打开当前对话预设控制');
-    ball.setAttribute('aria-expanded', 'false');
-    const coverUrl = getManagedCoverUrl() || siteAssetUrl(launch?.conversation?.app_icon);
-    if (coverUrl) {
-        ball.style.backgroundImage = `url("${coverUrl.replaceAll('"', '%22')}")`;
-    }
-    ball.append(createElement('span', 'homer-preset-ball__mark', '梦'));
-    ball.addEventListener('click', () => {
-        const panel = document.querySelector('#homer-preset-panel');
-        setPanelOpen(Boolean(panel?.hidden));
-    });
 
     const panel = createElement('section', 'homer-preset-panel');
     panel.id = 'homer-preset-panel';
@@ -3476,7 +4280,7 @@ function buildRuntimeUi() {
     const panelHead = createElement('header', 'homer-preset-panel__head');
     const heading = createElement('div');
     heading.append(
-        createElement('div', 'homer-preset-panel__eyebrow', '当前角色绑定预设'),
+        createElement('div', 'homer-preset-panel__eyebrow', '当前模型绑定预设'),
         createElement('h2', 'homer-preset-panel__title', '本次会话开关'),
     );
     const close = createElement('button', 'homer-icon-button', '×');
@@ -3499,7 +4303,7 @@ function buildRuntimeUi() {
     const notice = createElement(
         'p',
         'homer-preset-notice',
-        '角色卡预设会列出全部条目；官方预设只列出后台明确公开的条目。这里只显示名称和状态，不展示提示词或世界书正文。',
+        '这里只显示当前模型实际使用的一个预设，以及后台明确允许用户切换的条目；不会展示提示词或世界书正文。',
     );
     const quickList = createElement('div', 'homer-preset-list');
     quickList.id = 'homer-preset-quick-list';
@@ -3514,7 +4318,7 @@ function buildRuntimeUi() {
     const dialogHead = createElement('header', 'homer-preset-dialog__head');
     const dialogHeading = createElement('div');
     dialogHeading.append(
-        createElement('div', 'homer-preset-panel__eyebrow', '角色卡全部条目 · 官方公开条目'),
+        createElement('div', 'homer-preset-panel__eyebrow', '当前模型唯一预设'),
         createElement('h2', 'homer-preset-dialog__title', '预设条目控制台'),
     );
     const dialogClose = createElement('button', 'homer-icon-button', '×');
@@ -3525,7 +4329,7 @@ function buildRuntimeUi() {
     const search = document.createElement('input');
     search.className = 'homer-preset-search';
     search.type = 'search';
-    search.placeholder = '搜索角色卡或官方预设条目';
+    search.placeholder = '搜索当前预设条目';
     search.setAttribute('aria-label', '搜索预设条目');
     search.addEventListener('input', () => renderPresetLists(search.value));
     const fullList = createElement('div', 'homer-preset-list homer-preset-list--full');
@@ -3543,11 +4347,16 @@ function buildRuntimeUi() {
         backdrop,
         leftDrawer,
         rightDrawer,
-        ball,
         panel,
         dialog,
         buildModelDialog(),
         buildModDialog(),
+        buildMemoryDialog(),
+        buildRenameDialog(),
+        buildConversationManagerDialog(),
+        buildNewConversationMenu(),
+        buildAttachmentDialog(),
+        buildPresentationModeToggle(),
     );
     root.addEventListener('keydown', event => {
         if (event.key === 'Escape') {
@@ -3556,8 +4365,47 @@ function buildRuntimeUi() {
         }
     });
     document.body.append(root);
+    bindComposerAttachmentButton();
     renderPresetLists();
     flushHostNotices();
+    if (window.matchMedia('(min-width: 761px)').matches) {
+        setDrawerOpen('left');
+    }
+}
+
+async function startNewConversation() {
+    if (loadingLaunch || generationBusy || !launch?.app_id) {
+        showHostNotice(generationBusy ? '回复生成完成后才能新建对话' : '当前会话仍在准备，请稍候', 'warning');
+        return;
+    }
+    loadingLaunch = true;
+    document.body.classList.add('homer-switching-chat');
+    try {
+        const created = await requestJson('/api/homer/conversations/start', {
+            method: 'POST',
+            body: JSON.stringify({
+                app_id: launch.app_id,
+                app_name: launch?.conversation?.app_name || launch?.card?.data?.name || '',
+                app_icon: launch?.conversation?.app_icon || '',
+                version_id: launch?.conversation?.version_id || launch?.version_id || '',
+            }),
+        });
+        const conversation = {
+            ...created,
+            id: created?.conversation_id,
+            app_id: created?.app_id || launch.app_id,
+            title: created?.app_name || '新对话',
+        };
+        loadingLaunch = false;
+        await switchConversation(conversation);
+        void loadConversationHistory();
+    } catch (error) {
+        console.error(`${MODULE_ID}: conversation create failed`, error);
+        showHostNotice(String(error?.message || '新建对话失败'), 'error');
+    } finally {
+        loadingLaunch = false;
+        document.body.classList.remove('homer-switching-chat');
+    }
 }
 
 async function switchConversation(conversation) {
@@ -3587,13 +4435,21 @@ async function switchConversation(conversation) {
         extensionSettingsSignature: lastExtensionSettingsSignature,
     };
     loadingLaunch = true;
+    performance.mark('homer-switch-start');
     document.body.classList.add('homer-switching-chat');
     setDrawerOpen();
     notifyHostLoading('正在切换历史会话…');
     try {
-        await flushExtensionSettingsPersist();
-        await syncCloudChat();
-        const nextSession = await fetchSession(targetAppId, targetConversationId);
+        const currentAppId = String(launch?.app_id || '');
+        const currentConversationId = String(launch?.conversation_id || '');
+        const sameCharacterCard = currentAppId === targetAppId;
+        const [, , nextSession] = await Promise.all([
+            flushExtensionSettingsPersist(),
+            syncCloudChat(),
+            takePrefetchedSession(targetAppId, targetConversationId),
+        ]);
+        invalidateCachedSession(currentAppId, currentConversationId);
+        performance.mark('homer-switch-session');
         if (!nextSession?.launch) {
             throw new Error('没有找到目标历史会话');
         }
@@ -3603,14 +4459,19 @@ async function switchConversation(conversation) {
         presetSearchQuery = '';
         lastSyncSignature = '';
         setAccessClasses(session?.user);
-        await loadRuntimeState();
-        await loadRuntimeUiData();
+        await Promise.all([
+            loadRuntimeState(),
+            loadRuntimeUiData(),
+        ]);
+        performance.mark('homer-switch-hydrated');
         applyConnectionConfiguration();
         // Keep the website-owned shell visible while a large card and its
         // worldbook finish importing into the dialogue engine.
         buildRuntimeUi();
-        await importLaunchCharacter();
-        await loadCloudChat();
+        await importLaunchCharacter({ reuseActiveCharacter: sameCharacterCard });
+        performance.mark('homer-switch-card');
+        await loadCloudChat({ emitChatChanged: sameCharacterCard });
+        performance.mark('homer-switch-cloud');
         buildRuntimeUi();
         installTokenRefresh();
         const nextUrl = new URL(window.location.href);
@@ -3628,6 +4489,8 @@ async function switchConversation(conversation) {
         window.setTimeout(reaffirmConversationConnection, 800);
         document.body.classList.remove('homer-runtime-error');
         notifyHostConversation();
+        scheduleSessionPrefetch();
+        performance.mark('homer-switch-ready');
     } catch (error) {
         session = previous.session;
         launch = previous.launch;
@@ -3657,29 +4520,34 @@ function installEventHandlers() {
         scheduleSync();
         void logDialogueEvent('message_send', Number(messageIndex));
         queueMessageMenuRender();
+        scheduleHostStateNotify(0, 'message-sent');
     });
     eventSource.on(event_types.MESSAGE_EDITED, messageIndex => {
         scheduleSync();
         void logDialogueEvent('message_edit', Number(messageIndex));
         queueMessageMenuRender();
+        scheduleHostStateNotify(0, 'message-edited');
     });
     eventSource.on(event_types.MESSAGE_DELETED, messageIndex => {
         scheduleSync();
         void logDialogueEvent('message_delete', Number(messageIndex));
         queueMessageMenuRender();
+        scheduleHostStateNotify(0, 'message-deleted');
     });
     eventSource.on(event_types.MESSAGE_SWIPED, messageIndex => {
         scheduleSync();
         void logDialogueEvent('swipe', Number(messageIndex));
         queueMessageMenuRender();
+        scheduleHostStateNotify(0, 'message-swiped');
     });
     for (const event of [event_types.MESSAGE_RECEIVED, event_types.MESSAGE_UPDATED]) {
         eventSource.on(event, () => {
             scheduleSync();
             queueMessageMenuRender();
+            scheduleHostStateNotify(60, 'message-updated');
         });
     }
-    eventSource.on(event_types.GENERATION_STARTED, (_type, _options, dryRun) => {
+    eventSource.on(event_types.GENERATION_STARTED, (type, _options, dryRun) => {
         enforceStreamingConfiguration();
         // SillyTavern and prompt extensions use dry-run generations to assemble or
         // count prompts. A dry run has no matching GENERATION_ENDED event, so it
@@ -3689,20 +4557,39 @@ function installEventHandlers() {
         }
         window.clearTimeout(generationSettleTimer);
         generationSettleTimer = null;
+        generationSnapshot = captureGenerationSnapshot(type);
         generationBusy = true;
         document.body.classList.add('homer-generating');
         queueMessageMenuRender();
+        scheduleHostStateNotify(0, 'generation-started');
     });
     for (const event of [event_types.GENERATION_ENDED, event_types.GENERATION_STOPPED]) {
         eventSource.on(event, () => {
             window.clearTimeout(generationSettleTimer);
-            generationSettleTimer = window.setTimeout(() => {
+            generationSettleTimer = null;
+            const snapshot = generationSnapshot;
+            generationSnapshot = null;
+            // 串成一条链，避免连点重生成时两次恢复互相踩。
+            generationRecoveryChain = generationRecoveryChain.then(async () => {
+                try {
+                    const recovered = await recoverFailedGeneration(snapshot);
+                    if (!recovered) {
+                        scheduleSync(100);
+                    }
+                } catch (error) {
+                    console.error(`${MODULE_ID}: failed generation recovery did not complete`, error);
+                    showHostNotice('回复生成失败，请刷新当前会话后重试。', 'error');
+                    updateRuntimeStatus('生成恢复失败', 'warning');
+                }
+                await new Promise(resolve => {
+                    generationSettleTimer = window.setTimeout(resolve, 300);
+                });
                 generationBusy = false;
                 document.body.classList.remove('homer-generating');
                 generationSettleTimer = null;
                 queueMessageMenuRender();
-            }, 300);
-            scheduleSync(100);
+                scheduleHostStateNotify(0, 'generation-ended');
+            });
         });
     }
     eventSource.on(event_types.CHAT_CHANGED, () => {
@@ -3718,6 +4605,8 @@ function installEventHandlers() {
     });
     window.addEventListener('online', refreshBridgeToken);
     window.addEventListener('pagehide', () => {
+        window.clearTimeout(sessionPrefetchTimer);
+        sessionPrefetchCache.clear();
         void flushExtensionSettingsPersist({ force: true, keepalive: true }).catch(() => {});
     });
 }
@@ -3758,14 +4647,13 @@ async function bootstrapLaunch(preloadedSession = null, administratorExtensionsP
         // hook is active.
         await administratorExtensionsPromise;
         performance.mark('homer-bootstrap-extensions');
-        // Core-ready is early enough for read-only hydration, but extensions
-        // that subscribe to CHAT_CHANGED from APP_READY must be registered
-        // before selecting or opening the card. Overlap the hydration above
-        // with native startup, then keep all chat mutation behind this gate.
-        await applicationReadyPromise;
-        await postApplicationReadyWork;
-        performance.mark('homer-bootstrap-app-ready');
-        await importLaunchCharacter();
+        // The embedded client already has settings, extensions and characters
+        // at core-ready. Do not keep the visible cloud conversation behind the
+        // standalone runtime's remaining backgrounds/tokenizers/personas work.
+        // Extensions that attach APP_READY-time listeners receive an explicit
+        // state replay below once that non-critical initialization completes.
+        performance.mark('homer-bootstrap-core-ready');
+        await importLaunchCharacter({ reuseActiveCharacter: true });
         setRuntimeGate('正在恢复对话', '载入云端消息并校准候选回复…');
         performance.mark('homer-bootstrap-card-imported');
         notifyHostLoading('正在恢复云端对话…');
@@ -3795,6 +4683,16 @@ async function bootstrapLaunch(preloadedSession = null, administratorExtensionsP
         document.documentElement.classList.add('homer-runtime-ready');
         performance.mark('homer-bootstrap-ready');
         notifyHostConversation();
+        void applicationReadyPromise.then(async () => {
+            await postApplicationReadyWork;
+            performance.mark('homer-bootstrap-app-ready');
+            applyConnectionConfiguration();
+            await eventSource.emit(event_types.CHAT_CHANGED, getContext().chatId);
+            await eventSource.emit(event_types.CHAT_LOADED, getContext().chatId);
+            reaffirmConversationConnection();
+        }).catch(error => {
+            console.warn(`${MODULE_ID}: post-ready extension replay failed`, error);
+        });
         // History can be large and is not part of the current conversation's
         // critical path. Populate only its existing drawer nodes after the
         // chat is interactive; do not rebuild or navigate the page.
@@ -3839,6 +4737,7 @@ async function startHomerBridge() {
         session = launchSession;
         setAccessClasses(launchSession?.user);
         captureExtensionSettingsBaseline();
+        installPresentationModeBridge();
         installRoleplayHubCompatibility();
         installCardStageRuntime();
         await bootstrapLaunch(launchSession, administratorExtensionsPromise);
@@ -3855,9 +4754,9 @@ export async function init() {
     }
     initialized = true;
     installProductSurfaceBoundary();
+    installEmbeddedComposerPolicy();
     notifyHostLoading('正在准备对话…');
     ensureHomerExtensionSettingDefaults();
-    installEmbeddedDocumentLookupBridge();
     installExtensionSettingsPersistenceBridge();
     installKeywordInjector({
         active: Boolean(requestedAppId),
@@ -3888,6 +4787,15 @@ export async function init() {
     eventSource.once(event_types.APP_READY, () => {
         applicationReady = true;
         resolveApplicationReady?.();
+        // Do not widen the runtime document lookup surface while upstream
+        // built-in extensions are still activating.  In particular, their
+        // startup probes must only see the runtime DOM; falling through into
+        // the website shell can make an unrelated host control look like an
+        // upstream setting node and stall extension activation.  Card scripts
+        // do not run before APP_READY, so installing the compatibility bridge
+        // here preserves their parent/top lookup contract without extending
+        // the critical startup path.
+        installEmbeddedDocumentLookupBridge();
         scheduleBridgeStart();
         if (!reaffirmExtensionSettingsAfterReady || !conversationExtensionSettings) {
             return;

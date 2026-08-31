@@ -676,6 +676,7 @@ export async function pingServer() {
 //MARK: firstLoadInit
 async function firstLoadInit() {
     performance.mark('homer-native-init-start');
+    const isHomerEmbedded = new URLSearchParams(window.location.search).get('homer_embed') === '1';
     try {
         const tokenResponse = await fetch('/csrf-token', { cache: 'no-store' });
         const tokenData = await tokenResponse.json();
@@ -707,9 +708,15 @@ async function firstLoadInit() {
 
     const initLoaderHandle = loader.show({
         slug: 'app-init',
+        // The product host already renders its instant conversation snapshot
+        // and the Homer bridge owns the embedded readiness gate. Keeping the
+        // standalone loader blocking here lets unrelated background handles
+        // retain this splash over an already-ready card indefinitely.
+        blocking: !isHomerEmbedded,
         toastMode: loader.ToastMode.NONE,
         overlayContent: initLoaderOverlay,
     });
+    let initLoaderReleased = false;
 
     registerPromptManagerMigration();
     initDomHandlers();
@@ -753,7 +760,14 @@ async function firstLoadInit() {
     // alongside backgrounds, tokenizers, personas and the remaining
     // non-critical application setup instead of blocking the visible chat on
     // the entire standalone initialization chain.
-    if (new URLSearchParams(window.location.search).get('homer_embed') === '1') {
+    if (isHomerEmbedded) {
+        // The embedded bridge owns the conversation-ready gate from this
+        // point onward. Release the standalone runtime splash now so it
+        // cannot cover an already interactive Homer/card-experience surface
+        // while backgrounds, tokenizers and other non-critical features keep
+        // warming in the background.
+        await initLoaderHandle.hide();
+        initLoaderReleased = true;
         window.dispatchEvent(new CustomEvent('homer:runtime-core-ready'));
     }
     await getBackgrounds();
@@ -784,7 +798,9 @@ async function firstLoadInit() {
     addDebugFunctions();
     doDailyExtensionUpdatesCheck();
     await eventSource.emit(event_types.APP_INITIALIZED);
-    await initLoaderHandle.hide();
+    if (!initLoaderReleased) {
+        await initLoaderHandle.hide();
+    }
     await fixViewport();
     await eventSource.emit(event_types.APP_READY);
 }
@@ -7703,6 +7719,22 @@ export async function openCharacterChat(file_name, { persistCharacter = true } =
     if (persistCharacter) {
         await createOrEditCharacter(new CustomEvent('newChat'));
     }
+}
+
+/**
+ * Binds a character chat name without reading/rendering its local JSONL file.
+ * Embedded cloud-backed clients replace the in-memory chat immediately after
+ * this call, so the normal local read is redundant during same-card history
+ * switching. The caller remains responsible for printing messages and
+ * emitting CHAT_CHANGED after the cloud payload has been installed.
+ * @param {string} file_name Chat file name without the JSONL suffix.
+ */
+export async function bindCharacterChatWithoutLoad(file_name) {
+    await waitUntilCondition(() => !isChatSaving, debounce_timeout.extended, 10);
+    await clearChat({ clearData: true });
+    characters[this_chid].chat = file_name;
+    chat_metadata = {};
+    $('#selected_chat_pole').val(file_name);
 }
 
 ////////// OPTIMZED MAIN API CHANGE FUNCTION ////////////

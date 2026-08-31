@@ -1,5 +1,5 @@
 import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js?v=20260720-community-versions';
-import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260812-license-removal';
+import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260831-silvercat-v1';
 import {
   applyBubbleStyle,
   applyStageTheme,
@@ -15,12 +15,12 @@ import {
   STAGE_THEME_PRESETS,
   STRUCTURED_COMPONENT_OPTIONS,
   UI_ACTION_OPTIONS,
-} from '/app/assets/js/card-experience-schema.mjs?v=20260802-stage-shell';
+} from '/app/assets/js/card-experience-schema.mjs?v=20260820-archive-stage';
 import {
   buildCardPackMediaUpdate,
   isCardPackFilename,
   parseCardPack,
-} from '/app/assets/js/card-pack-import.mjs?v=20260720-community-versions';
+} from '/app/assets/js/card-pack-import.mjs?v=20260820-archive-stage';
 
 const emptyCardPromptPreset = () => ({ version: 1, enabled: false, name: '', format: 'sillytavern', source_file: '', prompts: [], prompt_order: [], blocks: [], stats: { entry_count: 0, enabled_count: 0 } });
 const TAVERN_HELPER_SCRIPT_MAX_ENTRIES = 100;
@@ -622,7 +622,7 @@ function createPage() {
     async uploadCardAsset(file, kind) {
       if (!this.canUseAdvancedCreation() && kind !== 'spine') throw new Error(this.advancedCreationHint());
       const rules = {
-        bgm: { max: 30 * 1024 * 1024, accept: ['audio/mpeg', 'audio/mp3'] },
+        bgm: { max: 30 * 1024 * 1024, accept: ['audio/mpeg', 'audio/mp3', 'audio/ogg'] },
         portrait: { max: 20 * 1024 * 1024, accept: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] },
         background: { max: 80 * 1024 * 1024, accept: ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'video/mp4', 'video/webm'] },
         spine: { max: 60 * 1024 * 1024, accept: ['application/zip', 'application/x-zip-compressed', 'application/octet-stream', ''] },
@@ -1289,6 +1289,16 @@ function createPage() {
       const importedResult = await api.importCard(pack.card);
       const app = importedResult?.data || importedResult;
       if (!app?.id) throw new Error('服务器已接收资源包，但没有返回有效卡片 ID');
+      const packedData = pack.card?.data && typeof pack.card.data === 'object' ? pack.card.data : pack.card;
+      const packedExperience = packedData?.extensions?.homer_card_experience
+        || packedData?.card_experience
+        || pack.card?.card_experience;
+      if (packedExperience && typeof packedExperience === 'object' && !Array.isArray(packedExperience)) {
+        // The base import intentionally strips unresolved asset IDs. Restore
+        // the package declaration in memory so buildCardPackMediaUpdate can
+        // remap every reference to the newly uploaded, owned asset IDs.
+        app.card_experience = cloneJson(packedExperience);
+      }
       this.editingId = app.id;
       this.pendingCardPackImport = { app, pack, uploaded: [], next_asset: 0 };
       await this.continueCardPackImport();

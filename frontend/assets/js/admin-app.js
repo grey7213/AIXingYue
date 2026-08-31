@@ -1,5 +1,5 @@
 // 惑梦（Homer） 管理后台 Alpine.js 应用
-import { api, isLoggedIn, formatDateTime, ApiError } from '/assets/js/api.js?v=20260728-model-discovery';
+import { api, isLoggedIn, formatDateTime, ApiError } from '/assets/js/api.js?v=20260817-preset-pricing';
 
 function adminPanel() {
   return {
@@ -706,6 +706,7 @@ function adminPanel() {
         this.adminInfo = result.data || result;
         this.state = 'ready';
         await this.loadStats();
+        this.$nextTick(() => this.installMobileTableLabels());
       } catch (err) {
         if (err instanceof ApiError && err.code === 403) {
           this.errorMessage = '权限不足';
@@ -719,6 +720,24 @@ function adminPanel() {
         }
         this.state = 'unauthorized';
       }
+    },
+
+    installMobileTableLabels() {
+      const applyLabels = () => {
+        document.querySelectorAll('.xy-table').forEach(table => {
+          const labels = Array.from(table.querySelectorAll('thead th')).map(item => String(item.textContent || '').trim());
+          table.querySelectorAll('tbody tr').forEach(row => {
+            Array.from(row.children).forEach((cell, index) => {
+              if (cell instanceof HTMLElement) cell.dataset.label = labels[index] || `字段 ${index + 1}`;
+            });
+          });
+        });
+      };
+      applyLabels();
+      this.mobileTableObserver?.disconnect?.();
+      this.mobileTableObserver = new MutationObserver(() => window.requestAnimationFrame(applyLabels));
+      const root = document.querySelector('.xy-admin-main');
+      if (root) this.mobileTableObserver.observe(root, { childList: true, subtree: true });
     },
 
     showToast(message, type = 'info', duration = 2800) {
@@ -843,7 +862,10 @@ function adminPanel() {
       if (id === 'redeem' && this.redeemCodes.length === 0) await this.loadRedeemCodes(1);
       if (id === 'contests' && this.contests.length === 0) await this.loadContests();
       if (id === 'site' && !this.siteSettings) await this.loadSiteSettings();
-      if (id === 'llm' && !this.llmSettings) await this.loadLlmSettings();
+      if (id === 'llm') {
+        if (!this.globalPresets) await this.loadGlobalPresets();
+        if (!this.llmSettings) await this.loadLlmSettings();
+      }
       if (id === 'global-presets' && !this.globalPresets) await this.loadGlobalPresets();
       if (id === 'plugins' && this.tavoPlugins.length === 0) await this.loadTavoPlugins();
       if (id === 'apps' && this.apps.length === 0) await this.loadApps(1);
@@ -1039,12 +1061,15 @@ function adminPanel() {
       try {
         const raw = await file.text();
         const preset = JSON.parse(raw);
-        const response = await api.admin.importGlobalPromptPreset({ preset, filename: file.name });
+        const response = await api.admin.importGlobalPresetBundle({ preset, filename: file.name });
         this.globalPresetKind = 'prompt';
-        await this.loadGlobalPresets((response.data || response)?.preset?.id || '');
-        this.showToast(`已导入全部 ${(response.data || response)?.preset?.stats?.entry_count || 0} 个提示词条目`, 'success');
+        const data = response.data || response;
+        await this.loadGlobalPresets(data?.prompt_preset?.id || '');
+        const promptCount = data?.prompt_preset?.stats?.entry_count || 0;
+        const regexCount = data?.regex_preset?.stats?.entry_count || 0;
+        this.showToast(`已导入 ${promptCount} 个提示词条目和 ${regexCount} 条正则`, 'success');
       } catch (err) {
-        this.showToast(err.message || '提示词预设导入失败', 'error');
+        this.showToast(err.message || '预设 JSON 导入失败', 'error');
       } finally {
         this.loading = false;
         if (event?.target) event.target.value = '';
@@ -1065,8 +1090,14 @@ function adminPanel() {
       if (!file) return;
       this.loading = true;
       try {
-        const dataUrl = await this.fileAsDataUrl(file);
-        const response = await api.admin.importGlobalRegexPreset({ data_url: dataUrl, filename: file.name });
+        let response;
+        if (file.name.toLowerCase().endsWith('.json') || file.type === 'application/json') {
+          const preset = JSON.parse(await file.text());
+          response = await api.admin.importGlobalRegexJson({ preset, filename: file.name });
+        } else {
+          const dataUrl = await this.fileAsDataUrl(file);
+          response = await api.admin.importGlobalRegexPreset({ data_url: dataUrl, filename: file.name });
+        }
         this.globalPresetKind = 'regex';
         await this.loadGlobalPresets((response.data || response)?.preset?.id || '');
         this.showToast(`已导入全部 ${(response.data || response)?.preset?.stats?.entry_count || 0} 条正则`, 'success');
@@ -1633,6 +1664,50 @@ function adminPanel() {
       };
     },
 
+    defaultModelPricing() {
+      return { mode: 'per_request', input_price: 25, output_price: 25 };
+    },
+
+    normalizeModelPricing(value = {}) {
+      const mode = value?.mode === 'per_token' ? 'per_token' : 'per_request';
+      const fallback = this.defaultModelPricing();
+      return {
+        mode,
+        input_price: Math.max(0, Number(value?.input_price ?? fallback.input_price) || 0),
+        output_price: Math.max(0, Number(value?.output_price ?? fallback.output_price) || 0),
+      };
+    },
+
+    syncModelConfigs(preset) {
+      const models = this.parseModelsText(preset?.modelsText || preset?.model);
+      const existing = new Map((preset?.modelConfigs || []).map(item => [String(item?.model || ''), item]));
+      const promptOptions = this.globalPromptPresetOptions();
+      const fallbackPresetId = String(this.globalPresets?.prompt?.active_id || promptOptions[0]?.id || '');
+      preset.modelConfigs = models.map(model => {
+        const current = existing.get(model) || {};
+        return {
+          model,
+          display_name: String(current.display_name || current.name || model),
+          preset_id: String(current.preset_id || fallbackPresetId),
+          pricing: this.normalizeModelPricing(current.pricing || current),
+        };
+      });
+      if (models.length && !models.includes(String(preset.model || '').trim())) preset.model = models[0];
+      return preset.modelConfigs;
+    },
+
+    globalPromptPresetOptions() {
+      return this.globalPresets?.prompt?.items || [];
+    },
+
+    modelPricingHint(config) {
+      const pricing = this.normalizeModelPricing(config?.pricing || {});
+      if (pricing.mode === 'per_token') {
+        return `输入 ${pricing.input_price} / 输出 ${pricing.output_price} 惑梦币 / 1M Token`;
+      }
+      return `每轮 ${pricing.input_price + pricing.output_price} 惑梦币`;
+    },
+
     async loadLlmSettings() {
       this.loading = true;
       try {
@@ -1669,7 +1744,14 @@ function adminPanel() {
           catalog_meta: null,
           probe_summary: null,
           probe_results: [],
+          modelConfigs: Array.isArray(p.model_configs) ? p.model_configs.map(item => ({
+            model: String(item.model || ''),
+            display_name: String(item.display_name || item.name || item.model || ''),
+            preset_id: String(item.preset_id || ''),
+            pricing: this.normalizeModelPricing(item.pricing || item),
+          })) : [],
         }));
+        presets.forEach(preset => this.syncModelConfigs(preset));
         this.llmForm = {
           enabled: data.enabled !== false,
           protocol: data.protocol || 'openai',
@@ -1702,7 +1784,9 @@ function adminPanel() {
           default_model_preset_id: this.llmForm.default_model_preset_id,
           image_model: this.serializeImageModelSettings(),
           memory_settings: this.normalizeMemorySettings(this.llmForm.memory_settings || {}),
-          presets: this.llmForm.presets.map(p => ({
+          presets: this.llmForm.presets.map(p => {
+            this.syncModelConfigs(p);
+            return ({
             id: String(p.id || '').trim(),
             name: String(p.name || '').trim(),
             enabled: !!p.enabled,
@@ -1713,7 +1797,13 @@ function adminPanel() {
             temperature: Number(p.temperature || 0.8),
             api_key: String(p.api_key || '').trim(),
             clear_api_key: !!p.clear_api_key,
-          })),
+            model_configs: (p.modelConfigs || []).map(item => ({
+              model: String(item.model || '').trim(),
+              display_name: String(item.display_name || item.model || '').trim(),
+              preset_id: String(item.preset_id || '').trim(),
+              pricing: this.normalizeModelPricing(item.pricing || {}),
+            })),
+          }); }),
         };
         if (!payload.presets.length) {
           this.showToast('至少保留一个模型预设', 'error');
@@ -1775,6 +1865,7 @@ function adminPanel() {
         catalog_meta: null,
         probe_summary: null,
         probe_results: [],
+        modelConfigs: [],
       });
       if (!this.llmForm.default_model_preset_id) this.llmForm.default_model_preset_id = id;
     },
@@ -1804,6 +1895,7 @@ function adminPanel() {
         if (!models.length) throw new Error('模型目录没有返回可用的模型 ID');
         preset.modelsText = models.join('\n');
         if (!models.includes(String(preset.model || '').trim())) preset.model = models[0];
+        this.syncModelConfigs(preset);
         preset.catalog_meta = {
           total: Number(data.total || models.length),
           elapsed_ms: Number(data.elapsed_ms || 0),
@@ -1904,6 +1996,7 @@ function adminPanel() {
       }
       preset.modelsText = available.join('\n');
       if (!available.includes(String(preset.model || '').trim())) preset.model = available[0];
+      this.syncModelConfigs(preset);
       preset.enabled = true;
       if (notify) this.showToast(`已仅保留 ${available.length} 个可用模型`, 'success');
     },

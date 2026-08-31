@@ -4,11 +4,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>用户中心 - 惑梦（Homer）</title>
-  <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
-  <link rel="icon" href="/favicon.ico">
-  <link rel="apple-touch-icon" sizes="180x180" href="/assets/img/apple-touch-icon.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png?v=20260831-silvercat-v1">
+  <link rel="icon" href="/favicon.ico?v=20260831-silvercat-v1">
+  <link rel="apple-touch-icon" sizes="180x180" href="/assets/img/apple-touch-icon.png?v=20260831-silvercat-v1">
   <script src="/assets/vendor/tailwindcss-browser.js?v=20260713-local"></script>
-  <link rel="stylesheet" href="/assets/css/custom.css?v=20260703-fengyue-ui2">
+  <link rel="stylesheet" href="/assets/css/custom.css?v=20260831-silvercat-v1">
   <script type="module" src="/assets/js/dashboard-app.js?v=20260717-handoff-merge"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
@@ -16,10 +16,10 @@
   <div class="xy-stars-bg"></div>
 
   <!-- 顶栏 -->
-  <nav class="fixed top-0 inset-x-0 z-40 backdrop-blur-md bg-black/30 border-b border-white/5">
+  <nav class="xy-global-topbar fixed top-0 inset-x-0 z-40 border-b border-white/5">
     <div class="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
       <a href="/" class="flex items-center gap-3">
-        <img src="/assets/img/logo-64.png?v=20260627-logo" alt="惑梦（Homer）" class="w-10 h-10 drop-shadow-[0_0_12px_rgba(168,85,247,0.55)]">
+        <img src="/assets/img/logo-64.png?v=20260831-silvercat-v1" alt="惑梦（Homer）" class="w-10 h-10 drop-shadow-[0_0_12px_rgba(168,85,247,0.55)]">
         <div>
           <div class="font-bold text-lg leading-tight xy-gradient-text">惑梦（Homer）</div>
           <div class="text-[10px] text-slate-400 leading-tight" data-dashboard-text="dashboard.topbar_subtitle">用户中心</div>
@@ -47,7 +47,7 @@
     <template x-if="!loggedIn">
       <div class="max-w-md mx-auto">
         <div class="text-center mb-8">
-          <img src="/assets/img/logo-256.png?v=20260627-logo" alt="惑梦（Homer）" class="w-20 h-20 mx-auto mb-4 drop-shadow-[0_0_24px_rgba(168,85,247,0.65)]">
+          <img src="/assets/img/logo-256.png?v=20260831-silvercat-v1" alt="惑梦（Homer）" class="w-20 h-20 mx-auto mb-4 drop-shadow-[0_0_24px_rgba(168,85,247,0.65)]">
           <h1 class="text-2xl font-bold xy-gradient-text mb-2" x-text="authText('dashboard_title', '欢迎使用 惑梦（Homer）')">欢迎使用 惑梦（Homer）</h1>
           <p class="text-slate-400 text-sm" x-text="authText('dashboard_subtitle', '登录或注册以管理你的账号和积分')">登录或注册以管理你的账号和积分</p>
         </div>
@@ -208,16 +208,16 @@
               <div class="text-xs text-slate-400">种植收获 · 每日首收奖励</div>
             </div>
           </a>
-          <a href="/app/login.html?next=%2Fapp%2F" class="xy-glass xy-glass-hover p-5 flex items-center gap-4">
+          <a href="/download/ai-xingyue-latest.apk" download class="xy-glass xy-glass-hover p-5 flex items-center gap-4">
             <div class="w-10 h-10 rounded-xl bg-blue-500/20 flex items-center justify-center">
               <svg class="w-5 h-5 text-blue-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
             </div>
             <div>
-              <div class="font-semibold text-sm" x-text="dashboardText('download_title', '打开 Web App')">打开 Web App</div>
-              <div class="text-xs text-slate-400" x-text="dashboardText('download_subtitle', '客户端渠道维护中')">客户端渠道维护中</div>
+              <div class="font-semibold text-sm" x-text="dashboardText('download_title', '下载客户端')">下载客户端</div>
+              <div class="text-xs text-slate-400" x-text="dashboardText('download_subtitle', 'Android APK · 与网页端同账号')">Android APK · 与网页端同账号</div>
             </div>
           </a>
-          <template x-if="isAdmin">
+        <template x-if="isAdmin || user?.is_admin || user?.is_env_admin || user?.role === 'admin'">
             <a href="/admin.html" class="xy-glass xy-glass-hover p-5 flex items-center gap-4">
               <div class="w-10 h-10 rounded-xl bg-amber-500/20 flex items-center justify-center">
                 <svg class="w-5 h-5 text-amber-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>

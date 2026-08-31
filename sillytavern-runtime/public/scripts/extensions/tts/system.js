@@ -121,7 +121,7 @@ class SystemTtsProvider {
         }
 
         // iOS should only allows speech synthesis trigged by user interaction
-        if (isMobile()) {
+        if (isMobile() && 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window) {
             let hasEnabledVoice = false;
 
             document.addEventListener('click', () => {

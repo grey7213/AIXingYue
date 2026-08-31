@@ -9,6 +9,7 @@ const MAX_BGM_BYTES = 30 * 1024 * 1024;
 
 const MIME_BY_EXT = Object.freeze({
   mp3: 'audio/mpeg',
+  ogg: 'audio/ogg',
   png: 'image/png',
   jpg: 'image/jpeg',
   jpeg: 'image/jpeg',
@@ -105,11 +106,27 @@ export function buildCardPackMediaUpdate({ importedApp, uploadedAssets, sourceAs
   const sourceFor = (asset) => sources.find((source) => source.pack_index === asset.pack_index)
     || sources.find((source) => source.file?.name === asset.filename)
     || {};
+  const uploadedForSource = (source) => uploaded.find((asset) => asset.pack_index === source.pack_index)
+    || uploaded.find((asset) => asset.filename === source.file?.name);
+  const remappedAssetIds = new Map();
+  for (const source of sources) {
+    const previousId = String(source.source_asset_id || '').trim();
+    const uploadedAsset = uploadedForSource(source);
+    if (previousId && uploadedAsset?.id) remappedAssetIds.set(previousId, String(uploadedAsset.id));
+  }
+  const remapAssetId = (value) => remappedAssetIds.get(String(value || '').trim()) || String(value || '').trim();
+  const remapAssetMap = (value) => Object.fromEntries(
+    Object.entries(value && typeof value === 'object' && !Array.isArray(value) ? value : {})
+      .map(([key, assetId]) => [key, remapAssetId(assetId)])
+      .filter(([, assetId]) => !!assetId),
+  );
 
   const mediaAssets = uploaded.map((asset) => {
     const source = sourceFor(asset);
     const metadata = { ...(asset.metadata && typeof asset.metadata === 'object' ? asset.metadata : {}) };
     if (source.emotion) metadata.emotion = String(source.emotion).slice(0, 40);
+    if (source.speaker) metadata.speaker = String(source.speaker).slice(0, 80);
+    if (source.scene) metadata.scene = String(source.scene).slice(0, 80);
     return {
       id: String(asset.id || ''),
       kind: String(asset.kind || source.kind || ''),
@@ -131,10 +148,15 @@ export function buildCardPackMediaUpdate({ importedApp, uploadedAssets, sourceAs
 
   const experience = clone(importedApp.card_experience && typeof importedApp.card_experience === 'object'
     ? importedApp.card_experience : {});
-  experience.version = 1;
+  experience.version = 2;
+  experience.stage = {
+    ...(experience.stage && typeof experience.stage === 'object' ? experience.stage : {}),
+    background_asset_id: remapAssetId(experience.stage?.background_asset_id),
+    portrait_asset_id: remapAssetId(experience.stage?.portrait_asset_id),
+  };
   experience.bgm = {
     enabled: !!defaultBgm || !!experience.bgm?.enabled,
-    default_asset_id: defaultBgm?.id || experience.bgm?.default_asset_id || '',
+    default_asset_id: defaultBgm?.id || remapAssetId(experience.bgm?.default_asset_id),
     autoplay: 'after-interaction',
     volume: finiteNumber(experience.bgm?.volume, 0.45),
     loop: experience.bgm?.loop !== false,
@@ -143,19 +165,34 @@ export function buildCardPackMediaUpdate({ importedApp, uploadedAssets, sourceAs
   experience.ui_rules = Array.isArray(experience.ui_rules) ? experience.ui_rules : [];
   experience.sidebars = Array.isArray(experience.sidebars) ? experience.sidebars : [];
   experience.galgame = {
+    ...(experience.galgame && typeof experience.galgame === 'object' ? experience.galgame : {}),
     enabled: !!(defaultPortrait || defaultBackground) || !!experience.galgame?.enabled,
+    theme: experience.galgame?.theme === 'archive' ? 'archive' : 'standard',
     dialogue_position: experience.galgame?.dialogue_position === 'top' ? 'top' : 'bottom',
     portrait_layout: ['center', 'left', 'right', 'dual'].includes(experience.galgame?.portrait_layout)
       ? experience.galgame.portrait_layout : 'center',
-    default_portrait_id: defaultPortrait?.id || experience.galgame?.default_portrait_id || '',
-    default_background_id: defaultBackground?.id || experience.galgame?.default_background_id || '',
+    default_portrait_id: defaultPortrait?.id || remapAssetId(experience.galgame?.default_portrait_id),
+    default_background_id: defaultBackground?.id || remapAssetId(experience.galgame?.default_background_id),
     portrait_directive: experience.galgame?.portrait_directive || '\\[(?:立绘|portrait|图)[:：]\\s*([^\\]]+)\\]',
     background_directive: experience.galgame?.background_directive || '\\[(?:背景|bg|scene)[:：]\\s*([^\\]]+)\\]',
+    speaker_directive: experience.galgame?.speaker_directive || '\\[(?:说话者|speaker|角色)[:：]\\s*([^\\]]+)\\]',
+    affiliation_directive: experience.galgame?.affiliation_directive || '\\[(?:身份|affiliation|组织)[:：]\\s*([^\\]]+)\\]',
+    mood_directive: experience.galgame?.mood_directive || '\\[(?:气氛|mood|情绪)[:：]\\s*([^\\]]+)\\]',
+    scene_bgm_map: remapAssetMap(experience.galgame?.scene_bgm_map),
+    mood_bgm_map: remapAssetMap(experience.galgame?.mood_bgm_map),
+    show_stage_actions: experience.galgame?.show_stage_actions !== false,
     hide_bubble_avatar: experience.galgame?.hide_bubble_avatar !== false,
     typewriter: experience.galgame?.typewriter !== false,
   };
 
   const worldInfo = clone(Array.isArray(importedApp.world_info) ? importedApp.world_info : []);
+  for (const entry of worldInfo) {
+    if (!Array.isArray(entry?.media_bindings)) continue;
+    entry.media_bindings = entry.media_bindings.map((binding) => ({
+      ...binding,
+      asset_id: remapAssetId(binding?.asset_id),
+    }));
+  }
   const unmatched = [];
   const touchedEntries = new Map();
   for (const asset of uploaded) {
@@ -325,9 +362,12 @@ async function readDeclaredAssets(files, declared) {
     if (!kind) continue;
     output.push(await materializeAsset(found, {
       kind,
+      source_asset_id: descriptor.id || descriptor.asset_id,
       name: descriptor.name || descriptor.label,
       default: descriptor.default === true || descriptor.is_default === true,
       emotion: descriptor.emotion || descriptor.tag || descriptor.pose,
+      speaker: descriptor.speaker || descriptor.character,
+      scene: descriptor.scene || descriptor.location,
       bind_world: descriptor.bind_world || descriptor.world_entry || descriptor.target || descriptor.character || descriptor.location,
       scene_pattern: descriptor.scene_pattern || descriptor.pattern || descriptor.trigger,
     }));
@@ -369,8 +409,11 @@ async function materializeAsset(found, descriptor) {
     name: String(descriptor.name || stem(filename)).slice(0, 120),
     default: descriptor.default === true,
     emotion: String(descriptor.emotion || inferEmotion(found.path, kind)).slice(0, 40),
+    speaker: String(descriptor.speaker || '').slice(0, 80),
+    scene: String(descriptor.scene || '').slice(0, 80),
     bind_world: String(descriptor.bind_world || inferWorldHint(found.path, kind)).slice(0, 120),
     scene_pattern: String(descriptor.scene_pattern || '').slice(0, 500),
+    source_asset_id: String(descriptor.source_asset_id || '').slice(0, 120),
   };
 }
 

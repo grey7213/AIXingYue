@@ -5,6 +5,7 @@ import { getRequestHeaders } from '../../../../script.js';
 import { FILE_NAMES, SCHEMA } from './constants.js';
 import { t as __st_t_tag, translate } from '../../../i18n.js';
 import { applySidePromptMacros, collectTemplateRuntimeMacros, hasTemplateRuntimeMacros } from './sidePromptMacros.js';
+import { userFileExists } from './userFiles.js';
 
 const MODULE_NAME = 'STMemoryBooks-SidePromptsManager';
 const SIDE_PROMPTS_FILE = FILE_NAMES.SIDE_PROMPTS_FILE;
@@ -442,17 +443,20 @@ export async function loadSidePrompts() {
     let data = null;
 
     try {
-        const res = await fetch(`/user/files/${SIDE_PROMPTS_FILE}`, {
-            method: 'GET',
-            credentials: 'include',
-            headers: getRequestHeaders(),
-        });
-
-        if (!res.ok) {
+        const exists = await userFileExists(SIDE_PROMPTS_FILE);
+        if (!exists) {
             // Missing -> create base
             data = createBaseDoc();
             await saveDoc(data);
         } else {
+            const res = await fetch(`/user/files/${SIDE_PROMPTS_FILE}`, {
+                method: 'GET',
+                credentials: 'include',
+                headers: getRequestHeaders(),
+            });
+            if (!res.ok) {
+                throw new Error(`Failed to load side prompts: ${res.status} ${res.statusText}`);
+            }
             const text = await res.text();
             const parsed = JSON.parse(text);
 

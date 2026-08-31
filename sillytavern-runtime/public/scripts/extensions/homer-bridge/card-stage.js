@@ -4,6 +4,7 @@ import { getContext } from '../../st-context.js';
 const COMPONENT_TYPES = new Set(['map', 'inventory', 'relationship', 'skill_tree', 'status']);
 const BODY_LAYOUT_CLASSES = [
     'homer-card-stage-active',
+    'homer-archive-stage-active',
     'homer-stage-layout-standard',
     'homer-stage-layout-landscape',
     'homer-stage-layout-split',
@@ -20,6 +21,8 @@ const BODY_LAYOUT_CLASSES = [
 ];
 const MAX_COMPONENT_BYTES = 100_000;
 const MAX_ITEMS = 200;
+const PRESENTATION_MODE_VISUAL = 'visual_novel';
+const PRESENTATION_MODE_TAVERN = 'tavern';
 let installed = false;
 let legacyRuntimePromise = null;
 let legacyRuntimeModule = null;
@@ -92,6 +95,29 @@ function clearStage() {
     }
     backdrop?.remove();
     document.getElementById('homerCardExperienceRoot')?.remove();
+}
+
+function requestHostOrientation(value = 'default') {
+    const orientation = value === 'landscape' ? 'landscape' : 'default';
+    document.documentElement.dataset.homerOrientation = orientation;
+    try {
+        const nativeBridge = window.HomerNative || window.parent?.HomerNative || window.top?.HomerNative;
+        if (typeof nativeBridge?.requestOrientation === 'function') {
+            nativeBridge.requestOrientation(orientation);
+        }
+    } catch {
+        // Browser/PWA hosts intentionally keep their current orientation.
+    }
+}
+
+function closeShellDrawersForStage() {
+    for (const drawer of document.querySelectorAll('#homer-left-drawer, #homer-right-drawer')) {
+        drawer.classList.remove('is-open');
+        drawer.setAttribute('aria-hidden', 'true');
+    }
+    const backdrop = document.querySelector('#homer-drawer-backdrop');
+    if (backdrop) backdrop.hidden = true;
+    document.body.classList.remove('homer-drawer-open', 'homer-left-drawer-open');
 }
 
 function applyStage(stage = {}) {
@@ -192,12 +218,78 @@ function shouldMountLegacyRuntime(config) {
         || config?.bgm?.enabled
         || config?.galgame?.enabled
         || (Array.isArray(config?.ui_rules) && config.ui_rules.length)
-        || (Array.isArray(config?.sidebars) && config.sidebars.length),
+        || sidebarCapability(config),
     );
 }
 
+function visualPresentationAvailable(config = experience()) {
+    return Boolean(
+        shouldMountLegacyRuntime(config)
+        && (config?.stage?.enabled || config?.galgame?.enabled),
+    );
+}
+
+// Card sidebars are opt-in.  Keep the capability decision in the card
+// configuration so ordinary cards do not receive an unrelated rail or empty
+// trigger container.
+function sidebarCapability(config = experience()) {
+    return Array.isArray(config?.sidebars)
+        && config.sidebars.some(item => item && typeof item === 'object' && item.enabled !== false);
+}
+
+function publishSidebarCapability(config = experience()) {
+    document.dispatchEvent(new CustomEvent('homer-card-sidebar-capability', {
+        detail: { enabled: sidebarCapability(config) },
+    }));
+}
+
+function presentationModeStorageKey() {
+    const context = getContext();
+    const character = String(context?.characterId ?? 'none');
+    const conversation = String(context?.chatId ?? context?.chatMetadata?.chat_id ?? 'default');
+    return `homer:presentation-mode:${character}:${conversation}`;
+}
+
+function presentationMode(config = experience()) {
+    if (!visualPresentationAvailable(config)) return PRESENTATION_MODE_TAVERN;
+    try {
+        return sessionStorage.getItem(presentationModeStorageKey()) === PRESENTATION_MODE_TAVERN
+            ? PRESENTATION_MODE_TAVERN
+            : PRESENTATION_MODE_VISUAL;
+    } catch {
+        return PRESENTATION_MODE_VISUAL;
+    }
+}
+
+function publishPresentationMode(config = experience()) {
+    document.dispatchEvent(new CustomEvent('homer-presentation-mode-state', {
+        detail: {
+            mode: presentationMode(config),
+            visualAvailable: visualPresentationAvailable(config),
+        },
+    }));
+}
+
+async function setPresentationMode(mode) {
+    const config = experience();
+    const next = mode === PRESENTATION_MODE_TAVERN
+        ? PRESENTATION_MODE_TAVERN
+        : PRESENTATION_MODE_VISUAL;
+    if (next === PRESENTATION_MODE_VISUAL && !visualPresentationAvailable(config)) {
+        publishPresentationMode(config);
+        return false;
+    }
+    try {
+        sessionStorage.setItem(presentationModeStorageKey(), next);
+    } catch {
+        // Session-only preference gracefully falls back to the card default.
+    }
+    await refreshStage();
+    return true;
+}
+
 async function legacyRuntime() {
-    legacyRuntimePromise ||= import('/app/assets/js/card-experience-runtime.mjs?v=20260801-stage3').catch(error => {
+    legacyRuntimePromise ||= import('/app/assets/js/card-experience-runtime.mjs?v=20260821-chatarchive-dialogue-only-v5').catch(error => {
         console.warn('homer-card-stage: legacy visual runtime unavailable', error?.message || error);
         return null;
     });
@@ -215,6 +307,39 @@ function composerInsert(event) {
         : `${textarea.value || ''}${textarea.value ? '\n' : ''}${value}`;
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
     textarea.focus();
+}
+
+function composerSubmit(event) {
+    const value = text(event?.detail?.text, 10_000).trim();
+    const textarea = document.querySelector('#send_textarea');
+    const sendButton = document.querySelector('#send_but, #send_form button[type="submit"]');
+    if (!value || !textarea || !sendButton) return;
+    textarea.value = value;
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    if (sendButton.matches('[disabled], .disabled')) return;
+    sendButton.click();
+}
+
+async function generateFromStage(event) {
+    const type = String(event?.detail?.type || 'continue');
+    if (type !== 'continue') return;
+    const context = getContext();
+    if (typeof context?.generate !== 'function') return;
+    try {
+        await context.generate('continue');
+    } catch (error) {
+        console.warn('homer-card-stage: continue failed', error?.message || error);
+    }
+}
+
+function exitArchiveStage() {
+    if (window.parent === window) return;
+    window.parent.postMessage({
+        channel: 'homer:dialogue-host:v1',
+        version: 1,
+        type: 'navigate',
+        target: '/app/explore.html',
+    }, window.location.origin);
 }
 
 function structuredSettings() {
@@ -548,12 +673,13 @@ async function renderMessage(messageId, { consumeExperience = true } = {}) {
         hideStructuredCode(textRoot, block);
         textRoot.append(renderComponent(block));
     }
-    if (!consumeExperience || !canRenderStructured || !shouldMountLegacyRuntime(experience())) return;
+    if (!canRenderStructured || !shouldMountLegacyRuntime(experience())) return;
     const latestAssistantIndex = context.chat.findLastIndex(item => !item?.is_user && !item?.is_system);
-    if (id !== latestAssistantIndex) return;
     const runtime = await legacyRuntime();
     if (!runtime) return;
-    runtime.consumeCardExperienceText?.(message?.mes || '', { messageId: id });
+    if (consumeExperience && id === latestAssistantIndex && presentationMode(experience()) === PRESENTATION_MODE_VISUAL) {
+        runtime.consumeCardExperienceText?.(message?.mes || '', { messageId: id });
+    }
     if (typeof runtime.cleanCardExperienceText === 'function') {
         const walker = document.createTreeWalker(textRoot, NodeFilter.SHOW_TEXT);
         const nodes = [];
@@ -566,12 +692,12 @@ async function renderMessage(messageId, { consumeExperience = true } = {}) {
     }
 }
 
-async function renderAllMessages() {
+async function renderAllMessages({ consumeExperience = true } = {}) {
     const context = getContext();
     for (let index = 0; index < context.chat.length; index += 1) {
         await renderMessage(index, { consumeExperience: false });
     }
-    if (!shouldMountLegacyRuntime(experience())) return;
+    if (!consumeExperience || presentationMode(experience()) !== PRESENTATION_MODE_VISUAL || !shouldMountLegacyRuntime(experience())) return;
     const latestAssistantIndex = context.chat.findLastIndex(message => !message?.is_user && !message?.is_system);
     if (latestAssistantIndex < 0) return;
     const runtime = await legacyRuntime();
@@ -586,7 +712,23 @@ async function refreshStage() {
     clearStage();
     const character = currentCharacter();
     const config = experience(character);
-    if (epoch !== refreshEpoch || !character) return;
+    if (epoch !== refreshEpoch) return;
+    if (!character) {
+        publishSidebarCapability({});
+        return;
+    }
+    publishSidebarCapability(config);
+    if (presentationMode(config) === PRESENTATION_MODE_TAVERN) {
+        requestHostOrientation('default');
+        await renderAllMessages({ consumeExperience: false });
+        publishPresentationMode(config);
+        return;
+    }
+    requestHostOrientation(config?.stage?.enabled ? config.stage.orientation : 'default');
+    if (config?.galgame?.enabled && config.galgame.theme === 'archive') {
+        closeShellDrawersForStage();
+        document.body.classList.add('homer-archive-stage-active');
+    }
     applyStage(config.stage);
     if (shouldMountLegacyRuntime(config)) {
         const runtime = await legacyRuntime();
@@ -597,6 +739,7 @@ async function refreshStage() {
         runtime?.mountCardExperience?.(cardForLegacyRuntime(character), host);
     }
     await renderAllMessages();
+    publishPresentationMode(config);
 }
 
 function scheduleRefresh(messageId = null) {
@@ -610,6 +753,13 @@ export function installCardStageRuntime() {
     if (installed) return;
     installed = true;
     document.addEventListener('card-experience-insert-text', composerInsert);
+    document.addEventListener('card-experience-submit-text', composerSubmit);
+    document.addEventListener('card-experience-generate', generateFromStage);
+    document.addEventListener('card-experience-exit', exitArchiveStage);
+    document.addEventListener('homer-presentation-mode-request', event => {
+        void setPresentationMode(event?.detail?.mode);
+    });
+    document.addEventListener('homer-presentation-mode-query', () => publishPresentationMode());
     for (const event of [event_types.CHAT_CHANGED, event_types.CHAT_LOADED]) {
         eventSource.on(event, () => scheduleRefresh());
     }
@@ -622,8 +772,10 @@ export function installCardStageRuntime() {
     ]) eventSource.on(event, messageId => scheduleRefresh(messageId));
     eventSource.on(event_types.MESSAGE_DELETED, () => scheduleRefresh());
     window.__homerCardStageRuntime = Object.freeze({
-        version: 3,
+        version: 4,
         refresh: () => refreshStage(),
+        presentationMode: () => presentationMode(),
+        setPresentationMode: mode => setPresentationMode(mode),
         componentTypes: [...COMPONENT_TYPES],
         protocol: 'homer-ui-json-v1',
     });

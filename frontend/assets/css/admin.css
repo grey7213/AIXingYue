@@ -15,6 +15,7 @@
   --admin-shadow-float: 0 14px 38px rgba(21, 24, 35, .12);
   background: var(--admin-canvas) !important;
   color: var(--admin-text) !important;
+  padding-bottom: env(safe-area-inset-bottom);
 }
 
 .xy-admin .xy-stars-bg { display: none; }
@@ -53,12 +54,44 @@
 .xy-admin-nav-item.is-active svg { color: var(--admin-primary); }
 
 .xy-admin-mobilebar {
-  background: rgba(255, 255, 255, .94) !important;
-  border-bottom: 1px solid var(--admin-border) !important;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, .05);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  padding-top: env(safe-area-inset-top);
+  background: linear-gradient(180deg, rgba(255, 255, 255, .84) 0%, rgba(255, 255, 255, .58) 60%, rgba(255, 255, 255, .14) 100%) !important;
+  border-bottom: 1px solid rgba(226, 220, 216, .72) !important;
+  box-shadow: 0 10px 26px rgba(63, 46, 43, .10);
+  backdrop-filter: blur(16px) saturate(125%);
+  -webkit-backdrop-filter: blur(16px) saturate(125%);
 }
+
+.xy-admin-loading {
+  position: fixed;
+  z-index: 80;
+  top: max(12px, calc(env(safe-area-inset-top) + 8px));
+  left: 50%;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 7px 12px;
+  border: 1px solid var(--admin-border);
+  border-radius: 999px;
+  color: var(--admin-text-soft);
+  background: rgba(255, 255, 255, .96);
+  box-shadow: var(--admin-shadow-float);
+  transform: translateX(-50%);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.xy-admin-loading .xy-loading {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #ffd2de;
+  border-top-color: var(--admin-primary);
+  border-radius: 50%;
+  animation: xy-admin-spin .7s linear infinite;
+}
+
+@keyframes xy-admin-spin { to { transform: rotate(360deg); } }
 
 .xy-admin-main { min-width: 0; max-width: 1500px; margin: 0 auto; }
 .xy-admin-main > div { animation: xy-admin-enter .18s ease-out; }
@@ -93,6 +126,15 @@
   font-weight: 600;
   box-shadow: none !important;
   transition: background .18s ease, border-color .18s ease, color .18s ease, box-shadow .18s ease !important;
+}
+.xy-admin td button,
+.xy-admin .xy-table td a {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 8px;
+  border-radius: 6px;
 }
 .xy-admin .xy-btn-primary {
   background: var(--admin-primary) !important;
@@ -224,16 +266,89 @@
 }
 
 @media (max-width: 767px) {
-  .xy-admin-main { width: 100%; max-width: 100%; }
+  .xy-admin-mobilebar > div {
+    min-height: 60px;
+    padding-top: 10px !important;
+    padding-bottom: 10px !important;
+  }
+  .xy-admin-mobilebar select {
+    width: min(58vw, 250px);
+    min-height: 40px;
+  }
+  .xy-admin-main {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: hidden !important;
+    padding-top: calc(76px + env(safe-area-inset-top)) !important;
+    padding-right: max(12px, env(safe-area-inset-right)) !important;
+    padding-bottom: calc(24px + env(safe-area-inset-bottom)) !important;
+    padding-left: max(12px, env(safe-area-inset-left)) !important;
+  }
   .xy-admin .xy-glass { border-radius: 10px !important; }
-  .xy-admin .xy-table { min-width: 720px; }
-  .xy-admin .xy-table th,
-  .xy-admin .xy-table td { padding: 10px 11px; }
+  .xy-admin .xy-glass.p-6 { padding: 16px !important; }
+  .xy-admin .xy-glass.p-5 { padding: 14px !important; }
+  .xy-admin .xy-table,
+  .xy-admin .xy-table tbody,
+  .xy-admin .xy-table tr,
+  .xy-admin .xy-table td {
+    display: block;
+    width: 100%;
+    min-width: 0 !important;
+  }
+  .xy-admin .xy-table thead { display: none; }
+  .xy-admin .xy-table tbody {
+    padding: 10px;
+    background: var(--admin-panel-muted);
+  }
+  .xy-admin .xy-table tbody tr {
+    margin-bottom: 10px;
+    padding: 4px 12px;
+    border: 1px solid var(--admin-border);
+    border-radius: 10px;
+    background: var(--admin-panel);
+    box-shadow: 0 1px 5px rgba(0, 0, 0, .035);
+  }
+  .xy-admin .xy-table tbody tr:last-child { margin-bottom: 0; }
+  .xy-admin .xy-table td {
+    box-sizing: border-box;
+    display: grid;
+    grid-template-columns: minmax(82px, 34%) minmax(0, 1fr);
+    align-items: start;
+    gap: 10px;
+    padding: 10px 0 !important;
+    overflow-wrap: anywhere;
+  }
+  .xy-admin .xy-table td::before {
+    content: attr(data-label);
+    color: var(--admin-text-mute);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.45;
+  }
+  .xy-admin .xy-table td:empty { display: none; }
+  .xy-admin .xy-table td[data-label="操作"] { display: block; }
+  .xy-admin .xy-table td[data-label="操作"]::before { display: block; margin-bottom: 7px; }
+  .xy-admin .xy-table td[data-label="操作"] > div { display: flex; gap: 6px; flex-wrap: wrap; }
+  .xy-admin .xy-table td[data-label="操作"] button { flex: 1 1 120px; }
+  .xy-admin .overflow-x-auto { overflow-x: visible !important; }
+  .xy-admin .grid.grid-cols-2 { grid-template-columns: minmax(0, 1fr) !important; }
+  .xy-admin .xy-admin-model-card { padding: 12px !important; }
+  .xy-admin textarea.xy-input { max-width: 100%; resize: vertical; }
+  .xy-admin pre,
+  .xy-admin code { white-space: pre-wrap; overflow-wrap: anywhere; }
   .xy-admin .fixed.inset-0 { align-items: flex-end !important; padding: 0 !important; }
   .xy-admin .fixed.inset-0 > .xy-glass {
     width: 100% !important;
     max-height: 92dvh !important;
     border-radius: 16px 16px 0 0 !important;
+  }
+  .xy-admin .flex.items-center.justify-between.mb-6 {
+    align-items: stretch !important;
+  }
+  .xy-admin input.w-56 {
+    width: 100% !important;
+    min-width: 0;
   }
 }
 

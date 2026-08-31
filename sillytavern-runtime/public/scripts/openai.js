@@ -31,6 +31,7 @@ import {
     this_chid,
 } from '../script.js';
 import { getGroupNames, selected_group } from './group-chats.js';
+import { AbortReason } from './util/AbortReason.js';
 
 import {
     chatCompletionDefaultPrompts,
@@ -4456,10 +4457,18 @@ async function getStatusOpen() {
             setOnlineStatus(t`Status check bypassed`);
         }
     } catch (error) {
-        console.error(error);
+        // Homer re-applies the custom connection while the embedded runtime is
+        // booting and after a model switch. That intentionally cancels an
+        // in-flight status probe; it is not an API failure and must not be
+        // reported as a browser console error.
+        if (error instanceof AbortReason) {
+            console.debug('Status check aborted.', error.reason);
+        } else {
+            console.error(error);
 
-        if (!canBypass) {
-            setOnlineStatus('no_connection');
+            if (!canBypass) {
+                setOnlineStatus('no_connection');
+            }
         }
     }
 

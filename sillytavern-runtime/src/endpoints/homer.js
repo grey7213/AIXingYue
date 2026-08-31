@@ -99,6 +99,25 @@ router.get('/conversations', (request, response) => {
     return forwardToHomer(request, response, '/console/api/web/conversations');
 });
 
+router.post('/conversations/start', (request, response) => {
+    return forwardToHomer(request, response, '/console/api/web/conversations/start');
+});
+
+router.post('/conversations/import', (request, response) => {
+    return forwardToHomer(request, response, '/console/api/web/conversations/import');
+});
+
+for (const action of ['rename', 'pin', 'copy', 'delete', 'export']) {
+    router.post(`/conversations/:conversationId/${action}`, (request, response) => {
+        const conversationId = encodeURIComponent(String(request.params.conversationId || '').trim());
+        return forwardToHomer(
+            request,
+            response,
+            `/console/api/web/conversations/${conversationId}/${action}`,
+        );
+    });
+}
+
 router.get('/conversations/:conversationId/runtime-config', (request, response) => {
     const conversationId = encodeURIComponent(String(request.params.conversationId || '').trim());
     return forwardToHomer(

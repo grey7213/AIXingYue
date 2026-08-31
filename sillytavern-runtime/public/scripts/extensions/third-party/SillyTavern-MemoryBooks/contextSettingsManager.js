@@ -10,6 +10,7 @@ import {
     getLorebookEntryDisplayName,
     getLorebookEntryByUid,
 } from './utils.js';
+import { userFileExists } from './userFiles.js';
 
 const MODULE_NAME = 'STMemoryBooks-ContextSettingsManager';
 const CONTEXT_SETTINGS_FILE = FILE_NAMES.CONTEXT_SETTINGS_FILE;
@@ -147,18 +148,22 @@ export async function loadContextSettings(options = {}) {
 
     let data = null;
     try {
-        const res = await fetch(`/user/files/${CONTEXT_SETTINGS_FILE}`, {
-            method: 'GET',
-            credentials: 'include',
-            headers: getRequestHeaders(),
-        });
-        if (!res.ok) {
+        const exists = await userFileExists(CONTEXT_SETTINGS_FILE);
+        if (!exists) {
             if (options.readOnly) {
-                throw new Error(`Context settings file could not be loaded: ${res.status} ${res.statusText}`);
+                throw new Error('Context settings file does not exist.');
             }
             data = createBaseDoc();
             await saveDoc(data);
         } else {
+            const res = await fetch(`/user/files/${CONTEXT_SETTINGS_FILE}`, {
+                method: 'GET',
+                credentials: 'include',
+                headers: getRequestHeaders(),
+            });
+            if (!res.ok) {
+                throw new Error(`Context settings file could not be loaded: ${res.status} ${res.statusText}`);
+            }
             const text = await res.text();
             const parsed = normalizeDoc(JSON.parse(text));
             if (!validateDoc(parsed)) {

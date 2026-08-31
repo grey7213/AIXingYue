@@ -18,6 +18,8 @@ let persistSettings = async () => false;
 let logDialogueEvent = async () => {};
 let panelOpen = false;
 let root = null;
+let cardCapabilityKnown = false;
+let cardCapabilityEnabled = false;
 
 function normalizedSettings() {
     const source = extension_settings[SETTINGS_KEY];
@@ -55,6 +57,7 @@ function render() {
     const selected = new Set(settings.selected);
     root.classList.toggle('is-open', panelOpen);
     root.classList.toggle('is-enabled', settings.enabled);
+    root.classList.toggle('is-card-disabled', !cardCapabilityKnown || !cardCapabilityEnabled);
     const panel = root.querySelector('[data-keyword-panel]');
     if (panel) panel.hidden = !panelOpen;
     const openButton = root.querySelector('[data-keyword-open]');
@@ -216,6 +219,14 @@ export function installKeywordInjector(options = {}) {
     buildUi();
     if (!root) window.addEventListener('DOMContentLoaded', buildUi, { once: true });
     bindComposer();
+    // Card-stage publishes this after the active card is known.  Hide the
+    // generic rail until then, and keep it hidden for cards without opt-in
+    // sidebar declarations.
+    document.addEventListener('homer-card-sidebar-capability', event => {
+        cardCapabilityKnown = true;
+        cardCapabilityEnabled = event?.detail?.enabled === true;
+        if (!cardCapabilityEnabled) panelOpen = false;
+        render();
+    });
     eventSource.on(event_types.SETTINGS_LOADED, render);
 }
-

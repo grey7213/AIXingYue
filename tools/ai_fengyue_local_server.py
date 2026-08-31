@@ -178,6 +178,18 @@ LLM_DISCOVERY_MAX_MODELS = env_int("LLM_DISCOVERY_MAX_MODELS", 100, 1, 500)
 LLM_PROBE_MAX_MODELS = env_int("LLM_PROBE_MAX_MODELS", 12, 1, 50)
 LLM_PROBE_CONCURRENCY = env_int("LLM_PROBE_CONCURRENCY", 6, 1, 12)
 LLM_PROBE_TIMEOUT_SECONDS = env_int("LLM_PROBE_TIMEOUT_SECONDS", 45, 5, 120)
+SILLYTAVERN_BRIDGE_MAX_SYSTEM_CHARS = env_int(
+    "SILLYTAVERN_BRIDGE_MAX_SYSTEM_CHARS",
+    10_000,
+    1_000,
+    200_000,
+)
+SILLYTAVERN_BRIDGE_MAX_INPUT_CHARS = env_int(
+    "SILLYTAVERN_BRIDGE_MAX_INPUT_CHARS",
+    14_000,
+    2_000,
+    400_000,
+)
 AIFADIAN_URL = os.environ.get("AIFADIAN_URL", "").strip()
 ZPAY_ENABLED = env_bool("ZPAY_ENABLED", False)
 ZPAY_PID = os.environ.get("ZPAY_PID", "").strip()
@@ -491,6 +503,134 @@ def model_selection_id(preset_id: str, model: str) -> str:
     return f"{preset_id}::{slug or hashlib.sha1(str(model).encode('utf-8')).hexdigest()[:10]}"
 
 
+def normalize_model_pricing(value: object = None) -> dict:
+    raw = value if isinstance(value, dict) else {}
+    mode = str(raw.get("mode") or raw.get("pricing_mode") or "per_request").strip().lower()
+    if mode not in {"per_request", "per_token"}:
+        mode = "per_request"
+    default_side = CHAT_MESSAGE_COST / 2
+    input_price = _bounded_float(
+        raw.get("input_price", raw.get("input_points", default_side)),
+        default_side,
+        0.0,
+        1_000_000_000.0,
+    )
+    output_price = _bounded_float(
+        raw.get("output_price", raw.get("output_points", default_side)),
+        default_side,
+        0.0,
+        1_000_000_000.0,
+    )
+    return {
+        "mode": mode,
+        "input_price": input_price,
+        "output_price": output_price,
+    }
+
+
+def normalize_model_configs(value: object, models: list[str]) -> list[dict]:
+    raw_items = value if isinstance(value, list) else []
+    raw_by_model = {
+        str(item.get("model") or "").strip(): item
+        for item in raw_items
+        if isinstance(item, dict) and str(item.get("model") or "").strip()
+    }
+    configs: list[dict] = []
+    for model in models:
+        raw = raw_by_model.get(model, {})
+        pricing = normalize_model_pricing(raw.get("pricing") if isinstance(raw.get("pricing"), dict) else raw)
+        configs.append({
+            "model": model,
+            "display_name": str(raw.get("display_name") or raw.get("name") or model).strip()[:160] or model,
+            "preset_id": str(raw.get("preset_id") or raw.get("prompt_preset_id") or "").strip()[:160],
+            "pricing": pricing,
+        })
+    return configs
+
+
+def model_config_for_preset(preset: dict | None, model: str) -> dict:
+    source = preset if isinstance(preset, dict) else {}
+    models = split_model_names(source.get("models") or source.get("model")) or [str(model or source.get("model") or "")]
+    configs = normalize_model_configs(source.get("model_configs"), models)
+    selected = next((item for item in configs if item.get("model") == str(model or "")), None)
+    return selected or (configs[0] if configs else {
+        "model": str(model or ""),
+        "display_name": str(model or ""),
+        "preset_id": "",
+        "pricing": normalize_model_pricing(),
+    })
+
+
+def model_price_label(pricing: object) -> str:
+    clean = normalize_model_pricing(pricing)
+    input_price = clean["input_price"]
+    output_price = clean["output_price"]
+    if clean["mode"] == "per_token":
+        return f"输入 {input_price:g} / 输出 {output_price:g} 惑梦币/1M Token"
+    total = input_price + output_price
+    return f"{total:g} 惑梦币/轮（输入 {input_price:g} + 输出 {output_price:g}）"
+
+
+def estimate_text_tokens(value: object) -> int:
+    text = str(value or "")
+    if not text:
+        return 0
+    cjk = sum(1 for char in text if "\u3400" <= char <= "\u9fff")
+    non_cjk = max(0, len(text) - cjk)
+    return max(1, cjk + math.ceil(non_cjk / 4))
+
+
+def estimate_payload_input_tokens(payload: object) -> int:
+    if not isinstance(payload, dict):
+        return 0
+    total = estimate_text_tokens(payload.get("system"))
+    messages = payload.get("messages") if isinstance(payload.get("messages"), list) else []
+    for item in messages:
+        if not isinstance(item, dict):
+            continue
+        total += 4 + estimate_text_tokens(item.get("role")) + estimate_text_tokens(item.get("content"))
+    return max(1, total)
+
+
+def extract_token_usage(payload: object) -> dict:
+    if not isinstance(payload, dict):
+        return {"input_tokens": 0, "output_tokens": 0}
+    usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+    input_tokens = _bounded_int(
+        usage.get("input_tokens", usage.get("prompt_tokens", 0)),
+        0,
+        0,
+        100_000_000,
+    )
+    output_tokens = _bounded_int(
+        usage.get("output_tokens", usage.get("completion_tokens", 0)),
+        0,
+        0,
+        100_000_000,
+    )
+    return {"input_tokens": input_tokens, "output_tokens": output_tokens}
+
+
+def merge_token_usage(current: object, incoming: object) -> dict:
+    left = extract_token_usage({"usage": current if isinstance(current, dict) else {}})
+    right = extract_token_usage({"usage": incoming if isinstance(incoming, dict) else {}})
+    return {
+        "input_tokens": max(left["input_tokens"], right["input_tokens"]),
+        "output_tokens": max(left["output_tokens"], right["output_tokens"]),
+    }
+
+
+def model_charge_points(pricing: object, input_tokens: int = 0, output_tokens: int = 0) -> int:
+    clean = normalize_model_pricing(pricing)
+    if clean["mode"] == "per_request":
+        return max(1, math.ceil(clean["input_price"]) + math.ceil(clean["output_price"]))
+    raw = (
+        max(0, int(input_tokens)) * clean["input_price"]
+        + max(0, int(output_tokens)) * clean["output_price"]
+    ) / 1_000_000
+    return max(1, math.ceil(raw))
+
+
 def normalize_llm_base_url(value: object) -> str:
     raw = str(value or "").strip()
     if not raw:
@@ -770,7 +910,15 @@ def content_cache_key(method: str, path: str, query: str | None) -> str:
 
 _IMG_PROXY_HOSTS = ("catai.wiki", "static.catai.wiki", "image.catai.wiki",
                     "user.catai.wiki", "img.catai.wiki")
-DEFAULT_AVATAR_URL = "https://patcher.villainy.top/media-cache/profile/default-avatar.png?v=20260627-logo"
+DEFAULT_AVATAR_URL = "/media-cache/profile/default-avatar.png?v=20260831-silvercat-v1"
+# 历史上这个默认值曾以绝对 URL 落库过，且带的是旧的 ?v=20260627-logo。
+# 交接分支只写了新版本号那一条，remap 会漏掉真正存在过的旧值。
+LEGACY_DEFAULT_AVATAR_URLS = (
+    "https://patcher.villainy.top/media-cache/profile/default-avatar.png?v=20260831-silvercat-v1",
+    "https://patcher.villainy.top/media-cache/profile/default-avatar.png?v=20260627-logo",
+    "/media-cache/profile/default-avatar.png?v=20260627-logo",
+)
+LEGACY_DEFAULT_AVATAR_URL = LEGACY_DEFAULT_AVATAR_URLS[0]
 DISPLAY_ID_RE = re.compile(r"^[A-Za-z0-9_-]{3,32}$")
 
 
@@ -1269,9 +1417,9 @@ def site_settings_defaults() -> dict:
                 {"title": "持续更新", "description": "活跃维护，定期推送新角色、新功能、新模型。社区反馈直达开发者。"},
             ],
             "download_facts": [
-                {"label": "版本", "value": "v1.0.0"},
-                {"label": "系统要求", "value": "Android 5.0+"},
-                {"label": "架构", "value": "ARM / ARM64"},
+                {"label": "版本", "value": "v1.14.0"},
+                {"label": "系统要求", "value": "Android 8.0+"},
+                {"label": "架构", "value": "全机型通用"},
                 {"label": "语言", "value": "简体中文"},
             ],
             "download_note": "首次安装可能需要在系统设置中允许\"未知来源\"应用。如下载未自动开始，请在浏览器中使用复制链接到下载工具。",
@@ -2861,6 +3009,7 @@ class Store:
                     last_message text,
                     galgame_enabled integer not null default 0,
                     global_preset_enabled integer not null default 1,
+                    pinned integer not null default 0,
                     created_at integer not null,
                     updated_at integer not null
                 );
@@ -3236,6 +3385,11 @@ class Store:
                     created_at integer not null,
                     updated_at integer not null
                 );
+                create table if not exists farm_balance_migrations (
+                    user_id text primary key,
+                    legacy_coins integer not null default 0,
+                    migrated_at integer not null
+                );
                 create table if not exists farm_plots (
                     user_id text not null,
                     plot_no integer not null check(plot_no between 1 and 8),
@@ -3443,6 +3597,10 @@ class Store:
                 self.conn.execute(
                     "alter table conversations add column global_preset_enabled integer not null default 1"
                 )
+            if "pinned" not in columns:
+                self.conn.execute(
+                    "alter table conversations add column pinned integer not null default 0"
+                )
             self.conn.commit()
 
     def ensure_group_member_columns(self) -> None:
@@ -3570,6 +3728,16 @@ class Store:
                 "update users set points=coalesce(free_points,0)+coalesce(paid_points,0)+coalesce(reward_points,0)"
             )
             self.conn.commit()
+
+    def ensure_farm_balance_migration(self) -> None:
+        """保留为 no-op：农场币仍是独立货币，不折算进账号积分。
+
+        交接分支曾把农场币并入 free_points 并让种植/收获直接扣加账号积分，
+        但那样农场变成积分永动机（8 块地每 3 小时净产约 320 分，而单次对话
+        只花 50 分），且线上前端仍按农场币渲染。本函数不再从 init_schema
+        调用，留空是为了让任何遗留调用点不至于 AttributeError。
+        """
+        return
 
     def ensure_user_admin_column(self) -> None:
         with self.lock:
@@ -3889,35 +4057,66 @@ class Store:
             "total_points": points,
         }
 
-    def add_credit_points(self, user_id: str, amount: int, point_type: str = "free") -> sqlite3.Row:
+    def _add_credit_points_locked(self, user_id: str, amount: int, point_type: str = "free") -> dict:
+        """Adjust account credits inside an existing transaction."""
         value = int(amount)
         point_type = (point_type or "free").strip().lower()
         if point_type not in ("free", "paid", "reward"):
             point_type = "free"
-        column = {
-            "free": "free_points",
-            "paid": "paid_points",
-            "reward": "reward_points",
-        }[point_type]
+        column = {"free": "free_points", "paid": "paid_points", "reward": "reward_points"}[point_type]
+        ts = now_ms()
+        self.conn.execute(
+            f"update users set {column}=max(0, coalesce({column},0)+?), updated_at=? where id=?",
+            (value, ts, user_id),
+        )
+        self.conn.execute(
+            """
+            update users
+            set points=max(0, coalesce(free_points,0)+coalesce(paid_points,0)+coalesce(reward_points,0)),
+                updated_at=?
+            where id=?
+            """,
+            (ts, user_id),
+        )
+        user = self.get_user_by_id(user_id)
+        if not user:
+            raise ValueError("用户不存在")
+        return self.credit_balance(user)
+
+    def _spend_credit_points_locked(self, user_id: str, amount: int) -> dict:
+        """Spend credits inside an existing transaction without committing it."""
+        needed = max(1, int(amount or 0))
+        user = self.get_user_by_id(user_id)
+        if not user:
+            raise ValueError("用户不存在")
+        balance = self.credit_balance(user)
+        if int(balance.get("points") or 0) < needed:
+            raise ValueError(f"积分不足，需要 {needed} 积分")
+        free = int(balance.get("free_points") or 0)
+        reward = int(balance.get("reward_points") or 0)
+        paid = int(balance.get("paid_points") or 0)
+        remaining = needed
+        from_free = min(free, remaining); free -= from_free; remaining -= from_free
+        from_reward = min(reward, remaining); reward -= from_reward; remaining -= from_reward
+        from_paid = min(paid, remaining); paid -= from_paid; remaining -= from_paid
+        if remaining > 0:
+            raise ValueError(f"积分不足，需要 {needed} 积分")
+        total = max(0, free + reward + paid)
+        ts = now_ms()
+        self.conn.execute(
+            "update users set free_points=?, reward_points=?, paid_points=?, points=?, updated_at=? where id=?",
+            (free, reward, paid, total, ts, user_id),
+        )
+        return {
+            "points_cost": needed,
+            "points": total,
+            "balance": self.credit_balance(self.get_user_by_id(user_id) or user),
+            "deducted": {"free": from_free, "reward": from_reward, "paid": from_paid},
+        }
+
+    def add_credit_points(self, user_id: str, amount: int, point_type: str = "free") -> sqlite3.Row:
         with self.lock:
-            self.conn.execute(
-                f"""
-                update users
-                set {column}=max(0, coalesce({column},0)+?),
-                    updated_at=?
-                where id=?
-                """,
-                (value, now_ms(), user_id),
-            )
-            self.conn.execute(
-                """
-                update users
-                set points=max(0, coalesce(free_points,0)+coalesce(paid_points,0)+coalesce(reward_points,0)),
-                    updated_at=?
-                where id=?
-                """,
-                (now_ms(), user_id),
-            )
+            self._add_credit_points_locked(user_id, amount, point_type)
             self.conn.commit()
             return self.get_user_by_id(user_id) or self.current_user()
 
@@ -3941,62 +4140,24 @@ class Store:
         summary: str = "聊天消耗",
         payload: dict | None = None,
     ) -> dict:
-        needed = max(1, int(amount or 0))
         with self.lock:
-            user = self.get_user_by_id(user_id)
-            if not user:
-                raise ValueError("用户不存在")
-            balance = self.credit_balance(user)
-            if int(balance.get("points") or 0) < needed:
-                raise ValueError(f"积分不足，单次对话需要 {needed} 积分")
-
-            free = int(balance.get("free_points") or 0)
-            reward = int(balance.get("reward_points") or 0)
-            paid = int(balance.get("paid_points") or 0)
-            remaining = needed
-
-            from_free = min(free, remaining)
-            free -= from_free
-            remaining -= from_free
-
-            from_reward = min(reward, remaining)
-            reward -= from_reward
-            remaining -= from_reward
-
-            from_paid = min(paid, remaining)
-            paid -= from_paid
-            remaining -= from_paid
-
-            if remaining > 0:
-                raise ValueError(f"积分不足，单次对话需要 {needed} 积分")
-
-            total = max(0, free + reward + paid)
+            spent = self._spend_credit_points_locked(user_id, amount)
             ts = now_ms()
-            self.conn.execute(
-                """
-                update users
-                set free_points=?, reward_points=?, paid_points=?, points=?, updated_at=?
-                where id=?
-                """,
-                (free, reward, paid, total, ts, user_id),
-            )
             event_payload = dict(payload or {})
             event_payload.update({
-                "points_spent": needed,
-                "deducted": {"free": from_free, "reward": from_reward, "paid": from_paid},
-                "points": total,
+                "points_spent": spent["points_cost"],
+                "deducted": spent["deducted"],
+                "points": spent["points"],
             })
             self.conn.execute(
                 "insert into user_events(user_id,event_type,summary,payload_json,created_at) values(?,?,?,?,?)",
                 (user_id, event_type, summary, json.dumps(event_payload, ensure_ascii=False), ts),
             )
             self.conn.commit()
-            updated = self.get_user_by_id(user_id) or user
-            updated_balance = self.credit_balance(updated)
             return {
-                "points_cost": needed,
-                "points": int(updated_balance["points"]),
-                "balance": updated_balance,
+                "points_cost": spent["points_cost"],
+                "points": spent["points"],
+                "balance": spent["balance"],
                 "deducted": event_payload["deducted"],
             }
 
@@ -4182,7 +4343,10 @@ class Store:
                 "claimed": daily_claimed,
             },
             "profile": {
+                # 农场币是独立货币，coins 就是农场币本身。points 一并回传，
+                # 供交接分支的前端读到账号积分余额（两者不再是同一个数）。
                 "coins": int(profile["coins"]),
+                "points": int(balance["points"]),
                 "xp": int(profile["xp"]),
                 "energy": int(profile["energy"]),
                 "energy_max": FARM_ENERGY_MAX,
@@ -4247,12 +4411,15 @@ class Store:
                 raise ValueError("plot is locked")
             if row["crop_kind"]:
                 raise ValueError("plot is not empty")
+            # 农场币独立结算，不扣账号积分。
             if int(profile["coins"]) < int(crop["cost"]):
-                raise ValueError("not enough farm coins")
-            ready_at = ts + int(crop["grow_seconds"]) * 1000
+                raise ValueError("农场币不足")
             self.conn.execute("update farm_profiles set coins=coins-?,updated_at=? where user_id=?", (crop["cost"], ts, user_id))
+            coins_left = int(profile["coins"]) - int(crop["cost"])
+            ready_at = ts + int(crop["grow_seconds"]) * 1000
             self.conn.execute("update farm_plots set crop_kind=?,planted_at=?,ready_at=?,watered_at=null where user_id=? and plot_no=?", (crop_kind, ts, ready_at, user_id, plot_no))
-            return {"action": "plant", "plot_no": plot_no, "crop_kind": crop_kind, "ready_at": ready_at}
+            self.conn.execute("insert into user_events(user_id,event_type,summary,payload_json,created_at) values(?,?,?,?,?)", (user_id, "farm_plant", "农场种植", json.dumps({"plot_no": plot_no, "crop_kind": crop_kind, "coins_spent": crop["cost"], "coins": coins_left}, ensure_ascii=False), ts))
+            return {"action": "plant", "plot_no": plot_no, "crop_kind": crop_kind, "ready_at": ready_at, "coins_spent": int(crop["cost"]), "coins": coins_left}
         return self._farm_action(user_id, idempotency_key, "plant", f"plot:{plot_no}", {"crop_kind": crop_kind}, apply)
 
     def farm_water(self, user_id: str, plot_no: int, idempotency_key: str) -> dict:
@@ -4287,6 +4454,7 @@ class Store:
             if int(row["ready_at"] or 0) > ts:
                 raise ValueError("crop is not ready")
             crop = FARM_CROPS[crop_kind]
+            # 收成进农场币，不进账号积分；账号积分只由每日首收奖励发放。
             self.conn.execute("update farm_profiles set coins=coins+?,xp=xp+?,harvest_count=harvest_count+1,updated_at=? where user_id=?", (crop["coins"], crop["xp"], ts, user_id))
             self.conn.execute("update farm_plots set crop_kind=null,planted_at=null,ready_at=null,watered_at=null where user_id=? and plot_no=?", (user_id, plot_no))
             daily = self._claim_daily_reward_locked(user_id, daily_points, day, ts)
@@ -5055,6 +5223,54 @@ class Store:
             item["galgame_enabled"] = bool(item.get("galgame_enabled"))
             item["global_preset_enabled"] = bool(item.get("global_preset_enabled", 1))
             return item
+
+    def rename_conversation(self, conv_id: str, user_id: str, title: str) -> dict | None:
+        clean_title = re.sub(r"\s+", " ", str(title or "")).strip()[:80]
+        if not clean_title:
+            raise ValueError("聊天名称不能为空")
+        with self.lock:
+            cur = self.conn.execute(
+                "update conversations set title=?, updated_at=? where id=? and user_id=?",
+                (clean_title, now_ms(), conv_id, user_id),
+            )
+            self.conn.commit()
+            if cur.rowcount <= 0:
+                return None
+            row = self.conn.execute(
+                "select * from conversations where id=? and user_id=?", (conv_id, user_id),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def set_conversation_pinned(self, conv_id: str, user_id: str, pinned: bool) -> dict | None:
+        with self.lock:
+            cur = self.conn.execute(
+                "update conversations set pinned=?, updated_at=? where id=? and user_id=?",
+                (1 if pinned else 0, now_ms(), conv_id, user_id),
+            )
+            self.conn.commit()
+            if cur.rowcount <= 0:
+                return None
+            row = self.conn.execute(
+                "select * from conversations where id=? and user_id=?", (conv_id, user_id),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def export_conversation(self, conv_id: str, user_id: str) -> dict | None:
+        conversation = self.get_conversation(conv_id, user_id)
+        if not conversation:
+            return None
+        return {
+            "format": "homer-conversation-v1",
+            "exported_at": now_ms(),
+            "conversation": {
+                "app_id": conversation.get("app_id") or "",
+                "app_name": conversation.get("app_name") or "",
+                "app_icon": conversation.get("app_icon") or "",
+                "title": conversation.get("title") or conversation.get("app_name") or "对话",
+                "version_id": conversation.get("version_id") or "",
+            },
+            "messages": self.list_messages(conv_id, user_id, limit=1000),
+        }
 
     def repair_conversation_app(self, conv_id: str, user_id: str) -> dict | None:
         """Rebind a conversation whose character record was replaced.
@@ -6051,6 +6267,12 @@ class Store:
         base_created_at = now_ms() - max(0, len(messages) - 1)
         normalized: list[dict] = []
         seen_ids: set[str] = set()
+        # 生成失败时运行时会把空的 assistant 占位一起同步上来。若它是快照里最后
+        # 一条，说明这一轮没有产出，用户那条也要一并撤回，否则下次进会话会看到
+        # 一条永远没有回复的消息。
+        raw_message_indexes = [index for index, item in enumerate(messages) if isinstance(item, dict)]
+        last_raw_message_index = raw_message_indexes[-1] if raw_message_indexes else -1
+        trailing_empty_assistant = False
         for index, raw in enumerate(messages):
             if not isinstance(raw, dict):
                 continue
@@ -6100,8 +6322,22 @@ class Store:
             if swipes:
                 swipe_index = max(0, min(swipe_index, len(swipes) - 1))
                 content = swipes[swipe_index]
+                if role == "assistant" and str(content or "").strip() in {"", "...", "…"}:
+                    fallback_swipe = next(
+                        (
+                            (fallback_index, fallback_content)
+                            for fallback_index, fallback_content in reversed(list(enumerate(swipes)))
+                            if str(fallback_content or "").strip() not in {"", "...", "…"}
+                        ),
+                        None,
+                    )
+                    if fallback_swipe:
+                        swipe_index, content = fallback_swipe
             else:
                 swipe_index = 0
+            if role == "assistant" and str(content or "").strip() in {"", "...", "…"}:
+                trailing_empty_assistant = trailing_empty_assistant or index == last_raw_message_index
+                continue
             try:
                 created_at = int(
                     extra.get("homer_created_at")
@@ -6118,6 +6354,9 @@ class Store:
                 "swipes": swipes,
                 "swipe_index": swipe_index,
             })
+
+        if trailing_empty_assistant and normalized and normalized[-1]["role"] == "user":
+            normalized.pop()
 
         with self.lock:
             conversation = self.conn.execute(
@@ -6228,7 +6467,7 @@ class Store:
                 left join user_favorites f on f.user_id=c.user_id and f.app_id=c.app_id
                 left join user_likes l on l.user_id=c.user_id and l.app_id=c.app_id
                 where c.user_id=?
-                order by c.updated_at desc limit ?
+                order by c.pinned desc, c.updated_at desc limit ?
                 """,
                     (user_id, safe_limit),
                 ).fetchall()
@@ -7197,14 +7436,15 @@ class Store:
         conversation = self.get_conversation(conv_id, user_id) if conv_id else None
         if conversation:
             runtime_profile = self.get_conversation_runtime_profile(conv_id, user_id)
-            selected_presets = self.selected_conversation_presets(runtime_profile)
+            app_row = self.versioned_app_for_conversation(app_id, conv_id, user_id)
+            effective_model = self.effective_llm_settings(dict(app_row), user_id=user_id) if app_row else {}
             conversation_settings = {
                 "global_preset_enabled": bool(conversation.get("global_preset_enabled", 1)),
                 "version_id": str(conversation.get("version_id") or ""),
                 "preset_overrides": self.conversation_preset_override_map(conv_id, user_id),
                 "runtime_profile": runtime_profile or {},
-                "prompt_preset": selected_presets.get("prompt") or {},
-                "regex_preset": selected_presets.get("regex") or {},
+                "prompt_preset": effective_model.get("global_prompt_preset") or {},
+                "regex_preset": effective_model.get("global_regex_preset") or {},
             }
             if bool(conversation.get("galgame_enabled")):
                 conversation_settings["galgame_enabled"] = True
@@ -9142,6 +9382,7 @@ class Store:
             "source": "legacy",
         }
         preset["models"] = split_model_names(saved.get("models") or preset["model"]) or [preset["model"]]
+        preset["model_configs"] = normalize_model_configs([], preset["models"])
         api_key = (saved.get("api_key") or USER_LLM_API_KEY or "").strip()
         if include_secrets:
             preset["api_key"] = api_key
@@ -9187,6 +9428,7 @@ class Store:
                 "temperature": max(0.0, min(2.0, temperature)),
             }
             preset["models"] = split_model_names(item.get("models") or item.get("modelsText") or preset["model"]) or [preset["model"]]
+            preset["model_configs"] = normalize_model_configs(item.get("model_configs"), preset["models"])
             if include_secrets:
                 preset["api_key"] = api_key
             else:
@@ -9366,6 +9608,157 @@ class Store:
         self._save_global_collection(GLOBAL_REGEX_PRESETS_KEY, collection)
         return preset
 
+    def import_global_regex_json(self, payload: object, filename: str = "", name: str = "") -> dict:
+        if isinstance(payload, str):
+            if len(payload.encode("utf-8")) > 4 * 1024 * 1024:
+                raise ValueError("regex JSON is too large")
+            try:
+                payload = json.loads(payload)
+            except Exception as exc:
+                raise ValueError(f"invalid regex JSON: {exc}") from exc
+        scripts = payload if isinstance(payload, list) else None
+        if isinstance(payload, dict):
+            extensions = payload.get("extensions") if isinstance(payload.get("extensions"), dict) else {}
+            for candidate in (
+                extensions.get("regex_scripts"),
+                payload.get("regex_scripts"),
+                payload.get("scripts"),
+            ):
+                if isinstance(candidate, list):
+                    scripts = candidate
+                    break
+            if scripts is None and (payload.get("findRegex") is not None or payload.get("find") is not None):
+                scripts = [payload]
+        if not isinstance(scripts, list) or not scripts:
+            raise ValueError("regex scripts are required")
+        if len(scripts) > GLOBAL_REGEX_MAX_ENTRIES:
+            raise ValueError("too many regex scripts")
+        collection = self.global_regex_presets()
+        preset_id = _global_preset_id("", f"regex-{int(time.time())}-{uuid.uuid4().hex[:6]}")
+        preset = normalize_full_regex_preset({
+            "id": preset_id,
+            "name": str(name or (payload.get("name") if isinstance(payload, dict) else "") or Path(filename or "全局正则预设").stem)[:160],
+            "source": "sillytavern-regex-json",
+            "source_file": Path(filename).name[:260] if filename else "",
+            "enabled": True,
+            "scripts": [dict(item, order=index) for index, item in enumerate(scripts) if isinstance(item, dict)],
+        }, len(collection.get("items") or []))
+        items = [dict(item, enabled=False) for item in collection.get("items") or [] if item.get("id") != preset_id]
+        items.append(preset)
+        collection = normalize_regex_preset_collection({"active_id": preset_id, "items": items})
+        self._save_global_collection(GLOBAL_REGEX_PRESETS_KEY, collection)
+        return preset
+
+    def import_global_preset_bundle(self, payload: object, filename: str = "") -> dict:
+        if isinstance(payload, str):
+            if len(payload.encode("utf-8")) > 4 * 1024 * 1024:
+                raise ValueError("preset JSON is too large")
+            try:
+                payload = json.loads(payload)
+            except Exception as exc:
+                raise ValueError(f"invalid preset JSON: {exc}") from exc
+        if not isinstance(payload, dict) or not isinstance(payload.get("prompts"), list):
+            raise ValueError("SillyTavern prompts are required")
+        extensions = payload.get("extensions") if isinstance(payload.get("extensions"), dict) else {}
+        regex_scripts = extensions.get("regex_scripts") if isinstance(extensions.get("regex_scripts"), list) else []
+        if len(regex_scripts) > GLOBAL_REGEX_MAX_ENTRIES:
+            raise ValueError("too many regex scripts in preset JSON")
+
+        source_name = str(payload.get("name") or payload.get("preset_name") or Path(filename or "SillyTavern 预设").stem)[:160]
+        bundle_id = _global_preset_id(
+            payload.get("bundle_id"),
+            f"bundle-{int(time.time())}-{uuid.uuid4().hex[:6]}",
+        )
+        prompt_id = _global_preset_id(payload.get("id"), f"prompt-{bundle_id}")
+        regex_id = _global_preset_id("", f"regex-{bundle_id}") if regex_scripts else ""
+
+        prompt_collection = self.global_prompt_presets()
+        regex_collection = self.global_regex_presets()
+        prompt_payload = dict(payload)
+        prompt_payload.update({
+            "id": prompt_id,
+            "name": source_name,
+            "source": "sillytavern-json-bundle",
+            "source_file": Path(filename).name[:260] if filename else "",
+            "enabled": True,
+            "bundle_id": bundle_id,
+            "linked_regex_preset_id": regex_id,
+        })
+        prompt = normalize_full_prompt_preset(prompt_payload, len(prompt_collection.get("items") or []))
+        prompt_items = [
+            dict(item, enabled=False)
+            for item in prompt_collection.get("items") or []
+            if item.get("id") != prompt_id
+        ]
+        prompt_items.append(prompt)
+        next_prompt_collection = normalize_prompt_preset_collection({
+            "active_id": prompt_id,
+            "items": prompt_items,
+        })
+
+        regex = None
+        next_regex_collection = regex_collection
+        if regex_scripts:
+            clean_scripts = []
+            for order, raw in enumerate(regex_scripts):
+                if not isinstance(raw, dict):
+                    continue
+                item = dict(raw)
+                item["order"] = order
+                item["source_file"] = Path(filename).name[:260] if filename else ""
+                clean_scripts.append(item)
+            regex = normalize_full_regex_preset({
+                "id": regex_id,
+                "name": source_name,
+                "source": "sillytavern-json-bundle",
+                "source_file": Path(filename).name[:260] if filename else "",
+                "enabled": True,
+                "bundle_id": bundle_id,
+                "linked_prompt_preset_id": prompt_id,
+                "scripts": clean_scripts,
+            }, len(regex_collection.get("items") or []))
+            regex_items = [
+                dict(item, enabled=False)
+                for item in regex_collection.get("items") or []
+                if item.get("id") != regex_id
+            ]
+            regex_items.append(regex)
+            next_regex_collection = normalize_regex_preset_collection({
+                "active_id": regex_id,
+                "items": regex_items,
+            })
+
+        prompt_raw = json.dumps(next_prompt_collection, ensure_ascii=False, separators=(",", ":"))
+        regex_raw = json.dumps(next_regex_collection, ensure_ascii=False, separators=(",", ":"))
+        if len(prompt_raw.encode("utf-8")) > 4 * 1024 * 1024 or len(regex_raw.encode("utf-8")) > 4 * 1024 * 1024:
+            raise ValueError("global preset collection is too large")
+        ts = now_ms()
+        with self.lock:
+            self.conn.execute("begin immediate")
+            try:
+                self.conn.execute(
+                    "insert into api_settings(key,value,updated_at) values(?,?,?) "
+                    "on conflict(key) do update set value=excluded.value, updated_at=excluded.updated_at",
+                    (GLOBAL_PROMPT_PRESETS_KEY, prompt_raw, ts),
+                )
+                if regex_scripts:
+                    self.conn.execute(
+                        "insert into api_settings(key,value,updated_at) values(?,?,?) "
+                        "on conflict(key) do update set value=excluded.value, updated_at=excluded.updated_at",
+                        (GLOBAL_REGEX_PRESETS_KEY, regex_raw, ts),
+                    )
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
+        return {
+            "bundle_id": bundle_id,
+            "prompt_preset": prompt,
+            "regex_preset": regex,
+            "prompt_library": next_prompt_collection,
+            "regex_library": next_regex_collection,
+        }
+
     def save_global_preset(self, kind: str, preset_id: str, payload: object) -> dict:
         if kind not in {"prompt", "regex"} or not isinstance(payload, dict):
             raise ValueError("invalid global preset")
@@ -9405,10 +9798,58 @@ class Store:
         saved = self.get_api_settings_raw()
         return normalize_memory_settings(saved.get(MEMORY_SETTINGS_KEY) or "")
 
+    def model_runtime_profile(self, preset: dict, model: str) -> dict:
+        model_config = model_config_for_preset(preset, model)
+        prompt_collection = self.global_prompt_presets()
+        regex_collection = self.global_regex_presets()
+        requested_prompt_id = str(model_config.get("preset_id") or "").strip()
+        prompt_id = requested_prompt_id or str(prompt_collection.get("active_id") or "")
+        prompt = next(
+            (dict(item) for item in prompt_collection.get("items") or [] if str(item.get("id") or "") == prompt_id),
+            None,
+        )
+        if prompt is None:
+            prompt_id = str(prompt_collection.get("active_id") or "")
+            prompt = next(
+                (dict(item) for item in prompt_collection.get("items") or [] if str(item.get("id") or "") == prompt_id),
+                normalize_global_prompt_preset(""),
+            )
+        linked_regex_id = str(prompt.get("linked_regex_preset_id") or "").strip()
+        bundle_id = str(prompt.get("bundle_id") or "").strip()
+        regex = next(
+            (
+                dict(item)
+                for item in regex_collection.get("items") or []
+                if linked_regex_id and str(item.get("id") or "") == linked_regex_id
+            ),
+            None,
+        )
+        if regex is None and bundle_id:
+            regex = next(
+                (
+                    dict(item)
+                    for item in regex_collection.get("items") or []
+                    if str(item.get("bundle_id") or "") == bundle_id
+                ),
+                None,
+            )
+        if regex is None:
+            active_regex_id = str(regex_collection.get("active_id") or "")
+            regex = next(
+                (dict(item) for item in regex_collection.get("items") or [] if str(item.get("id") or "") == active_regex_id),
+                {"enabled": False, "scripts": []},
+            )
+        prompt["enabled"] = bool(prompt_id and prompt.get("id"))
+        regex["enabled"] = bool(regex.get("id") and regex.get("enabled", True))
+        return {
+            "model_config": model_config,
+            "pricing": normalize_model_pricing(model_config.get("pricing")),
+            "prompt": prompt,
+            "regex": regex,
+        }
+
     def effective_llm_settings(self, app: dict | None = None, user_id: str = "") -> dict:
         presets, default_id = self.llm_presets(include_secrets=True)
-        global_prompt = self.global_prompt_preset()
-        global_regex = self.global_regex_preset()
         enabled = [p for p in presets if p.get("enabled")]
         candidates = enabled or presets
         selected_key = ""
@@ -9419,6 +9860,8 @@ class Store:
             user_presets = self.user_model_presets(user_id, include_secret=True)["list"]
             selected_user = next((p for p in user_presets if p.get("id") == user_preset_id and p.get("enabled")), None)
             if selected_user:
+                global_prompt = self.global_prompt_preset()
+                global_regex = self.global_regex_preset()
                 return {
                     "enabled": bool(selected_user.get("enabled", True)),
                     "protocol": normalize_llm_protocol(selected_user.get("protocol"), provider=selected_user.get("provider"), base_url=selected_user.get("base_url")),
@@ -9453,6 +9896,11 @@ class Store:
         if not selected:
             selected = self._legacy_llm_preset(include_secrets=True)
         resolved_model = str(selected_model or selected.get("model") or USER_LLM_MODEL or "gpt-4o-mini").strip()
+        runtime_profile = self.model_runtime_profile(selected, resolved_model)
+        global_prompt = runtime_profile["prompt"]
+        global_regex = runtime_profile["regex"]
+        pricing = runtime_profile["pricing"]
+        model_config = runtime_profile["model_config"]
         fallback_settings: list[dict] = []
         for candidate in candidates:
             if candidate is selected or not candidate.get("enabled"):
@@ -9475,6 +9923,8 @@ class Store:
                 "preset_name": candidate.get("name") or candidate.get("model") or "",
                 "global_prompt_preset": global_prompt,
                 "global_regex_preset": global_regex,
+                "pricing": pricing,
+                "model_config": model_config,
             })
         return {
             "enabled": bool(selected.get("enabled", True)),
@@ -9487,6 +9937,8 @@ class Store:
             "preset_name": selected.get("name") or selected.get("model") or "",
             "global_prompt_preset": global_prompt,
             "global_regex_preset": global_regex,
+            "pricing": pricing,
+            "model_config": model_config,
             "fallbacks": fallback_settings,
         }
 
@@ -9527,24 +9979,32 @@ class Store:
                 if not model or model in seen_models:
                     continue
                 seen_models.add(model)
+                model_config = model_config_for_preset(p, model)
+                pricing = normalize_model_pricing(model_config.get("pricing"))
+                points_cost = model_charge_points(pricing)
                 visible.append({
                     "id": model_selection_id(p["id"], model) if len(split_model_names(p.get("models") or p.get("model"))) > 1 else p["id"],
                     "preset_id": p["id"],
-                    "name": p.get("name") or p.get("model") or p["id"],
+                    "name": model_config.get("display_name") or p.get("name") or p.get("model") or p["id"],
                     "protocol": p.get("protocol") or "openai",
                     "model": model,
                     "enabled": bool(p.get("enabled")),
                     "is_default": p["id"] == default_id and model == default_model,
-                    "points_cost": CHAT_MESSAGE_COST,
-                    "price_label": f"{CHAT_MESSAGE_COST} 惑梦币/次",
+                    "points_cost": points_cost,
+                    "pricing": pricing,
+                    "price_label": model_price_label(pricing),
+                    "preset_id_bound": model_config.get("preset_id") or "",
                 })
         if not visible and presets:
             p = presets[0]
-            visible = [{"id": p["id"], "preset_id": p["id"], "name": p.get("name") or p.get("model") or p["id"], "protocol": p.get("protocol") or "openai", "model": p.get("model") or "", "enabled": True, "is_default": True, "points_cost": CHAT_MESSAGE_COST, "price_label": f"{CHAT_MESSAGE_COST} 惑梦币/次"}]
+            model = p.get("model") or ""
+            model_config = model_config_for_preset(p, model)
+            pricing = normalize_model_pricing(model_config.get("pricing"))
+            visible = [{"id": p["id"], "preset_id": p["id"], "name": model_config.get("display_name") or p.get("name") or model or p["id"], "protocol": p.get("protocol") or "openai", "model": model, "enabled": True, "is_default": True, "points_cost": model_charge_points(pricing), "pricing": pricing, "price_label": model_price_label(pricing), "preset_id_bound": model_config.get("preset_id") or ""}]
             default_id = p["id"]
         else:
             default_id = next((p["id"] for p in visible if p.get("is_default")), visible[0]["id"] if visible else default_id)
-        return {"list": visible, "default_id": default_id, "total": len(visible), "points_cost": CHAT_MESSAGE_COST, "price_label": f"{CHAT_MESSAGE_COST} 惑梦币/次"}
+        return {"list": visible, "default_id": default_id, "total": len(visible)}
 
     def public_model_selection(self, value: object) -> str:
         selected = normalize_user_selected_llm_model(value)
@@ -9660,6 +10120,9 @@ class Store:
         current = self.get_api_settings_raw()
         existing_presets, _ = self.llm_presets(include_secrets=True)
         existing_by_id = {p["id"]: p for p in existing_presets}
+        prompt_collection = self.global_prompt_presets()
+        allowed_prompt_ids = {str(item.get("id") or "") for item in prompt_collection.get("items") or []}
+        fallback_prompt_id = str(prompt_collection.get("active_id") or "")
         raw_presets = data.get("presets")
         normalized_presets = None
         if isinstance(raw_presets, list):
@@ -9692,6 +10155,15 @@ class Store:
                     "temperature": max(0.0, min(2.0, temperature)),
                     "api_key": api_key,
                 })
+                normalized_presets[-1]["model_configs"] = normalize_model_configs(
+                    item.get("model_configs"),
+                    normalized_presets[-1]["models"] or [normalized_presets[-1]["model"]],
+                )
+                for model_config in normalized_presets[-1]["model_configs"]:
+                    requested_preset_id = str(model_config.get("preset_id") or fallback_prompt_id)
+                    if requested_preset_id not in allowed_prompt_ids:
+                        requested_preset_id = fallback_prompt_id
+                    model_config["preset_id"] = requested_preset_id
             if not normalized_presets:
                 raise ValueError("at least one model preset is required")
         updates = {
@@ -11995,6 +12467,11 @@ def silly_card_to_app(card: dict) -> dict:
         galgame = imported_experience.get("galgame") if isinstance(imported_experience.get("galgame"), dict) else {}
         galgame["default_portrait_id"] = ""
         galgame["default_background_id"] = ""
+        # Card-pack assets are uploaded after the base Character Card record
+        # exists. Keep the first import asset-agnostic; create.js reapplies the
+        # original maps after the uploaded files receive owned server IDs.
+        galgame["scene_bgm_map"] = {}
+        galgame["mood_bgm_map"] = {}
         imported_experience["galgame"] = galgame
         imported_experience["ui_rules"] = [
             item for item in (imported_experience.get("ui_rules") or [])
@@ -12247,6 +12724,22 @@ def local_app_to_silly_card(row: dict, fallback_card: dict | None = None) -> dic
                     original_experience,
                     rebuilt_experience,
                 )
+                # Asset maps are workshop-owned references.  A deep merge can
+                # retain stale package IDs beside the remapped owned IDs when
+                # only key casing changes (for example BG_MainOffice versus
+                # bg_mainoffice), which makes an otherwise valid card fail at
+                # runtime normalization.  Replace these maps atomically with
+                # the already-validated workshop projection.
+                merged_galgame = merged_experience.get("galgame")
+                rebuilt_galgame = rebuilt_experience.get("galgame")
+                if isinstance(merged_galgame, dict) and isinstance(rebuilt_galgame, dict):
+                    for mapping_key in ("scene_bgm_map", "mood_bgm_map"):
+                        rebuilt_mapping = rebuilt_galgame.get(mapping_key)
+                        merged_galgame[mapping_key] = (
+                            json.loads(json.dumps(rebuilt_mapping, ensure_ascii=False))
+                            if isinstance(rebuilt_mapping, dict)
+                            else {}
+                        )
                 allowed_assets = {
                     str(item.get("id") or ""): str(item.get("kind") or "")
                     for item in (card.get("media_assets") if isinstance(card.get("media_assets"), list) else [])
@@ -13076,6 +13569,7 @@ def _conversation_card_prompt_config(
     )
     entries = _prompt_preset_public_entries(preset, override_map, source="card_prompt")
     return {
+        "kind": "card_prompt",
         "preset_id": preset_id,
         "name": str(preset.get("name") or "当前角色未绑定预设"),
         "enabled": bool(preset_id and preset.get("enabled")),
@@ -13086,12 +13580,24 @@ def _conversation_card_prompt_config(
     }
 
 
-def _conversation_prompt_config(store: "Store", conv_id: str, user_id: str) -> dict:
-    runtime_profile = store.get_conversation_runtime_profile(conv_id, user_id)
-    selected = store.selected_conversation_presets(runtime_profile).get("prompt") or {}
+def _conversation_prompt_config(store: "Store", conv_id: str, user_id: str, app: dict | None = None) -> dict:
+    if not isinstance(app, dict):
+        runtime = store.conversation_runtime_card(conv_id, user_id)
+        if not runtime:
+            raise PermissionError("conversation not found")
+        _conversation, app_row = runtime
+        app = dict(app_row)
+    runtime_state = store.get_sillytavern_runtime_state(user_id, str(app.get("id") or ""), conv_id)
+    runtime_variables = runtime_state.get("variables") if isinstance(runtime_state, dict) and isinstance(runtime_state.get("variables"), dict) else {}
+    runtime_model_settings = runtime_variables.get("homer_model_settings") if isinstance(runtime_variables.get("homer_model_settings"), dict) else {}
+    selected_runtime_model = store.public_model_selection(runtime_model_settings.get("model_id"))
+    if selected_runtime_model:
+        app["llm_model"] = selected_runtime_model
+    selected = store.effective_llm_settings(app, user_id=user_id).get("global_prompt_preset") or {}
     selected_id = str(selected.get("id") or "")
     if not selected_id:
         return {
+            "kind": "global_prompt",
             "preset_id": "",
             "name": "未选择官方 Prompt 预设",
             "enabled": False,
@@ -13117,6 +13623,7 @@ def _conversation_prompt_config(store: "Store", conv_id: str, user_id: str) -> d
         source="global_prompt",
     )
     return {
+        "kind": "global_prompt",
         "preset_id": preset_id,
         "name": str(preset.get("name") or "官方 Prompt 预设"),
         "enabled": bool(preset.get("enabled")),
@@ -13127,9 +13634,20 @@ def _conversation_prompt_config(store: "Store", conv_id: str, user_id: str) -> d
     }
 
 
-def _conversation_regex_config(store: "Store", conv_id: str, user_id: str) -> dict:
-    runtime_profile = store.get_conversation_runtime_profile(conv_id, user_id)
-    selected = store.selected_conversation_presets(runtime_profile).get("regex") or {}
+def _conversation_regex_config(store: "Store", conv_id: str, user_id: str, app: dict | None = None) -> dict:
+    if not isinstance(app, dict):
+        runtime = store.conversation_runtime_card(conv_id, user_id)
+        if not runtime:
+            raise PermissionError("conversation not found")
+        _conversation, app_row = runtime
+        app = dict(app_row)
+    runtime_state = store.get_sillytavern_runtime_state(user_id, str(app.get("id") or ""), conv_id)
+    runtime_variables = runtime_state.get("variables") if isinstance(runtime_state, dict) and isinstance(runtime_state.get("variables"), dict) else {}
+    runtime_model_settings = runtime_variables.get("homer_model_settings") if isinstance(runtime_variables.get("homer_model_settings"), dict) else {}
+    selected_runtime_model = store.public_model_selection(runtime_model_settings.get("model_id"))
+    if selected_runtime_model:
+        app["llm_model"] = selected_runtime_model
+    selected = store.effective_llm_settings(app, user_id=user_id).get("global_regex_preset") or {}
     if not str(selected.get("id") or ""):
         return {
             "preset_id": "",
@@ -13176,6 +13694,12 @@ def build_conversation_runtime_config(store: "Store", conv_id: str, user_id: str
         raise PermissionError("conversation not found")
     conversation, app_raw = runtime
     app = dict(app_raw)
+    runtime_state = store.get_sillytavern_runtime_state(user_id, str(app.get("id") or conversation.get("app_id") or ""), conv_id)
+    runtime_variables = runtime_state.get("variables") if isinstance(runtime_state, dict) and isinstance(runtime_state.get("variables"), dict) else {}
+    runtime_model_settings = runtime_variables.get("homer_model_settings") if isinstance(runtime_variables.get("homer_model_settings"), dict) else {}
+    selected_runtime_model = store.public_model_selection(runtime_model_settings.get("model_id"))
+    if selected_runtime_model:
+        app["llm_model"] = selected_runtime_model
     apply_conversation_mods(store.conn, store.lock, app, user_id, conv_id, REQUIRED_WORLD_BOOK_ID)
     base_entries = prepare_conversation_worldbook_entries(app)
     base_by_key = {str(item.get("_homer_world_source_key") or ""): item for item in base_entries}
@@ -13220,15 +13744,20 @@ def build_conversation_runtime_config(store: "Store", conv_id: str, user_id: str
         conversation=conversation,
         app=app,
     )
-    global_prompt_config = _conversation_prompt_config(store, conv_id, user_id)
+    global_prompt_config = _conversation_prompt_config(store, conv_id, user_id, app)
+    current_prompt_config = global_prompt_config if global_prompt_config.get("preset_id") else card_prompt_config
     return {
         "conversation_id": conv_id,
         "global_preset_enabled": bool(conversation.get("global_preset_enabled", 1)),
         "preset": {
+            "current_prompt": current_prompt_config,
+            "prompt": current_prompt_config,
+            # 旧版运行时（线上 bridge）读的是这两个键。交接分支只发
+            # current_prompt，会让线上 bridge 的「角色卡」分组永久空白。
+            # 两套键一起发，新旧 bridge 都能正确渲染。
             "card_prompt": card_prompt_config,
             "global_prompt": global_prompt_config,
-            "prompt": global_prompt_config,
-            "regex": _conversation_regex_config(store, conv_id, user_id),
+            "regex": _conversation_regex_config(store, conv_id, user_id, app),
         },
         "worldbook": {
             "total": len(public_entries),
@@ -15391,14 +15920,42 @@ def probe_llm_model(connection: dict, model: str, *, timeout: int) -> dict:
         "available": False,
         "status": "error",
         "elapsed_ms": 0,
+        "first_content_ms": 0,
         "error": "",
     }
     try:
         with urlopen(request, timeout=timeout) as response:
-            raw = response.read(2 * 1024 * 1024 + 1)
+            chunks: list[bytes] = []
+            total_bytes = 0
+            first_content_ms = 0
+            while True:
+                raw_line = response.readline()
+                if not raw_line:
+                    break
+                total_bytes += len(raw_line)
+                if total_bytes > 2 * 1024 * 1024:
+                    raise RuntimeError("probe response is too large")
+                chunks.append(raw_line)
+                if first_content_ms:
+                    continue
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if line.startswith("data:"):
+                    line = line[5:].strip()
+                if not line or line == "[DONE]":
+                    continue
+                try:
+                    event = json.loads(line)
+                except Exception:
+                    continue
+                if extract_stream_delta(event) or extract_upstream_chat_answer(event):
+                    first_content_ms = int((time.perf_counter() - started) * 1000)
+            raw = b"".join(chunks)
+            result["first_content_ms"] = first_content_ms
         if len(raw) > 2 * 1024 * 1024:
             raise RuntimeError("probe response is too large")
         answer, terminal = _parse_llm_probe_response(raw)
+        if answer and not result["first_content_ms"]:
+            result["first_content_ms"] = int((time.perf_counter() - started) * 1000)
         if not answer:
             result["status"] = "empty_response"
             result["error"] = "模型未返回有效正文"
@@ -15442,6 +15999,7 @@ def probe_llm_model_list(connection: dict, models: list[str], *, timeout: int) -
                     "available": False,
                     "status": "error",
                     "elapsed_ms": 0,
+                    "first_content_ms": 0,
                     "error": _safe_llm_admin_error(exc, str(connection.get("api_key") or "")),
                 }
     results = [results_by_model[model] for model in ordered]
@@ -16622,6 +17180,16 @@ def build_user_llm_request(app: dict, content: str, messages: list[dict] | None 
     global_preset = settings.get("global_prompt_preset") if isinstance(settings, dict) else None
     global_regex_preset = settings.get("global_regex_preset") if isinstance(settings, dict) else None
     card_preset = apply_conversation_card_prompt_override(extras.get("card_prompt_preset"), context)
+    normalized_global_preset = normalize_full_prompt_preset(global_preset)
+    global_has_entries = bool(
+        normalized_global_preset.get("enabled")
+        and (normalized_global_preset.get("prompts") or normalized_global_preset.get("blocks"))
+    )
+    if global_has_entries:
+        # 全局预设有条目时禁用角色卡自带预设：两套提示词叠加会互相打架，
+        # 以全局为准。代价是卡自带预设的会话在管理员启用全局预设后会失效，
+        # 这是刻意选择（2026-08-31 确认）。
+        card_preset = {"enabled": False, "prompts": [], "blocks": []}
     conversation_settings = context.get("conversation_settings") if isinstance(context, dict) else None
     galgame_enabled = None
     if isinstance(conversation_settings, dict) and "galgame_enabled" in conversation_settings:
@@ -17222,6 +17790,115 @@ def normalize_sillytavern_openai_messages(value: object) -> list[dict]:
     return normalized
 
 
+SILLYTAVERN_PROMPT_COMPACTION_MARKER = "\n\n[为适配模型上下文，已省略部分低优先级设定]\n\n"
+
+
+def compact_sillytavern_prompt_text(value: object, max_chars: int) -> str:
+    """Keep the most useful head/tail of one prompt section within a hard budget."""
+    text = str(value or "").strip()
+    limit = max(0, int(max_chars or 0))
+    if not text or limit <= 0:
+        return ""
+    if len(text) <= limit:
+        return text
+    marker = SILLYTAVERN_PROMPT_COMPACTION_MARKER
+    if limit <= len(marker):
+        return text[:limit]
+    available = limit - len(marker)
+    head = int(available * 0.7)
+    tail = available - head
+    return text[:head] + marker + (text[-tail:] if tail else "")
+
+
+def _sillytavern_prompt_message_chars(messages: object) -> int:
+    if not isinstance(messages, list):
+        return 0
+    return sum(
+        len(str(item.get("content") or ""))
+        for item in messages
+        if isinstance(item, dict)
+    )
+
+
+def _compact_sillytavern_system_sections(
+    prefix: list[dict],
+    suffix: list[dict],
+    max_chars: int,
+) -> tuple[list[dict], list[dict], bool]:
+    clean_prefix = [
+        {"role": "system", "content": str(item.get("content") or "").strip()}
+        for item in prefix
+        if isinstance(item, dict) and str(item.get("content") or "").strip()
+    ]
+    clean_suffix = [
+        {"role": "system", "content": str(item.get("content") or "").strip()}
+        for item in suffix
+        if isinstance(item, dict) and str(item.get("content") or "").strip()
+    ]
+    total = _sillytavern_prompt_message_chars(clean_prefix) + _sillytavern_prompt_message_chars(clean_suffix)
+    limit = max(0, int(max_chars or 0))
+    if total <= limit:
+        return clean_prefix, clean_suffix, False
+
+    prefix_text = "\n\n".join(item["content"] for item in clean_prefix)
+    suffix_text = "\n\n".join(item["content"] for item in clean_suffix)
+    if not prefix_text:
+        compact_suffix = compact_sillytavern_prompt_text(suffix_text, limit)
+        return [], ([{"role": "system", "content": compact_suffix}] if compact_suffix else []), True
+    if not suffix_text:
+        compact_prefix = compact_sillytavern_prompt_text(prefix_text, limit)
+        return ([{"role": "system", "content": compact_prefix}] if compact_prefix else []), [], True
+
+    suffix_budget = min(len(suffix_text), max(512, limit // 4))
+    prefix_budget = max(0, limit - suffix_budget)
+    if prefix_budget < 512 and limit >= 1024:
+        prefix_budget = 512
+        suffix_budget = max(0, limit - prefix_budget)
+    compact_prefix = compact_sillytavern_prompt_text(prefix_text, prefix_budget)
+    compact_suffix = compact_sillytavern_prompt_text(suffix_text, suffix_budget)
+    return (
+        ([{"role": "system", "content": compact_prefix}] if compact_prefix else []),
+        ([{"role": "system", "content": compact_suffix}] if compact_suffix else []),
+        True,
+    )
+
+
+def _budget_sillytavern_dialogue(messages: list[dict], max_chars: int) -> tuple[list[dict], int, bool]:
+    dialogue = [
+        {"role": str(item.get("role") or ""), "content": str(item.get("content") or "").strip()}
+        for item in messages
+        if isinstance(item, dict)
+        and item.get("role") in {"user", "assistant"}
+        and str(item.get("content") or "").strip()
+    ]
+    limit = max(1, int(max_chars or 1))
+    dropped = 0
+    compacted = False
+    while len(dialogue) > 1 and _sillytavern_prompt_message_chars(dialogue) > limit:
+        dialogue.pop(0)
+        dropped += 1
+    if dialogue and _sillytavern_prompt_message_chars(dialogue) > limit:
+        dialogue[-1]["content"] = compact_sillytavern_prompt_text(dialogue[-1]["content"], limit)
+        compacted = True
+    return dialogue, dropped, compacted
+
+
+def _merge_sillytavern_anthropic_dialogue(messages: list[dict]) -> list[dict]:
+    merged: list[dict] = []
+    for item in messages:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "")
+        content = str(item.get("content") or "").strip()
+        if role not in {"user", "assistant"} or not content:
+            continue
+        if merged and merged[-1]["role"] == role:
+            merged[-1]["content"] += "\n\n" + content
+        else:
+            merged.append({"role": role, "content": content})
+    return merged
+
+
 def prepare_sillytavern_bridge_generation(store: "Store", claims: dict, body: dict) -> dict:
     """Build a provider request from an authenticated, conversation-scoped ST prompt."""
     user_id = str(claims.get("user_id") or "")
@@ -17264,6 +17941,9 @@ def prepare_sillytavern_bridge_generation(store: "Store", claims: dict, body: di
     context = store.chat_context(user_id, app_id, conversation_id, last_user, history) if conversation_id else {}
 
     settings = store.effective_llm_settings(app, user_id=user_id)
+    if isinstance(context.get("conversation_settings"), dict):
+        context["conversation_settings"]["prompt_preset"] = settings.get("global_prompt_preset") or {}
+        context["conversation_settings"]["regex_preset"] = settings.get("global_regex_preset") or {}
     request_info = build_user_llm_request(
         app,
         last_user,
@@ -17276,36 +17956,42 @@ def prepare_sillytavern_bridge_generation(store: "Store", claims: dict, body: di
         raise RuntimeError("模型服务配置不可用")
     protocol = str(request_info.get("protocol") or "openai")
     payload = dict(request_info.get("payload") if isinstance(request_info.get("payload"), dict) else {})
+    # 提示词硬预算。上游按 token 计费且有上下文上限，长会话不设界会直接 400，
+    # 也会把单轮费用推到任意大。system 段和对话段各自封顶，超了先丢最旧历史。
+    raw_system_count = sum(1 for item in messages if item.get("role") == "system")
+    raw_system_chars = sum(
+        len(str(item.get("content") or ""))
+        for item in messages
+        if item.get("role") == "system"
+    )
+    max_input_chars = max(2_000, int(SILLYTAVERN_BRIDGE_MAX_INPUT_CHARS))
+    max_system_chars = min(
+        max(1_000, int(SILLYTAVERN_BRIDGE_MAX_SYSTEM_CHARS)),
+        max(1_000, max_input_chars - 512),
+    )
+    history_dropped = 0
+    prompt_compacted = False
     if protocol == "anthropic":
+        # system 段只用服务端构建的那份。运行时上传的 system 消息不是权威来源
+        # （用户可在客户端改），把它并进来既会挤掉服务端自己的尾部指令，也等于
+        # 让客户端往系统提示里塞任意内容。这里连同 OpenAI 分支一样整段丢弃，
+        # 丢弃条数记在 prompt_stats.raw_system_dropped。
         authoritative_system = str(payload.get("system") or "").strip()
-        raw_system_parts = [
-            str(item.get("content") or "")
-            for item in messages
-            if item.get("role") == "system" and str(item.get("content") or "")
-        ]
-        system_parts = [authoritative_system] if authoritative_system else []
-        for value in raw_system_parts:
-            if value not in system_parts:
-                system_parts.append(value)
-        provider_messages: list[dict] = []
-        for item in messages:
-            role = str(item.get("role") or "")
-            content = str(item.get("content") or "")
-            if role not in {"user", "assistant"} or not content:
-                continue
-            if provider_messages and provider_messages[-1]["role"] == role:
-                provider_messages[-1]["content"] += "\n\n" + content
-            else:
-                provider_messages.append({"role": role, "content": content})
+        provider_messages: list[dict] = _merge_sillytavern_anthropic_dialogue(messages)
         if not provider_messages:
-            provider_messages = [
-                dict(item)
-                for item in payload.get("messages") or []
-                if isinstance(item, dict) and item.get("role") in {"user", "assistant"}
-            ]
+            provider_messages = _merge_sillytavern_anthropic_dialogue(
+                payload.get("messages") if isinstance(payload.get("messages"), list) else []
+            )
         if not provider_messages or provider_messages[-1]["role"] != "user":
             provider_messages.append({"role": "user", "content": last_user or "请继续。"})
-        payload["system"] = "\n\n".join(system_parts)
+        compact_system = compact_sillytavern_prompt_text(authoritative_system, max_system_chars)
+        prompt_compacted = compact_system != authoritative_system
+        provider_messages, history_dropped, dialogue_compacted = _budget_sillytavern_dialogue(
+            provider_messages,
+            max(1, max_input_chars - len(compact_system)),
+        )
+        prompt_compacted = prompt_compacted or dialogue_compacted
+        payload["system"] = compact_system
         payload["messages"] = provider_messages
     else:
         authoritative_messages = [
@@ -17323,16 +18009,52 @@ def prepare_sillytavern_bridge_generation(store: "Store", claims: dict, body: di
             (str(item.get("role") or ""), str(item.get("content") or ""))
             for item in messages
         }
+        # 只保留服务端构建的 system 段：raw_keys 挡掉运行时回传的同一条，
+        # role 判断挡掉混进 prefix/suffix 的非 system 项。
         prefix = [
             item for item in authoritative_messages[:first_user_index]
-            if (str(item.get("role") or ""), str(item.get("content") or "")) not in raw_keys
+            if item.get("role") == "system"
+            and (str(item.get("role") or ""), str(item.get("content") or "")) not in raw_keys
         ]
         suffix = [
             item for item in authoritative_messages[first_user_index + 1:]
-            if item.get("role") != "user"
+            if item.get("role") == "system"
             and (str(item.get("role") or ""), str(item.get("content") or "")) not in raw_keys
         ]
-        payload["messages"] = prefix + messages + suffix
+        prefix, suffix, system_compacted = _compact_sillytavern_system_sections(
+            prefix,
+            suffix,
+            max_system_chars,
+        )
+        system_chars = _sillytavern_prompt_message_chars(prefix) + _sillytavern_prompt_message_chars(suffix)
+        dialogue, history_dropped, dialogue_compacted = _budget_sillytavern_dialogue(
+            messages,
+            max(1, max_input_chars - system_chars),
+        )
+        if not dialogue or dialogue[-1]["role"] != "user":
+            dialogue.append({"role": "user", "content": last_user or "请继续。"})
+        prompt_compacted = system_compacted or dialogue_compacted
+        payload["messages"] = prefix + dialogue + suffix
+
+    provider_messages_for_stats = payload.get("messages") if isinstance(payload.get("messages"), list) else []
+    provider_system_chars = len(str(payload.get("system") or "")) + sum(
+        len(str(item.get("content") or ""))
+        for item in provider_messages_for_stats
+        if isinstance(item, dict) and item.get("role") == "system"
+    )
+    prompt_stats = {
+        "raw_message_count": len(messages),
+        "raw_input_chars": _sillytavern_prompt_message_chars(messages),
+        "raw_system_count": raw_system_count,
+        "raw_system_chars": raw_system_chars,
+        "raw_system_dropped": raw_system_count,
+        "provider_message_count": len(provider_messages_for_stats),
+        "provider_system_chars": provider_system_chars,
+        "provider_input_chars": len(str(payload.get("system") or ""))
+        + _sillytavern_prompt_message_chars(provider_messages_for_stats),
+        "history_dropped": history_dropped,
+        "compacted": bool(prompt_compacted),
+    }
 
     def _float_param(name: str, minimum: float, maximum: float) -> None:
         if name not in body:
@@ -17375,6 +18097,9 @@ def prepare_sillytavern_bridge_generation(store: "Store", claims: dict, body: di
         "user_id": user_id,
         "app_id": app_id,
         "conversation_id": conversation_id,
+        "pricing": normalize_model_pricing(settings.get("pricing")),
+        "input_tokens_estimate": estimate_payload_input_tokens(payload),
+        "prompt_stats": prompt_stats,
     }
 
 
@@ -17396,6 +18121,8 @@ def sillytavern_bridge_completion(request_info: dict) -> str:
         data = json.loads(text) if text else {}
     except Exception:
         data = {}
+    usage = extract_token_usage(data)
+    request_info["usage"] = usage
     answer = extract_upstream_chat_answer(data) or extract_sse_answer(text)
     if not answer:
         raise RuntimeError("模型没有返回有效内容，请重试")
@@ -17409,6 +18136,7 @@ def stream_sillytavern_bridge_completion(request_info: dict):
     headers["Accept"] = "text/event-stream"
     emitted = False
     completed = False
+    usage = {"input_tokens": 0, "output_tokens": 0}
     req = Request(
         str(request_info.get("endpoint") or ""),
         data=json_bytes(payload),
@@ -17431,12 +18159,14 @@ def stream_sillytavern_bridge_completion(request_info: dict):
                 event = json.loads(line)
             except Exception:
                 continue
+            usage = merge_token_usage(usage, extract_token_usage(event))
             delta = extract_stream_delta(event)
             if delta:
                 emitted = True
                 yield delta
             if _stream_event_is_terminal(event):
                 completed = True
+    request_info["usage"] = usage
     if not emitted:
         raise RuntimeError("模型没有返回有效内容，请重试")
     if not completed:
@@ -17784,10 +18514,13 @@ def profile_json(user: sqlite3.Row) -> dict:
     avatar_url = ""
     if "avatar_url" in user.keys():
         avatar_url = (user["avatar_url"] or "").strip()
+    if avatar_url in LEGACY_DEFAULT_AVATAR_URLS:
+        avatar_url = DEFAULT_AVATAR_URL
     if avatar_url and avatar_url.startswith("/"):
         avatar_url = public_url(avatar_url)
     if not avatar_url:
-        avatar_url = DEFAULT_AVATAR_URL
+        avatar_url = public_url(DEFAULT_AVATAR_URL)
+    admin = is_admin(user)
     return {
         "id": user["id"],
         "display_id": display_id,
@@ -17801,6 +18534,9 @@ def profile_json(user: sqlite3.Row) -> dict:
         "avatar": avatar_url,
         "avatar_url": avatar_url,
         "email": user["email"],
+        "is_admin": admin,
+        "is_env_admin": user_is_env_admin(user),
+        "role": "admin" if admin else "user",
         "is_new_user": False,
         "is_password_set": True,
         "interface_language": "zh-Hans",
@@ -17817,7 +18553,7 @@ def profile_json(user: sqlite3.Row) -> dict:
             "gender_options": gender,
             "gender_preference": gender,
             "gender_updated_at": str(now_ms()),
-            "is_admin": False,
+            "is_admin": admin,
             "my_search": [],
             "enable_comment_notice": False,
             "sign_reminder_enabled": False,
@@ -18109,6 +18845,10 @@ def public_site_settings_json(settings: dict) -> dict:
             "subscriptions": [],
             "steps": ["充值通道维护中，暂不开放购买和兑换。"],
         })
+    # Keep the embedded dialogue route relative to the current site origin.
+    # This is required for LAN/mobile builds where the browser reaches the
+    # proxy through 172.16/12, 192.168/16 or another private address while
+    # the backend process itself still advertises its loopback URL.
     public["runtime"] = {"dialogue_url": SILLYTAVERN_PUBLIC_URL}
     return public
 
@@ -19048,7 +19788,16 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             request_info = prepare_sillytavern_bridge_generation(self.store, claims, body)
-            self.store.require_credit_points(str(request_info["user_id"]), CHAT_MESSAGE_COST)
+            pricing = normalize_model_pricing(request_info.get("pricing"))
+            input_tokens = int(request_info.get("input_tokens_estimate") or 1)
+            max_output_tokens = _bounded_int(
+                (request_info.get("payload") or {}).get("max_tokens") if isinstance(request_info.get("payload"), dict) else 1024,
+                1024,
+                1,
+                8192,
+            )
+            reserve_cost = model_charge_points(pricing, input_tokens, max_output_tokens)
+            self.store.require_credit_points(str(request_info["user_id"]), reserve_cost)
         except ValueError as exc:
             message = str(exc)[:500] or "invalid request"
             status = 402 if "积分不足" in message else 404 if "not found" in message else 409 if "mismatch" in message else 400
@@ -19077,14 +19826,22 @@ class Handler(BaseHTTPRequestHandler):
         if not stream:
             try:
                 answer = sillytavern_bridge_completion(request_info)
+                usage = request_info.get("usage") if isinstance(request_info.get("usage"), dict) else {}
+                actual_input_tokens = int(usage.get("input_tokens") or request_info.get("input_tokens_estimate") or 1)
+                actual_output_tokens = int(usage.get("output_tokens") or estimate_text_tokens(answer))
+                points_cost = model_charge_points(request_info.get("pricing"), actual_input_tokens, actual_output_tokens)
                 charge = self.store.spend_credit_points(
                     str(request_info["user_id"]),
-                    CHAT_MESSAGE_COST,
+                    points_cost,
                     event_type="sillytavern_chat_cost",
                     summary="角色对话消耗",
                     payload={
                         "app_id": request_info["app_id"],
                         "conversation_id": request_info["conversation_id"],
+                        "model": model,
+                        "pricing": normalize_model_pricing(request_info.get("pricing")),
+                        "input_tokens": actual_input_tokens,
+                        "output_tokens": actual_output_tokens,
                     },
                 )
                 self.send_json(200, {
@@ -19097,7 +19854,7 @@ class Handler(BaseHTTPRequestHandler):
                         "message": {"role": "assistant", "content": answer},
                         "finish_reason": "stop",
                     }],
-                    "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                    "usage": {"prompt_tokens": actual_input_tokens, "completion_tokens": actual_output_tokens, "total_tokens": actual_input_tokens + actual_output_tokens},
                     "homer": charge,
                 })
             except HTTPError as exc:
@@ -19131,17 +19888,28 @@ class Handler(BaseHTTPRequestHandler):
 
         try:
             write_openai_chunk({"role": "assistant"})
+            output_parts: list[str] = []
             for chunk in stream_sillytavern_bridge_completion(request_info):
                 if chunk:
-                    write_openai_chunk({"content": str(chunk)})
+                    text_chunk = str(chunk)
+                    output_parts.append(text_chunk)
+                    write_openai_chunk({"content": text_chunk})
+            usage = request_info.get("usage") if isinstance(request_info.get("usage"), dict) else {}
+            actual_input_tokens = int(usage.get("input_tokens") or request_info.get("input_tokens_estimate") or 1)
+            actual_output_tokens = int(usage.get("output_tokens") or estimate_text_tokens("".join(output_parts)))
+            points_cost = model_charge_points(request_info.get("pricing"), actual_input_tokens, actual_output_tokens)
             self.store.spend_credit_points(
                 str(request_info["user_id"]),
-                CHAT_MESSAGE_COST,
+                points_cost,
                 event_type="sillytavern_chat_cost",
                 summary="角色对话消耗",
                 payload={
                     "app_id": request_info["app_id"],
                     "conversation_id": request_info["conversation_id"],
+                    "model": model,
+                    "pricing": normalize_model_pricing(request_info.get("pricing")),
+                    "input_tokens": actual_input_tokens,
+                    "output_tokens": actual_output_tokens,
                 },
             )
             write_openai_chunk({}, "stop")
@@ -21245,6 +22013,79 @@ class Handler(BaseHTTPRequestHandler):
                 ok = self.store.delete_conversation(conv_id, user["id"])
                 return ok_response({"deleted": ok})
 
+        if normalized.startswith("console/api/web/conversations/") and normalized.endswith("/rename"):
+            parts = normalized.split("/")
+            conv_id = parts[4] if len(parts) >= 6 else ""
+            if not isinstance(body, dict):
+                return error_response("invalid body")
+            try:
+                conversation = self.store.rename_conversation(conv_id, user["id"], body.get("title"))
+            except ValueError as exc:
+                return error_response(str(exc), 400)
+            if not conversation:
+                return error_response("conversation not found", 404)
+            return ok_response({"conversation": conversation})
+
+        if normalized.startswith("console/api/web/conversations/") and normalized.endswith("/pin"):
+            parts = normalized.split("/")
+            conv_id = parts[4] if len(parts) >= 6 else ""
+            if not isinstance(body, dict) or not isinstance(body.get("pinned"), bool):
+                return error_response("pinned must be a boolean", 400)
+            conversation = self.store.set_conversation_pinned(conv_id, user["id"], body["pinned"])
+            if not conversation:
+                return error_response("conversation not found", 404)
+            return ok_response({"conversation": conversation})
+
+        if normalized.startswith("console/api/web/conversations/") and normalized.endswith("/export"):
+            parts = normalized.split("/")
+            conv_id = parts[4] if len(parts) >= 6 else ""
+            exported = self.store.export_conversation(conv_id, user["id"])
+            if not exported:
+                return error_response("conversation not found", 404)
+            return ok_response(exported)
+
+        if normalized == "console/api/web/conversations/import":
+            if not isinstance(body, dict):
+                return error_response("invalid body")
+            source = body.get("conversation") if isinstance(body.get("conversation"), dict) else body
+            app_id = self.store.resolve_local_app_id(str(source.get("app_id") or body.get("app_id") or "").strip())
+            if not app_id:
+                return error_response("app_id is required", 400)
+            try:
+                self.store.versioned_app_for_new_conversation(
+                    app_id, user["id"], str(source.get("version_id") or ""),
+                )
+            except PermissionError:
+                return error_response("role not found", 404)
+            except ValueError as exc:
+                return error_response(str(exc), 400)
+            conv_id = str(uuid.uuid4())
+            title = str(source.get("title") or source.get("app_name") or "导入的对话").strip()[:80]
+            app_name = str(source.get("app_name") or title).strip()[:120]
+            self.store.upsert_conversation(
+                conv_id,
+                user["id"],
+                app_id,
+                app_name=app_name,
+                app_icon=str(source.get("app_icon") or ""),
+                title=title,
+            )
+            try:
+                imported = self.store.sync_sillytavern_chat(
+                    conv_id,
+                    user["id"],
+                    app_id,
+                    body.get("messages") if isinstance(body.get("messages"), list) else [],
+                    title=title,
+                )
+            except ValueError as exc:
+                self.store.delete_conversation(conv_id, user["id"])
+                return error_response(str(exc), 400)
+            return ok_response({
+                **imported,
+                "conversation": self.store.get_conversation(conv_id, user["id"]),
+            })
+
         if normalized.startswith("console/api/web/conversations/") and normalized.endswith("/copy"):
             parts = normalized.split("/")
             if len(parts) >= 5:
@@ -21733,12 +22574,37 @@ class Handler(BaseHTTPRequestHandler):
                     return error_response(str(exc), 400)
                 return ok_response({"preset": preset, "library": self.store.global_prompt_presets()})
 
+            if normalized == "admin/api/global-presets/import-bundle":
+                if self.command.upper() != "POST" or not isinstance(body, dict):
+                    return error_response("invalid body")
+                try:
+                    result = self.store.import_global_preset_bundle(
+                        body.get("preset"),
+                        str(body.get("filename") or ""),
+                    )
+                except ValueError as exc:
+                    return error_response(str(exc), 400)
+                return ok_response(result)
+
             if normalized == "admin/api/global-presets/import-regex":
                 if self.command.upper() != "POST" or not isinstance(body, dict):
                     return error_response("invalid body")
                 try:
                     preset = self.store.import_global_regex_preset(
                         str(body.get("package_file") or body.get("file") or body.get("data_base64") or body.get("data_url") or ""),
+                        str(body.get("filename") or ""),
+                        str(body.get("name") or ""),
+                    )
+                except ValueError as exc:
+                    return error_response(str(exc), 400)
+                return ok_response({"preset": preset, "library": self.store.global_regex_presets()})
+
+            if normalized == "admin/api/global-presets/import-regex-json":
+                if self.command.upper() != "POST" or not isinstance(body, dict):
+                    return error_response("invalid body")
+                try:
+                    preset = self.store.import_global_regex_json(
+                        body.get("preset"),
                         str(body.get("filename") or ""),
                         str(body.get("name") or ""),
                     )

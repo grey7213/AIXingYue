@@ -1,3 +1,5 @@
+import { installDialoguePrewarm } from '/app/assets/js/dialogue-prewarm.js?v=20260830-warm-runtime-v3';
+
 const NAV_ITEMS = [
   { key: 'explore', label: '探索', href: '/app/explore.html', icon: 'M3 12l9-9 9 9M5 10v10h14V10' },
   { key: 'workshop', label: '创作工坊', href: '/app/workshop.html', icon: 'M12 5v14m7-7H5' },
@@ -19,6 +21,23 @@ const MOBILE_ITEMS = [
   { key: 'histories', label: '历史对话', href: '/app/histories.html', icon: NAV_ITEMS[2].icon },
   { key: 'me', label: '我的', href: '/app/me.html', icon: 'M16 7a4 4 0 11-8 0 4 4 0 018 0zM4 21a8 8 0 0116 0' },
 ];
+
+const PULL_REFRESH_PATHS = new Set([
+  '/app/',
+  '/app/index.html',
+  '/app/explore.html',
+  '/app/histories.html',
+  '/app/favorites.html',
+  '/app/community.html',
+  '/app/workshop.html',
+  '/app/me.html',
+  '/app/farm.html',
+  '/app/info.html',
+  '/app/rewards.html',
+  '/app/logs.html',
+]);
+const PULL_REFRESH_ASSET = '/assets/img/brand/pull-refresh-';
+const PULL_REFRESH_VERSION = '?v=20260831-silvercat-v1';
 
 let publicSiteSettingsPromise = null;
 
@@ -86,14 +105,13 @@ export function sidebarHtml(active = 'home', settings = null) {
     </a>`).join('');
   return `
     <a href="/app/" class="app-sidebar__brand">
-      <img src="/assets/img/logo-256.png?v=20260627-logo" alt="">
+      <img src="/assets/img/logo-256.png?v=20260831-silvercat-v1" alt="">
       <span class="name">惑梦（Homer）</span>
     </a>
     <nav class="app-nav">${nav}</nav>
     <a class="app-sidebar__user" href="/app/me.html" x-show="user" title="${escapeHtml(appText(settings, 'shell_profile_title', '进入我的'))}">
       <div class="avatar">
-        <img x-show="user?.avatar_url || user?.avatar" :src="user?.avatar_url || user?.avatar" @error="$el.style.display='none'; $el.nextElementSibling.style.display='flex'" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;">
-        <span x-show="!(user?.avatar_url || user?.avatar)" x-text="(user?.name || '?').slice(0,1).toUpperCase()"></span>
+        <img :src="user?.avatar_url || user?.avatar || '/assets/img/apk/default_avatar.png?v=20260831-silvercat-v1'" @error="$el.src='/assets/img/apk/default_avatar.png?v=20260831-silvercat-v1'" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;">
       </div>
       <div class="meta">
         <div class="nick truncate" x-text="user?.name || ${escapeHtml(jsString(appText(settings, 'shell_guest_name', '旅人')))}"></div>
@@ -204,8 +222,94 @@ function bindShellUtilities(root = document) {
   });
 }
 
+function installPullRefresh() {
+  if (document.documentElement.dataset.homerPullRefresh === '1') return;
+  if (!PULL_REFRESH_PATHS.has(location.pathname)) return;
+  document.documentElement.dataset.homerPullRefresh = '1';
+
+  const indicator = document.createElement('div');
+  indicator.className = 'homer-pull-refresh';
+  indicator.setAttribute('aria-hidden', 'true');
+  const image = document.createElement('img');
+  image.alt = '';
+  image.src = `${PULL_REFRESH_ASSET}ready-64.png${PULL_REFRESH_VERSION}`;
+  indicator.append(image);
+  document.body.append(indicator);
+
+  const completionKey = 'homer.pullRefreshComplete.v1';
+  if (sessionStorage.getItem(completionKey) === location.pathname + location.search) {
+    sessionStorage.removeItem(completionKey);
+    image.src = `${PULL_REFRESH_ASSET}complete-64.png${PULL_REFRESH_VERSION}`;
+    indicator.classList.add('is-visible');
+    indicator.style.transform = 'translate(-50%, 8px) scale(1)';
+    window.setTimeout(() => {
+      indicator.classList.remove('is-visible');
+      indicator.style.transform = 'translate(-50%, -84px) scale(.88)';
+    }, 720);
+  }
+
+  let tracking = false;
+  let startX = 0;
+  let startY = 0;
+  let distance = 0;
+  let armed = false;
+
+  const reset = () => {
+    tracking = false;
+    distance = 0;
+    armed = false;
+    indicator.classList.remove('is-visible', 'is-refreshing');
+    indicator.style.transform = 'translate(-50%, -84px) scale(.88)';
+    image.src = `${PULL_REFRESH_ASSET}ready-64.png${PULL_REFRESH_VERSION}`;
+  };
+
+  window.addEventListener('touchstart', event => {
+    if (event.touches.length !== 1) return;
+    if ((document.scrollingElement?.scrollTop || window.scrollY || 0) > 0) return;
+    if (event.target.closest('input,textarea,select,[contenteditable="true"],dialog')) return;
+    tracking = true;
+    startX = event.touches[0].clientX;
+    startY = event.touches[0].clientY;
+  }, { passive: true });
+
+  window.addEventListener('touchmove', event => {
+    if (!tracking || event.touches.length !== 1) return;
+    const deltaX = event.touches[0].clientX - startX;
+    const deltaY = event.touches[0].clientY - startY;
+    if (deltaY <= 0 || Math.abs(deltaX) > deltaY) {
+      if (deltaY < -8) reset();
+      return;
+    }
+    distance = Math.min(104, deltaY * .52);
+    if (distance < 5) return;
+    event.preventDefault();
+    armed = distance >= 62;
+    indicator.classList.add('is-visible');
+    indicator.style.transform = `translate(-50%, ${Math.round(distance - 52)}px) scale(${(.9 + Math.min(distance, 72) / 720).toFixed(3)})`;
+    image.src = `${PULL_REFRESH_ASSET}${armed ? 'active' : 'ready'}-64.png${PULL_REFRESH_VERSION}`;
+  }, { passive: false });
+
+  const finish = () => {
+    if (!tracking) return;
+    if (!armed) {
+      reset();
+      return;
+    }
+    tracking = false;
+    indicator.classList.add('is-visible', 'is-refreshing');
+    indicator.style.transform = 'translate(-50%, 8px) scale(1)';
+    image.src = `${PULL_REFRESH_ASSET}active-64.png${PULL_REFRESH_VERSION}`;
+    sessionStorage.setItem(completionKey, location.pathname + location.search);
+    window.setTimeout(() => location.reload(), 180);
+  };
+  window.addEventListener('touchend', finish, { passive: true });
+  window.addEventListener('touchcancel', reset, { passive: true });
+}
+
 export function injectLayout(active = 'home') {
   applyShellPreferences();
+  installDialoguePrewarm();
+  installPullRefresh();
   const sidebar = document.querySelector('[data-app-sidebar]');
   if (sidebar) sidebar.innerHTML = sidebarHtml(active);
   const bottom = document.querySelector('[data-app-bottom-nav]');

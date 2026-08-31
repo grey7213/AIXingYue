@@ -48,6 +48,27 @@ const extensionLoadErrors = new Set();
 const getApiUrl = () => extension_settings.apiUrl;
 const sortManifestsByOrder = (a, b) => parseInt(a.loading_order) - parseInt(b.loading_order) || String(a.display_name).localeCompare(String(b.display_name));
 const sortManifestsByName = (a, b) => String(a.display_name).localeCompare(String(b.display_name)) || parseInt(a.loading_order) - parseInt(b.loading_order);
+
+/**
+ * Homer: resolves an extension asset against the document base.
+ *
+ * The runtime is mounted under a cookie-scoped `/module/dialogue/` prefix in
+ * production, and `index.html` points `<base href>` there. Root-relative
+ * `/scripts/...` URLs bypass the base and get answered with a 307 back to the
+ * mounted path, so every extension asset used to cost two client round trips
+ * (measured: 89 such redirects per chat open). Resolving against `document.baseURI`
+ * lands on the same final URL directly. `<base>` is `/` when SillyTavern runs
+ * standalone, so this is a no-op there.
+ *
+ * Callers must all use this helper: mixing resolved and root-relative URLs for
+ * the same module would register it twice in the module map and double-initialise
+ * the extension.
+ * @param {string} path Path below `scripts/extensions/`
+ * @returns {string} Absolute URL
+ */
+function extensionAssetUrl(path) {
+    return new URL(`scripts/extensions/${path}`, document.baseURI).href;
+}
 let connectedToApi = false;
 
 /**
@@ -433,7 +454,7 @@ async function callExtensionHook(name, hookName) {
         return;
     }
 
-    const url = `/scripts/extensions/${name}/${manifest.js}`;
+    const url = extensionAssetUrl(`${name}/${manifest.js}`);
     console.debug(`callExtensionHook: Calling hook "${hookName}" (function "${hookFunctionName}") for extension "${name}"`);
 
     try {
@@ -542,7 +563,7 @@ async function getManifests(names) {
 
     for (const name of names) {
         const promise = new Promise((resolve, reject) => {
-            fetch(`/scripts/extensions/${name}/manifest.json`).then(async response => {
+            fetch(extensionAssetUrl(`${name}/manifest.json`)).then(async response => {
                 if (response.ok) {
                     const json = await response.json();
                     obj[name] = json;
@@ -573,6 +594,8 @@ async function activateExtensions() {
     const extensions = Object.entries(manifests).sort((a, b) => sortManifestsByOrder(a[1], b[1]));
     const extensionNames = extensions.map(x => x[0]);
     const promises = [];
+    /** @type {{name: string, manifest: object, displayName: string, order: number}[]} */
+    const eligible = [];
 
     for (let entry of extensions) {
         const name = entry[0];
@@ -628,24 +651,18 @@ async function activateExtensions() {
         const isDisabled = extension_settings.disabledExtensions.includes(name);
 
         if (meetsModuleRequirements && meetsExtensionDeps && meetsClientMinimumVersion && !isDisabled) {
-            try {
-                console.debug('Activating extension', name);
-                const promise = addExtensionLocale(name, manifest).finally(() =>
-                    Promise.all([addExtensionScript(name, manifest), addExtensionStyle(name, manifest)]),
-                );
-                await promise
-                    .then(() => {
-                        activeExtensions.add(name);
-                        return callExtensionHook(name, 'activate');
-                    })
-                    .catch(err => {
-                        console.log('Could not activate extension', name, err);
-                        extensionLoadErrors.add(t`Extension "${displayName}" failed to load: ${err}`);
-                    });
-                promises.push(promise);
-            } catch (error) {
-                console.error('Could not activate extension', name, error);
-            }
+            // Homer: collected instead of activated inline. The original `await`
+            // here made 18 extensions cost the SUM of their load times (measured
+            // 16.3s of a cold start) because each one pulls its own module subtree
+            // over a ~160ms round trip while the main thread sits idle. Activation
+            // itself still happens in loading_order below.
+            const order = Number.parseInt(manifest.loading_order);
+            eligible.push({
+                name,
+                manifest,
+                displayName,
+                order: Number.isFinite(order) ? order : Number.MAX_SAFE_INTEGER,
+            });
         } else if (!meetsModuleRequirements && !isDisabled) {
             console.warn(t`Extension "${name}" did not load. Missing required Extras module(s): "${missingModules.join(', ')}"`);
             extensionLoadErrors.add(t`Extension "${displayName}" did not load. Missing required Extras module(s): "${missingModules.join(', ')}"`);
@@ -663,8 +680,88 @@ async function activateExtensions() {
         }
     }
 
+    // Homer: warm every eligible extension's module graph at once. `modulepreload`
+    // fetches and parses a module and its dependency subtree but does NOT execute
+    // it, so activation order and extension side effects are untouched — this only
+    // takes the network round trips off the critical path. It only works because
+    // extensionAssetUrl() already resolves against <base>: a preload that crosses
+    // a redirect is aborted by the browser AND poisons the module map entry, which
+    // is exactly how an earlier attempt at this broke every extension.
+    prefetchExtensionAssets(eligible);
+
+    // Activate in loading_order groups. Order is still honoured between groups;
+    // extensions sharing an order value start together, which upstream already
+    // treats as interchangeable (its comparator falls back to display_name).
+    const groups = new Map();
+    for (const item of eligible) {
+        if (!groups.has(item.order)) {
+            groups.set(item.order, []);
+        }
+        groups.get(item.order).push(item);
+    }
+
+    for (const order of [...groups.keys()].sort((a, b) => a - b)) {
+        await Promise.allSettled(groups.get(order).map(({ name, manifest, displayName }) => {
+            try {
+                console.debug('Activating extension', name);
+                const promise = addExtensionLocale(name, manifest).finally(() =>
+                    Promise.all([addExtensionScript(name, manifest), addExtensionStyle(name, manifest)]),
+                );
+                promises.push(promise);
+                return promise
+                    .then(() => {
+                        activeExtensions.add(name);
+                        return callExtensionHook(name, 'activate');
+                    })
+                    .catch(err => {
+                        console.log('Could not activate extension', name, err);
+                        extensionLoadErrors.add(t`Extension "${displayName}" failed to load: ${err}`);
+                    });
+            } catch (error) {
+                console.error('Could not activate extension', name, error);
+                return Promise.resolve();
+            }
+        }));
+    }
+
     await Promise.allSettled(promises);
     $('#extensions_details').toggleClass('warning', extensionLoadErrors.size > 0);
+}
+
+/**
+ * Homer: queues preload hints for every extension entry point and stylesheet.
+ * @param {{name: string, manifest: object}[]} eligible Extensions about to activate
+ */
+function prefetchExtensionAssets(eligible) {
+    for (const { name, manifest } of eligible) {
+        if (manifest.js) {
+            appendPreloadLink('modulepreload', extensionAssetUrl(`${name}/${manifest.js}`));
+        }
+        if (manifest.css) {
+            appendPreloadLink('preload', extensionAssetUrl(`${name}/${manifest.css}`), 'style');
+        }
+    }
+}
+
+/**
+ * Appends one preload hint, skipping duplicates. A warm-up miss must never
+ * surface as a page error, so failures just drop the hint.
+ * @param {string} rel Link relation
+ * @param {string} href Absolute URL to warm
+ * @param {string} [as] Destination type, when the relation requires one
+ */
+function appendPreloadLink(rel, href, as = '') {
+    if (document.head.querySelector(`link[rel="${rel}"][href="${CSS.escape(href)}"]`)) {
+        return;
+    }
+    const link = document.createElement('link');
+    link.rel = rel;
+    link.href = href;
+    if (as) {
+        link.as = as;
+    }
+    link.onerror = () => link.remove();
+    document.head.appendChild(link);
 }
 
 async function connectClickHandler() {
@@ -786,7 +883,7 @@ function addExtensionStyle(name, manifest) {
     }
 
     return new Promise((resolve, reject) => {
-        const url = `/scripts/extensions/${name}/${manifest.css}`;
+        const url = extensionAssetUrl(`${name}/${manifest.css}`);
         const id = sanitizeSelector(`${name}-css`);
 
         if ($(`link[id="${id}"]`).length === 0) {
@@ -818,7 +915,7 @@ function addExtensionScript(name, manifest) {
     }
 
     return new Promise((resolve, reject) => {
-        const url = `/scripts/extensions/${name}/${manifest.js}`;
+        const url = extensionAssetUrl(`${name}/${manifest.js}`);
         const id = sanitizeSelector(`${name}-js`);
         let ready = false;
 
@@ -861,7 +958,7 @@ function addExtensionLocale(name, manifest) {
         return Promise.resolve();
     }
 
-    return fetch(`/scripts/extensions/${name}/${localeFile}`)
+    return fetch(extensionAssetUrl(`${name}/${localeFile}`))
         .then(async response => {
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);

@@ -31,7 +31,18 @@
             const baseElement = document.querySelector('base');
             baseElement?.setAttribute('href', `${dialogueMount}/`);
 
-            const runtimeRootPaths = ['/api', '/csrf-token'];
+            // Every root-relative request listed here would otherwise be answered
+            // by Nginx with a 307 to the same path under the module mount, costing
+            // a full client round trip before the real fetch. Measured on the live
+            // site: 89 such redirects per chat open, 13.0s of accumulated TTFB.
+            // Rewriting them here lands on exactly the URL the 307 pointed at, so
+            // module identity and the cookie-scoped path are unchanged — the only
+            // difference is one less round trip each.
+            const runtimeRootPaths = [
+                '/api', '/csrf-token',
+                '/scripts', '/lib', '/css', '/locales', '/img', '/webfonts', '/sounds',
+                '/version', '/user', '/thumbnail', '/characters', '/backgrounds',
+            ];
             const mountedRuntimeUrl = (value) => {
                 try {
                     const url = new URL(String(value), window.location.href);

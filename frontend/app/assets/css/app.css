@@ -1,6 +1,16 @@
 /* 惑梦（Homer） Web App · 角色卡编辑器参考设计系统 */
 
-@import url('/assets/css/custom.css?v=20260703-fengyue-home3');
+@import url('/assets/css/custom.css?v=20260831-silvercat-v1');
+
+/* 盒模型复位。此前只有 Tailwind 的 preflight 提供 border-box，导致没加载
+   tailwindcss-browser.js 的页面（explore.html / farm.html）里 .app-nav__item
+   的 height:38px + padding:9px 被算成 56px，侧栏被撑开。外壳的盒模型不能依赖
+   一个必须先执行的浏览器端 Tailwind 运行时，所以在这里自带一份。 */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
 
 [x-cloak] { display: none !important; }
 
@@ -86,6 +96,31 @@ html, body { font-size: 16px; line-height: 1.5; color: var(--xy-app-text); }
   position: relative;
   z-index: 1;
 }
+
+/* Mobile pull-to-refresh uses the silver-cat three-state artwork. */
+.homer-pull-refresh {
+  position: fixed;
+  top: max(8px, env(safe-area-inset-top));
+  left: 50%;
+  z-index: 120;
+  width: 58px;
+  height: 58px;
+  padding: 5px;
+  overflow: hidden;
+  border: 1px solid rgba(113, 96, 129, .16);
+  border-radius: 18px;
+  background: rgba(244, 241, 247, .94);
+  box-shadow: 0 10px 26px rgba(57, 43, 68, .18);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -84px) scale(.88);
+  transition: opacity .14s ease, transform .14s ease;
+}
+.homer-pull-refresh.is-visible { opacity: 1; }
+.homer-pull-refresh.is-refreshing { box-shadow: 0 12px 30px rgba(89, 70, 104, .24); }
+.homer-pull-refresh img { width: 100%; height: 100%; display: block; border-radius: 13px; object-fit: cover; }
+@media (hover: hover) and (pointer: fine) { .homer-pull-refresh { display: none; } }
+@media (prefers-reduced-motion: reduce) { .homer-pull-refresh { transition: none; } }
 
 /* ===========================================================
    ✨ 左侧导航 (riliaichat 256px / 14px / 8px pad)
@@ -2370,9 +2405,15 @@ select.xy-input option,
   min-height: 60px;
   padding: 12px 24px;
   border-bottom: 1px solid var(--fy-border);
-  background: color-mix(in srgb, var(--fy-bg) 86%, transparent);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--fy-bg) 84%, transparent) 0%,
+    color-mix(in srgb, var(--fy-bg) 58%, transparent) 60%,
+    color-mix(in srgb, var(--fy-bg) 14%, transparent) 100%
+  );
   backdrop-filter: blur(16px) saturate(125%);
   -webkit-backdrop-filter: blur(16px) saturate(125%);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--fy-text) 8%, transparent);
 }
 
 .app-topbar h1 {
@@ -3425,10 +3466,7 @@ select.xy-input option,
   border-color: var(--fy-accent-2);
 }
 
-/* Editor */
-.editor-toolbar {
-  background: var(--fy-panel);
-}
+/* Editor uses the shared application top-bar treatment above. */
 
 .editor-tip {
   margin: 16px 26px 0;

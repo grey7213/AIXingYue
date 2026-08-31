@@ -1,5 +1,5 @@
 import { api, setToken, clearAuth, isLoggedIn, ApiError } from '/app/assets/js/app-core.js?v=20260717-handoff-merge';
-import { loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260812-license-removal';
+import { loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260831-silvercat-v1';
 
 function safeNextPath() {
   const value = new URLSearchParams(location.search).get('next') || '/app/';

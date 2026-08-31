@@ -132,7 +132,8 @@ function dashboard() {
     syncStore() {
       // 同步管理员状态到 Alpine 全局 store，供顶栏读取
       if (window.Alpine && window.Alpine.store) {
-        window.Alpine.store('user', { isAdmin: this.isAdmin, loggedIn: this.loggedIn });
+        const profileAdmin = !!(this.user?.is_admin || this.user?.is_env_admin || this.user?.role === 'admin');
+        window.Alpine.store('user', { isAdmin: this.isAdmin || profileAdmin, loggedIn: this.loggedIn });
       }
     },
 

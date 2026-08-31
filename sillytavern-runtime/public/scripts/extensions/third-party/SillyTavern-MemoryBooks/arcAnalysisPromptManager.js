@@ -5,6 +5,7 @@ import { getRequestHeaders } from '../../../../script.js';
 import { FILE_NAMES, SCHEMA } from './constants.js';
 import { translate } from '../../../i18n.js';
 import { getBuiltInArcPrompts, getDefaultArcPrompt } from './templatesArcPrompts.js';
+import { userFileExists } from './userFiles.js';
 
 const MODULE_NAME = 'STMemoryBooks-ArcAnalysisPromptManager';
 const PROMPTS_FILE = FILE_NAMES.ARC_PROMPTS_FILE;
@@ -138,14 +139,18 @@ async function loadOverrides(settings = null) {
   let data = null;
 
   try {
-    const response = await fetch(`/user/files/${PROMPTS_FILE}`, {
-      method: 'GET',
-      credentials: 'include',
-      headers: getRequestHeaders(),
-    });
-    if (!response.ok) {
+    const exists = await userFileExists(PROMPTS_FILE);
+    if (!exists) {
       mustWrite = true;
     } else {
+      const response = await fetch(`/user/files/${PROMPTS_FILE}`, {
+        method: 'GET',
+        credentials: 'include',
+        headers: getRequestHeaders(),
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to load consolidation prompts: ${response.status} ${response.statusText}`);
+      }
       const text = await response.text();
       data = JSON.parse(text);
       if (!validatePromptsFile(data)) {

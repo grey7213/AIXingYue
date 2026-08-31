@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>惑梦农场 · 惑梦（Homer）</title>
   <meta name="theme-color" content="#f3eddb">
-  <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png">
-  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260717-handoff-merge">
-  <link rel="stylesheet" href="/app/assets/css/farm.css?v=20260713-farm-v2">
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png?v=20260831-silvercat-v1">
+  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260831-silvercat-v1">
+  <link rel="stylesheet" href="/app/assets/css/farm.css?v=20260831-silvercat-v1">
   <script type="module" src="/app/assets/js/farm.js?v=20260812-license-removal"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
@@ -36,7 +36,7 @@
         </div>
 
         <div class="farm-error" x-show="loadError && !state">
-          <div>!</div><h2>农场暂时没有响应</h2><p x-text="loadError"></p>
+          <img src="/assets/img/brand/network-error-512.png?v=20260831-silvercat-v1" alt=""><h2>农场暂时没有响应</h2><p x-text="loadError"></p>
           <button type="button" @click="loadAll(true)">重新加载</button>
         </div>
 
@@ -46,7 +46,7 @@
               <div>
                 <span class="farm-kicker">今天也要照顾好灵感</span>
                 <h2>欢迎回来，<b x-text="user?.name || '农场主'"></b></h2>
-                <p>种下代码与灵感。每日第一次有效收获，还会得到 <strong x-text="dailyRewardPoints"></strong> 惑梦币。</p>
+              <p>种下代码与灵感。种植消耗农场币，收获返还更多农场币；每日第一次有效收获，还会得到 <strong x-text="dailyRewardPoints"></strong> 惑梦币。</p>
               </div>
               <div class="farm-streak"><span>连续活跃</span><b x-text="streakDays"></b><em>天</em></div>
             </section>
@@ -104,7 +104,7 @@
                 <section class="pixel-panel farm-guide-card">
                   <h2>作物图鉴</h2>
                   <template x-for="seed in seeds" :key="seed.kind">
-                    <div class="farm-seed-row"><span x-html="cropSprite({ cropKind: seed.kind, stage: 4 })"></span><p><b x-text="seed.name"></b><small><em>◆ <span x-text="seed.cost"></span></em> · <span x-text="seed.durationLabel"></span></small></p><strong>+<span x-text="seed.rewardCoins"></span></strong></div>
+                    <div class="farm-seed-row"><span x-html="cropSprite({ cropKind: seed.kind, stage: 4 })"></span><p><b x-text="seed.name"></b><small><em>◆ <span x-text="seed.cost"></span> 农场币</em> · <span x-text="seed.durationLabel"></span></small></p><strong>+<span x-text="seed.rewardCoins"></span> 农场币</strong></div>
                   </template>
                 </section>
               </aside>
@@ -140,7 +140,7 @@
                 <span class="farm-seed-sprite" x-html="cropSprite({ cropKind: seed.kind, stage: 4 })"></span>
                 <strong x-text="seed.name"></strong>
                 <small x-text="seed.durationLabel + '成熟'"></small>
-                <span class="farm-seed-economy"><em>◆ <b x-text="seed.cost"></b></em><i>→</i><strong>◆ <b x-text="seed.rewardCoins"></b></strong></span>
+                <span class="farm-seed-economy"><em>◆ <b x-text="seed.cost"></b> 农场币</em><i>→</i><strong>◆ <b x-text="seed.rewardCoins"></b> 农场币</strong></span>
               </button>
             </template>
           </div>
