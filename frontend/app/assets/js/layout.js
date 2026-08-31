@@ -37,7 +37,7 @@ const PULL_REFRESH_PATHS = new Set([
   '/app/logs.html',
 ]);
 const PULL_REFRESH_ASSET = '/assets/img/brand/pull-refresh-';
-const PULL_REFRESH_VERSION = '?v=20260831-silvercat-v1';
+const PULL_REFRESH_VERSION = '?v=20260901-download-warm';
 
 let publicSiteSettingsPromise = null;
 
@@ -105,13 +105,13 @@ export function sidebarHtml(active = 'home', settings = null) {
     </a>`).join('');
   return `
     <a href="/app/" class="app-sidebar__brand">
-      <img src="/assets/img/logo-256.png?v=20260831-silvercat-v1" alt="">
+      <img src="/assets/img/logo-256.png?v=20260901-download-warm" alt="">
       <span class="name">惑梦（Homer）</span>
     </a>
     <nav class="app-nav">${nav}</nav>
     <a class="app-sidebar__user" href="/app/me.html" x-show="user" title="${escapeHtml(appText(settings, 'shell_profile_title', '进入我的'))}">
       <div class="avatar">
-        <img :src="user?.avatar_url || user?.avatar || '/assets/img/apk/default_avatar.png?v=20260831-silvercat-v1'" @error="$el.src='/assets/img/apk/default_avatar.png?v=20260831-silvercat-v1'" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;">
+        <img :src="user?.avatar_url || user?.avatar || '/assets/img/apk/default_avatar.png?v=20260901-download-warm'" @error="$el.src='/assets/img/apk/default_avatar.png?v=20260901-download-warm'" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;">
       </div>
       <div class="meta">
         <div class="nick truncate" x-text="user?.name || ${escapeHtml(jsString(appText(settings, 'shell_guest_name', '旅人')))}"></div>

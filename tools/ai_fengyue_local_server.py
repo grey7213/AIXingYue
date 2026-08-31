@@ -1392,20 +1392,23 @@ def site_settings_defaults() -> dict:
     return {
         "home": {
             "nav_tagline": "让想象 · 照进二次元",
-            "status_text": "服务运行中 · v1.0 · 全球节点",
+            "status_text": "服务运行中 · 客户端 v1.14.0 · 全球节点",
             "hero_title": "让想象·照进二次元",
             "hero_subtitle": "与你心中那个角色，说一句你想说很久的话",
             "hero_secondary": "AI 角色扮演 · 剧情创作 · 沉浸互动",
             "primary_cta_text": "开启我的角色",
             "primary_cta_href": "/app/login.html?next=%2Fapp%2F",
-            "secondary_cta_text": "先看看 App",
-            "secondary_cta_href": "/app/login.html?next=%2Fapp%2F",
+            "secondary_cta_text": "下载客户端",
+            "secondary_cta_href": "/download/ai-xingyue-latest.apk",
             "trust_text": f"30 秒注册 · {NEW_USER_INITIAL_POINTS} 惑梦币体验 · 约 {NEW_USER_INITIAL_CHAT_TIMES} 次回复 · 邮箱验证",
             "preview_title": "不只是聊天，而是一段真实的相遇",
             "preview_subtitle": "每一个角色都有独立的世界观、记忆和情感反应",
-            "download_title": "网页端暂时开放",
-            "download_subtitle": "APK 下载渠道维护中，请先使用 Web App。",
-            "download_button_text": "打开 Web App",
+            # 开放态是默认值。维护态由下方 `if not APK_DOWNLOAD_ENABLED`
+            # 覆写 —— 此前这里写的是维护期文案，而开放态反而没有默认值，
+            # APK 上线后站点仍显示「网页端暂时开放」。
+            "download_title": "下载 Android 客户端",
+            "download_subtitle": "网页端和客户端同账号、同积分、同角色库，随时切换。",
+            "download_button_text": "下载 APK",
             "features_title": "核心功能",
             "features_subtitle": "为每一位创作者打造的 AI 角色扮演体验",
             "feature_cards": [
@@ -1422,10 +1425,10 @@ def site_settings_defaults() -> dict:
                 {"label": "架构", "value": "全机型通用"},
                 {"label": "语言", "value": "简体中文"},
             ],
-            "download_note": "首次安装可能需要在系统设置中允许\"未知来源\"应用。如下载未自动开始，请在浏览器中使用复制链接到下载工具。",
+            "download_note": "首次安装需在系统设置中允许「未知来源」应用。可直接覆盖安装旧版本，聊天记录与积分不受影响。",
             "faq_title": "常见问题",
             "faq_items": [
-                {"q": "如何注册账号？", "a": f"打开 Web App 后选择「注册」，输入邮箱获取验证码，填写昵称和密码即可完成注册。注册成功后会自动登录并赠送 {NEW_USER_INITIAL_POINTS} 惑梦币，约 {NEW_USER_INITIAL_CHAT_TIMES} 次角色回复。"},
+                {"q": "如何注册账号？", "a": f"下载客户端或直接打开网页端，选择「注册」，输入邮箱获取验证码，填写昵称和密码即可完成注册。注册成功后会自动登录并赠送 {NEW_USER_INITIAL_POINTS} 惑梦币，约 {NEW_USER_INITIAL_CHAT_TIMES} 次角色回复。两端同账号、同积分、同角色库。"},
                 {"q": "积分是做什么用的？", "a": "积分用于消耗调用 AI 模型生成内容。不同模型每次对话消耗不同积分。农场每日首次有效收获可获得额外积分，也可通过充值获取更多积分。"},
                 {"q": "安装时提示风险怎么办？", "a": "由于本应用为定制版本未上架应用商店，部分系统会提示来源未知。请在系统「安全设置」中允许浏览器或文件管理器安装应用，并按提示安装即可。"},
                 {"q": "忘记密码怎么办？", "a": "在登录页点击「忘记密码」，输入注册邮箱获取验证码后即可设置新密码。验证码 10 分钟内有效。"},
@@ -1464,9 +1467,9 @@ def site_settings_defaults() -> dict:
             "shell_guest_name": "旅人",
             "shell_points_suffix": "积分",
             "info_topbar_title": "信息中心",
-            "info_download_button_text": "打开 Web App",
-            "info_eyebrow": "惑梦（Homer） Web 同步状态",
-            "info_title": "网页端\n同账号 · 同积分 · 同角色库。",
+            "info_download_button_text": "下载客户端",
+            "info_eyebrow": "惑梦（Homer） 同步状态",
+            "info_title": "网页端与客户端\n同账号 · 同积分 · 同角色库。",
             "info_copy": "",
             "info_stat_upstream_label": "上游本地化角色",
             "info_stat_official_label": "公开官方角色",
@@ -1585,8 +1588,8 @@ def site_settings_defaults() -> dict:
             "balance_paid_label": "充值",
             "balance_reward_label": "奖励",
             "daily_checkin_title": "惑梦农场",
-            "download_title": "打开 Web App",
-            "download_subtitle": "客户端渠道维护中",
+            "download_title": "下载客户端",
+            "download_subtitle": "Android APK · 与网页端同账号",
             "admin_card_title": "管理后台",
             "admin_card_subtitle": "查看数据 · 管理用户",
             "api_title": "API 接入信息",
@@ -18792,9 +18795,12 @@ def public_site_settings_json(settings: dict) -> dict:
     if isinstance(faq_items, list):
         for item in faq_items:
             if isinstance(item, dict) and "如何注册" in str(item.get("q") or ""):
-                item["a"] = f"打开 Web App 后选择「注册」，输入邮箱获取验证码，填写昵称和至少 8 位密码即可完成注册。注册成功后会自动登录并赠送 {NEW_USER_INITIAL_POINTS} 惑梦币，约 {NEW_USER_INITIAL_CHAT_TIMES} 次角色回复。"
+                item["a"] = f"下载客户端或直接打开网页端，选择「注册」，输入邮箱获取验证码，填写昵称和至少 8 位密码即可完成注册。注册成功后会自动登录并赠送 {NEW_USER_INITIAL_POINTS} 惑梦币，约 {NEW_USER_INITIAL_CHAT_TIMES} 次角色回复。两端同账号、同积分、同角色库。"
     if not APK_DOWNLOAD_ENABLED:
         home["primary_cta_href"] = "/app/login.html?next=%2Fapp%2F"
+        home["secondary_cta_text"] = "先看看 App"
+        home["secondary_cta_href"] = "/app/login.html?next=%2Fapp%2F"
+        home["status_text"] = "服务运行中 · 全球节点"
         home["download_title"] = "网页端暂时开放"
         home["download_subtitle"] = "APK 下载渠道维护中，请先使用 Web App。"
         home["download_button_text"] = "打开 Web App"

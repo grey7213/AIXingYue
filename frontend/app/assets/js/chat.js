@@ -135,7 +135,7 @@ function markReady(roleName = '') {
   flushRuntimeCommands();
   postRuntimeCommand('request-state', {}, { queue: false });
   document.body.classList.remove('is-error');
-  launcherVisual.src = '/assets/img/brand/launch-loading-1080x1920.png?v=20260831-silvercat-v1';
+  launcherVisual.src = '/assets/img/brand/launch-loading-1080x1920.png?v=20260901-download-warm';
   launcher.setAttribute('aria-busy', 'false');
   window.setTimeout(() => {
     closeDrawers();
@@ -311,7 +311,7 @@ function renderHistory() {
     button.dataset.appId = appId;
     const avatar = document.createElement('span');
     avatar.className = 'preview-history-avatar';
-    const image = safePreviewImage(conversation?.app_icon) || new URL('/assets/img/apk/avatar.webp?v=20260831-silvercat-v1', location.href).href;
+    const image = safePreviewImage(conversation?.app_icon) || new URL('/assets/img/apk/avatar.webp?v=20260901-download-warm', location.href).href;
     avatar.style.backgroundImage = `url("${image.replaceAll('"', '%22')}")`;
     const strong = document.createElement('strong');
     strong.textContent = roleName;
@@ -355,7 +355,7 @@ function fail(error) {
   console.error('对话能力启动失败', error);
   showShell();
   document.body.classList.add('is-error');
-  launcherVisual.src = '/assets/img/brand/network-error-512.png?v=20260831-silvercat-v1';
+  launcherVisual.src = '/assets/img/brand/network-error-512.png?v=20260901-download-warm';
   networkDetail.textContent = error?.message || '本地会话仍可阅读，恢复网络后可以继续对话。';
   if (error instanceof ApiError && Number(error.code) === 401) {
     const next = location.pathname + location.search + location.hash;
@@ -577,7 +577,7 @@ async function switchConversation(appId, conversationId) {
 async function start() {
   clearReadyTimer();
   runtimeReady = false;
-  launcherVisual.src = '/assets/img/brand/launch-loading-1080x1920.png?v=20260831-silvercat-v1';
+  launcherVisual.src = '/assets/img/brand/launch-loading-1080x1920.png?v=20260901-download-warm';
   showShell();
   history = readCachedHistory();
   renderHistory();
@@ -601,7 +601,7 @@ frame.addEventListener('error', () => fail(new Error('对话能力连接失败�
 retry.addEventListener('click', () => void start());
 networkRetry.addEventListener('click', () => void start());
 previewAvatar.addEventListener('error', () => {
-  const fallback = new URL('/assets/img/apk/avatar.webp?v=20260831-silvercat-v1', location.href).href;
+  const fallback = new URL('/assets/img/apk/avatar.webp?v=20260901-download-warm', location.href).href;
   if (previewAvatar.src !== fallback) previewAvatar.src = fallback;
 });
 menuButton.addEventListener('click', () => openDrawer('left'));

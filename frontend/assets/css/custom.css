@@ -314,7 +314,7 @@ select.xy-input option:hover {
   height: 20px;
   border: 0;
   border-radius: 6px;
-  background: url('/assets/img/brand/pull-refresh-active-64.png?v=20260831-silvercat-v1') center / contain no-repeat;
+  background: url('/assets/img/brand/pull-refresh-active-64.png?v=20260901-download-warm') center / contain no-repeat;
   animation: xy-loader-breathe .9s ease-in-out infinite;
 }
 
@@ -1337,4 +1337,43 @@ aside.md\:flex button[class*="bg-violet"] {
   -webkit-backdrop-filter: blur(16px) saturate(132%);
   backdrop-filter: blur(16px) saturate(132%);
   box-shadow: 0 10px 28px rgba(3, 2, 12, .12);
+}
+
+/* 下载区：原先压着一层 Tailwind 的紫→洋红→蓝渐变（from-violet-600/20
+   via-fuchsia-500/10 to-blue-500/20）。那是深紫星空主题时代的配色，站点
+   2026-07 换成暖米浅色皮肤后，冷色渐变在暖底上显得突兀，而 cloak 层只
+   中和了 bg-* 纯色类、没管 gradient 工具类。这里改用品牌暖橙做极浅的
+   底纹，保留「下载区比周围亮一点」的视觉重点，但与整站同谱。 */
+.xy-download-wash {
+  background: linear-gradient(
+    135deg,
+    rgba(239, 154, 95, .10) 0%,
+    rgba(245, 185, 64, .05) 45%,
+    rgba(232, 131, 78, .09) 100%
+  );
+  pointer-events: none;
+}
+
+/* logo 的紫色外发光同理，换成暖调，并压低强度 —— 浅底上不需要星空时代
+   那么重的光晕。 */
+.xy-download-logo {
+  filter: drop-shadow(0 6px 18px rgba(232, 131, 78, .28));
+}
+
+/* 兵底：只中和「铺满整块的冷色渐变遮罩」，也就是 absolute + inset-0 那种
+   会大面积透到暖底上的用法。刻意不用宽泛的 [class*="from-violet-"] ——
+   功能卡那 6 个 14x14 图标底也用同一批工具类（from-violet-500/30 等），
+   它们是 6 种不同色调的浅色小方块，是有意的设计，一刀切会把它们压成同一
+   个橙色。 */
+[class*="absolute"][class*="inset-0"][class*="from-violet-"],
+[class*="absolute"][class*="inset-0"][class*="from-fuchsia-"],
+[class*="absolute"][class*="inset-0"][class*="from-purple-"],
+[class*="absolute"][class*="inset-0"][class*="via-fuchsia-"],
+[class*="absolute"][class*="inset-0"][class*="to-blue-"],
+[class*="absolute"][class*="inset-0"][class*="to-indigo-"] {
+  background-image: linear-gradient(
+    135deg,
+    rgba(239, 154, 95, .10) 0%,
+    rgba(232, 131, 78, .07) 100%
+  ) !important;
 }

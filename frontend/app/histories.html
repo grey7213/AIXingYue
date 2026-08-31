@@ -4,10 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>历史会话 · 惑梦（Homer）</title>
-  <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png?v=20260831-silvercat-v1">
-  <link rel="icon" href="/favicon.ico?v=20260831-silvercat-v1">
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png?v=20260901-download-warm">
+  <link rel="icon" href="/favicon.ico?v=20260901-download-warm">
   <script src="/assets/vendor/tailwindcss-browser.js?v=20260713-local"></script>
-  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260831-silvercat-v1">
+  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260901-download-warm">
   <script type="module" src="/app/assets/js/hub-pages.js?v=20260830-fast-chat"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
@@ -29,7 +29,7 @@
           <template x-for="c in conversations" :key="c.id">
             <div class="list-row history-row" x-data="{ open: false }" :class="{ 'is-menu-open': open }" @click.away="open = false">
               <a class="history-row__main flex items-center gap-4 min-w-0 text-inherit no-underline" :href="conversationHref(c)">
-                <img :src="c.app_icon || '/assets/img/apk/avatar.webp?v=20260831-silvercat-v1'" alt="" onerror="this.src='/assets/img/apk/avatar.webp?v=20260831-silvercat-v1'">
+                <img :src="c.app_icon || '/assets/img/apk/avatar.webp?v=20260901-download-warm'" alt="" onerror="this.src='/assets/img/apk/avatar.webp?v=20260901-download-warm'">
                 <div class="min-w-0">
                   <div class="title truncate" x-text="conversationTitle(c)"></div>
                   <div class="meta truncate" x-text="conversationPreview(c)"></div>
