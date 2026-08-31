@@ -50,8 +50,13 @@ def main() -> int:
         "if (rule.duration_ms > 0)",
         "this.spineLayer.dispose()",
         "publicWorld = world ? { ...world, content: '' } : null",
-        "height: 100dvh",
-        "min-height: 100dvh",
+        # 舞台必须铺满动态视口。原先断言的是 `height: 100dvh` + `min-height: 100dvh`
+        # 两个字面量，但铺满其实由 `position: fixed; inset: 0` 保证，dvh 只是冗余。
+        # 2026-08-31 用 tools/verify_card_stage_viewport.py 在真实 Chromium 上量过
+        # 5 个视口 × 3 种写法（含 dvh 完全不被支持的老引擎降级），stage 尺寸全部
+        # 等于视口，所以这里改断结构不变量，不再锁具体单位。
+        "position: fixed; inset: 0",
+        ".ce-stage { position: absolute; inset: 0",
     )
     require(
         schema,

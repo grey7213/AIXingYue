@@ -4,6 +4,9 @@
 
 ## 当前主要入口
 
+- 交接 ZIP 合并与 1.14.0 (265) 上线：`homer-zip-merge-20260831-tasks.md`（三方合并方法、从 ZIP 改回的 9 处、新增 6 个验证工具）
+- 生产数据本地备份：`homer-production-backup-20260824-requirements.md`、`homer-production-backup-20260824-design.md`、`homer-production-backup-20260824-tasks.md`
+- 对话与模型选择生产恢复：`homer-chat-model-recovery-20260820-requirements.md`、`homer-chat-model-recovery-20260820-design.md`、`homer-chat-model-recovery-20260820-tasks.md`
 - 新服务器迁移与部署：`homer-server-migration-20260818-requirements.md`、`homer-server-migration-20260818-design.md`、`homer-server-migration-20260818-tasks.md`
 - 惑梦消息头与统一流式输出：`homer-message-header-streaming-20260812-requirements.md`、`homer-message-header-streaming-20260812-design.md`、`homer-message-header-streaming-20260812-tasks.md`
 - 惑梦网页端 APK 壳：`homer-web-apk-20260812-requirements.md`、`homer-web-apk-20260812-design.md`、`homer-web-apk-20260812-tasks.md`
