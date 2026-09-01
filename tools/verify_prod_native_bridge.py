@@ -15,6 +15,10 @@ from playwright.sync_api import sync_playwright
 
 BASE = "https://patcher.villainy.top"
 ARTIFACTS = Path(__file__).resolve().parents[1] / "output" / "playwright" / "prod-native-bridge"
+# 每轮上线要改的两个常量。硬编码上一轮的值会让断言永远为真/永远为假 —— 之前
+# 这里写死 v1.14.1 和 20260901-download-warm，本轮 267 上线时两条都失去意义。
+EXPECTED_VERSION = "v1.14.2"
+STALE_TOKENS = ("20260901-download-warm", "20260901-native-bridge", "20260831-silvercat-v1")
 WATCH = (
     "/module/dialogue/scripts/extensions/homer-bridge/index.js",
     "/module/dialogue/scripts/extensions/homer-bridge/style.css",
@@ -67,8 +71,8 @@ def check_pages(browser) -> list[dict]:
         out.append({
             "name": name,
             "viewport": f"{width}x{height}",
-            "version_text_visible": "v1.14.1" in page.content(),
-            "stale_cache_token": "20260901-download-warm" in page.content(),
+            "version_text_visible": EXPECTED_VERSION in page.content(),
+            "stale_cache_token": any(tok in page.content() for tok in STALE_TOKENS),
             "console_errors": console_errors,
             "page_errors": page_errors,
             "network_errors": net_errors,
@@ -91,7 +95,13 @@ def main() -> int:
 
     runtime = payload["runtime"]
     bad = [s for s in runtime["watched_asset_status"].values() if s >= 400]
-    failed = bool(bad or runtime["server_errors"]) or any(
+    # 首页必须显示本轮版本号：站点文案有两处（后端默认值 + index.html 静态兜底），
+    # 少改一处就会出现「站点说旧版、下载给新包」。
+    version_missing = [p["name"] for p in payload["pages"]
+                       if p["name"].startswith("home") and not p["version_text_visible"]]
+    if version_missing:
+        print(f"FAIL: {EXPECTED_VERSION} not rendered on {version_missing}", file=sys.stderr)
+    failed = bool(bad or runtime["server_errors"] or version_missing) or any(
         p["console_errors"] or p["page_errors"] or p["network_errors"] or p["stale_cache_token"]
         for p in payload["pages"])
     return 1 if failed else 0

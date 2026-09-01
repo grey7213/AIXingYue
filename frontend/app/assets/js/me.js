@@ -1,5 +1,8 @@
 import { api, requireAuth, getCachedUser, setCachedUser, clearAuth, formatDateTime, ApiError } from '/app/assets/js/app-core.js?v=20260717-handoff-merge';
-import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260901-native-bridge';
+import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260901-persistent-pages';
+import { clearPageCache, readPageCache, writePageCache } from '/app/assets/js/page-cache.js?v=20260901-persistent-pages';
+
+const ME_CACHE_SCOPE = 'me';
 
 function mePage() {
   return {
@@ -21,19 +24,23 @@ function mePage() {
 
     async init() {
       injectLayout('me');
-      this.siteSettings = await loadPublicSiteSettings().catch(() => null);
+      void loadPublicSiteSettings().then(settings => { this.siteSettings = settings; }).catch(() => null);
       if (!requireAuth()) return;
       const cached = getCachedUser();
       if (cached) {
         this.user = cached;
         this.syncProfileForm(cached);
+        this.restoreSnapshot(cached);
       }
-      try {
-        const profile = await api.profile();
-        this.applyProfile(profile);
-        await this.refreshPoints();
-        await this.loadPersona();
-      } catch (err) {
+      const [profileResult] = await Promise.allSettled([
+        api.profile(),
+        this.refreshPoints(),
+        this.loadPersona(),
+      ]);
+      if (profileResult.status === 'fulfilled') {
+        this.applyProfile(profileResult.value);
+      } else {
+        const err = profileResult.reason;
         if (err instanceof ApiError && err.code === 401) {
           clearAuth();
           location.replace('/app/login.html?next=' + encodeURIComponent(location.pathname));
@@ -46,6 +53,7 @@ function mePage() {
       if (profile) {
         this.syncProfileForm(profile);
         setCachedUser(profile);
+        this.persistSnapshot();
       }
     },
 
@@ -58,7 +66,7 @@ function mePage() {
     },
 
     profileAvatar() {
-      return this.profileForm.avatar_url || this.user?.avatar_url || this.user?.avatar || '/assets/img/apk/default_avatar.png?v=20260901-native-bridge';
+      return this.profileForm.avatar_url || this.user?.avatar_url || this.user?.avatar || '/assets/img/apk/default_avatar.png?v=20260901-persistent-pages';
     },
 
     profileDisplayId() {
@@ -66,7 +74,7 @@ function mePage() {
     },
 
     onAvatarError(event) {
-      if (event?.target) event.target.src = '/assets/img/apk/default_avatar.png?v=20260901-native-bridge';
+      if (event?.target) event.target.src = '/assets/img/apk/default_avatar.png?v=20260901-persistent-pages';
     },
 
     async onAvatarChange(event) {
@@ -113,6 +121,7 @@ function mePage() {
         const r = await api.getPersona();
         const data = r?.data || r || {};
         this.persona = { name: data.name || '', description: data.description || '' };
+        this.persistSnapshot();
       } catch { /* noop */ }
     },
 
@@ -122,6 +131,7 @@ function mePage() {
         const r = await api.setPersona(this.persona.name || '', this.persona.description || '');
         const data = r?.data || r || {};
         this.persona = { name: data.name || '', description: data.description || '' };
+        this.persistSnapshot();
         this.showToast(this.accountText('persona_saved_text', '人设已保存，聊天时将以此身份与角色互动'), 'success');
       } catch (err) {
         this.showToast(err.message || this.accountText('save_failed_text', '保存失败'), 'error');
@@ -178,6 +188,7 @@ function mePage() {
         this.balance = this.normalizeBalance(data.balance || data);
         this.deposit = data.deposit || this.deposit;
         this.points = this.balance.points;
+        this.persistSnapshot();
       } catch (err) {
         this.showToast(this.dashboardText('points_failed_text', '获取积分失败'), 'error');
       }
@@ -227,9 +238,32 @@ function mePage() {
     async doLogout() {
       // 先请求后端清除 HttpOnly 登录 Cookie，再清理本地标记
       try { await api.logout(); } catch {}
+      clearPageCache(ME_CACHE_SCOPE, this.user);
       clearAuth();
       this.showToast(this.dashboardText('logout_success_text', '已退出登录'), 'info');
       setTimeout(() => location.replace('/app/login.html'), 600);
+    },
+
+    restoreSnapshot(user = this.user) {
+      const state = readPageCache(ME_CACHE_SCOPE, user);
+      if (!state) return false;
+      this.balance = this.normalizeBalance(state.balance || {});
+      this.points = this.balance.points;
+      this.deposit = state.deposit || null;
+      this.persona = {
+        name: String(state.persona?.name || ''),
+        description: String(state.persona?.description || ''),
+      };
+      return true;
+    },
+
+    persistSnapshot() {
+      if (!this.user) return;
+      writePageCache(ME_CACHE_SCOPE, this.user, {
+        balance: this.balance,
+        deposit: this.deposit,
+        persona: this.persona,
+      });
     },
   };
 }

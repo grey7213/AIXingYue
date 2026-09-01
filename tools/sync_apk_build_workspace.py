@@ -34,7 +34,7 @@ def digest(path: Path) -> str:
 
 def main() -> int:
     copied: list[str] = []
-    skipped_new: list[str] = []
+    added: list[str] = []
     for subtree in SUBTREES:
         source_root = REPO / subtree
         target_root = WORKSPACE / subtree
@@ -45,23 +45,22 @@ def main() -> int:
             if not relevant(rel):
                 continue
             target = target_root / rel
-            if not target.exists():
-                skipped_new.append(f"{subtree}/{rel.as_posix()}")
+            # 新增模块也必须过去。之前这里是「工作区没有就跳过」，结果
+            # page-cache.js 这种新文件不会进 APK，explore.js/me.js 的 import
+            # 在包内 404，两页直接白屏。
+            new_file = not target.exists()
+            if not new_file and filecmp.cmp(source, target, shallow=False):
                 continue
-            if filecmp.cmp(source, target, shallow=False):
-                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
             assert digest(source) == digest(target)
-            copied.append(f"{subtree}/{rel.as_posix()}")
+            (added if new_file else copied).append(f"{subtree}/{rel.as_posix()}")
 
-    print(f"synced {len(copied)} files into {WORKSPACE}")
+    print(f"synced {len(copied)} changed + {len(added)} new files into {WORKSPACE}")
+    for rel in added:
+        print(f"  + {rel}")
     for rel in copied:
-        print(f"  {rel}")
-    print(f"\nnot present in workspace, left alone: {len(skipped_new)}")
-    for rel in skipped_new[:10]:
-        print(f"  {rel}")
-    if len(skipped_new) > 10:
-        print(f"  ... +{len(skipped_new) - 10} more")
+        print(f"    {rel}")
     return 0
 
 

@@ -139,7 +139,7 @@ function markReady(roleName = '') {
   flushRuntimeCommands();
   postRuntimeCommand('request-state', {}, { queue: false });
   document.body.classList.remove('is-error');
-  launcherVisual.src = '/assets/img/brand/launch-loading-1080x1920.png?v=20260901-native-bridge';
+  launcherVisual.src = '/assets/img/brand/launch-loading-1080x1920.png?v=20260901-persistent-pages';
   launcher.setAttribute('aria-busy', 'false');
   window.setTimeout(() => {
     closeDrawers();
@@ -315,7 +315,7 @@ function renderHistory() {
     button.dataset.appId = appId;
     const avatar = document.createElement('span');
     avatar.className = 'preview-history-avatar';
-    const image = safePreviewImage(conversation?.app_icon) || new URL('/assets/img/apk/avatar.webp?v=20260901-native-bridge', location.href).href;
+    const image = safePreviewImage(conversation?.app_icon) || new URL('/assets/img/apk/avatar.webp?v=20260901-persistent-pages', location.href).href;
     avatar.style.backgroundImage = `url("${image.replaceAll('"', '%22')}")`;
     const strong = document.createElement('strong');
     strong.textContent = roleName;
@@ -359,7 +359,7 @@ function fail(error) {
   console.error('对话能力启动失败', error);
   showShell();
   document.body.classList.add('is-error');
-  launcherVisual.src = '/assets/img/brand/network-error-512.png?v=20260901-native-bridge';
+  launcherVisual.src = '/assets/img/brand/network-error-512.png?v=20260901-persistent-pages';
   networkDetail.textContent = error?.message || '本地会话仍可阅读，恢复网络后可以继续对话。';
   if (error instanceof ApiError && Number(error.code) === 401) {
     const next = location.pathname + location.search + location.hash;
@@ -454,8 +454,12 @@ function allowedNavigationPath(value) {
   try {
     const target = new URL(String(value || ''), location.href);
     if (target.origin !== location.origin) return '';
-    const allowed = ['/app/', '/app/login.html', '/app/histories.html', '/app/explore.html'];
-    return allowed.some(path => target.pathname === path || target.pathname.startsWith(path)) ? target.pathname + target.search + target.hash : '';
+    // 运行时抽屉的导航项现在改发 navigate 消息而不是自己跳转（主站是
+    // frame-ancestors 'none'，在 dialogue iframe 里加载 /dashboard.html 会被浏览器
+    // 拒绝、直接黑屏）。所以这里必须接住整站两个非 /app/ 页面。
+    const appPage = target.pathname === '/app' || target.pathname.startsWith('/app/');
+    const standalonePage = ['/dashboard.html', '/admin.html'].includes(target.pathname);
+    return appPage || standalonePage ? target.pathname + target.search + target.hash : '';
   } catch {
     return '';
   }
@@ -581,7 +585,7 @@ async function switchConversation(appId, conversationId) {
 async function start() {
   clearReadyTimer();
   runtimeReady = false;
-  launcherVisual.src = '/assets/img/brand/launch-loading-1080x1920.png?v=20260901-native-bridge';
+  launcherVisual.src = '/assets/img/brand/launch-loading-1080x1920.png?v=20260901-persistent-pages';
   showShell();
   history = readCachedHistory();
   renderHistory();
@@ -605,7 +609,7 @@ frame.addEventListener('error', () => fail(new Error('对话能力连接失败�
 retry.addEventListener('click', () => void start());
 networkRetry.addEventListener('click', () => void start());
 previewAvatar.addEventListener('error', () => {
-  const fallback = new URL('/assets/img/apk/avatar.webp?v=20260901-native-bridge', location.href).href;
+  const fallback = new URL('/assets/img/apk/avatar.webp?v=20260901-persistent-pages', location.href).href;
   if (previewAvatar.src !== fallback) previewAvatar.src = fallback;
 });
 menuButton.addEventListener('click', () => openDrawer('left'));

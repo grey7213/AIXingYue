@@ -1,5 +1,5 @@
 import { api, requireAuth, getCachedUser, setCachedUser, formatDateTime, ApiError } from '/app/assets/js/app-core.js?v=20260720-community-versions';
-import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260901-native-bridge';
+import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260901-persistent-pages';
 
 const FIELD_LABELS = {
   name: '姓名',

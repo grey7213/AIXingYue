@@ -37,7 +37,9 @@ const PULL_REFRESH_PATHS = new Set([
   '/app/logs.html',
 ]);
 const PULL_REFRESH_ASSET = '/assets/img/brand/pull-refresh-';
-const PULL_REFRESH_VERSION = '?v=20260901-native-bridge';
+const PULL_REFRESH_VERSION = '?v=20260901-persistent-pages';
+const HOST_CHANNEL = 'homer:dialogue-host:v1';
+const PREFETCH_ROUTES = ['/app/explore.html', '/app/favorites.html', '/app/workshop.html', '/app/me.html'];
 
 let publicSiteSettingsPromise = null;
 
@@ -105,13 +107,13 @@ export function sidebarHtml(active = 'home', settings = null) {
     </a>`).join('');
   return `
     <a href="/app/" class="app-sidebar__brand">
-      <img src="/assets/img/logo-256.png?v=20260901-native-bridge" alt="">
+      <img src="/assets/img/logo-256.png?v=20260901-persistent-pages" alt="">
       <span class="name">惑梦（Homer）</span>
     </a>
     <nav class="app-nav">${nav}</nav>
     <a class="app-sidebar__user" href="/app/me.html" x-show="user" title="${escapeHtml(appText(settings, 'shell_profile_title', '进入我的'))}">
       <div class="avatar">
-        <img :src="user?.avatar_url || user?.avatar || '/assets/img/apk/default_avatar.png?v=20260901-native-bridge'" @error="$el.src='/assets/img/apk/default_avatar.png?v=20260901-native-bridge'" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;">
+        <img :src="user?.avatar_url || user?.avatar || '/assets/img/apk/default_avatar.png?v=20260901-persistent-pages'" @error="$el.src='/assets/img/apk/default_avatar.png?v=20260901-persistent-pages'" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;">
       </div>
       <div class="meta">
         <div class="nick truncate" x-text="user?.name || ${escapeHtml(jsString(appText(settings, 'shell_guest_name', '旅人')))}"></div>
@@ -222,6 +224,43 @@ function bindShellUtilities(root = document) {
   });
 }
 
+function installEmbeddedTopNavigation() {
+  if (window.parent === window || document.documentElement.dataset.homerTopNavigation === '1') return;
+  document.documentElement.dataset.homerTopNavigation = '1';
+  document.addEventListener('click', event => {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    const anchor = event.target?.closest?.('a[href]');
+    if (!anchor || anchor.target === '_blank' || anchor.hasAttribute('download')) return;
+    let target;
+    try { target = new URL(anchor.href, location.href); } catch { return; }
+    if (target.origin !== location.origin) return;
+    if (!(target.pathname.startsWith('/app/') || ['/dashboard.html', '/admin.html'].includes(target.pathname))) return;
+    event.preventDefault();
+    window.parent.postMessage({
+      channel: HOST_CHANNEL,
+      version: 1,
+      type: 'navigate',
+      target: target.pathname + target.search + target.hash,
+    }, location.origin);
+  }, true);
+}
+
+function prefetchPrimaryRoutes() {
+  if (document.documentElement.dataset.homerPrimaryPrefetch === '1') return;
+  document.documentElement.dataset.homerPrimaryPrefetch = '1';
+  const schedule = window.requestIdleCallback || (callback => window.setTimeout(callback, 120));
+  schedule(() => {
+    for (const href of PREFETCH_ROUTES) {
+      if (href === location.pathname || document.head.querySelector(`link[rel="prefetch"][href="${href}"]`)) continue;
+      const link = document.createElement('link');
+      link.rel = 'prefetch';
+      link.as = 'document';
+      link.href = href;
+      document.head.append(link);
+    }
+  });
+}
+
 function installPullRefresh() {
   if (document.documentElement.dataset.homerPullRefresh === '1') return;
   if (!PULL_REFRESH_PATHS.has(location.pathname)) return;
@@ -308,6 +347,8 @@ function installPullRefresh() {
 
 export function injectLayout(active = 'home') {
   applyShellPreferences();
+  installEmbeddedTopNavigation();
+  prefetchPrimaryRoutes();
   installDialoguePrewarm();
   installPullRefresh();
   const sidebar = document.querySelector('[data-app-sidebar]');

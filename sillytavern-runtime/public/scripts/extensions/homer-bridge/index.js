@@ -4164,6 +4164,14 @@ function buildRuntimeUi() {
         const link = document.createElement('a');
         link.className = 'homer-main-navigation__item';
         link.href = siteUrl(path);
+        // 在 APK / 站点 iframe 里让宿主换页，而不是在 iframe 内部整页跳转。宿主侧是
+        // 常驻 WebView，收到 navigate 会原地切页并保留旧页面；直接在 iframe 里加载
+        // 站点页也会被主站的 frame-ancestors 'none' 拒掉。
+        link.addEventListener('click', event => {
+            if (!canNotifyHost()) return;
+            event.preventDefault();
+            notifyHost('navigate', { target: path });
+        });
         link.append(
             createElement('span', 'homer-main-navigation__icon', icon),
             createElement('span', '', label),

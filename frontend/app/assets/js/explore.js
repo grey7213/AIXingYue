@@ -1,10 +1,12 @@
 import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js?v=20260717-handoff-merge';
-import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260901-native-bridge';
+import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260901-persistent-pages';
+import { readPageCache, writePageCache } from '/app/assets/js/page-cache.js?v=20260901-persistent-pages';
 
 const DEFAULT_PAGE_SIZE = 12;
 const INITIAL_RANDOM_SEED = Math.floor(Math.random() * 2147483647);
 const BROWSE_STATE_KEY = 'ai_xingyue_home_browse_state';
 const BROWSE_RESTORE_KEY = 'ai_xingyue_home_restore_once';
+const EXPLORE_CACHE_SCOPE = 'explore';
 
 async function fetchExplorePage(params, signal) {
   const response = await fetch(`/go/api/explore/search?${new URLSearchParams(params)}`, {
@@ -100,6 +102,7 @@ function explorePage() {
       if (!requireAuth()) return;
       const cached = getCachedUser();
       if (cached) this.user = cached;
+      const restoredPersistentState = !restoredBrowseState && this.restorePersistentState(cached);
 
       const accountPromise = (async () => {
         try {
@@ -126,7 +129,9 @@ function explorePage() {
           }
         }
       })();
-      const listPromise = restoredBrowseState ? Promise.resolve() : this.loadList(false);
+      const listPromise = restoredBrowseState
+        ? Promise.resolve()
+        : this.loadList(true, { keepVisible: restoredPersistentState });
       await Promise.allSettled([settingsPromise, listPromise, accountPromise]);
       if (restoredBrowseState) this.restoreBrowseScroll(restoredBrowseState.scrollY, restoredBrowseState.clickedId);
     },
@@ -237,16 +242,18 @@ function explorePage() {
       }));
     },
 
-    async loadList(reset = false) {
+    async loadList(reset = false, { keepVisible = false } = {}) {
       if (!reset && (this.loading || !this.hasMore)) return;
       if (reset) {
         this._listEpoch += 1;
         this._listAbortController?.abort();
         this.page = 1;
-        this.cards = [];
-        this.featuredPool = [];
-        this.hasMore = true;
-        this.total = 0;
+        if (!keepVisible) {
+          this.cards = [];
+          this.featuredPool = [];
+          this.hasMore = true;
+          this.total = 0;
+        }
         if (this.activeSort === 'random') this.randomSeed = Math.floor(Math.random() * 2147483647);
       }
       if (this._listEpoch === 0) this._listEpoch = 1;
@@ -278,19 +285,21 @@ function explorePage() {
             .map((raw, index) => normalizeCard(raw, this.siteSettings?.app_home || {}, index))
             .filter(Boolean);
         }
-        const seen = new Set(this.cards.map(card => card.id));
+        const baseCards = requestPage === 1 ? [] : this.cards;
+        const seen = new Set(baseCards.map(card => card.id));
         const normalized = list
           .map((raw, index) => normalizeCard(raw, this.siteSettings?.app_home || {}, index))
           .filter(card => card && !seen.has(card.id));
-        this.cards = [...this.cards, ...normalized];
+        this.cards = [...baseCards, ...normalized];
         const total = parseInt(data.total ?? this.cards.length, 10);
         this.total = Number.isNaN(total) ? this.cards.length : total;
         const receivedCount = Array.isArray(list) ? list.length : 0;
         this.hasMore = this.cards.length < this.total && receivedCount > 0;
         this.page = requestPage + 1;
+        this.persistState();
       } catch (err) {
         // 上游不可达时静默
-        if (err?.name !== 'AbortError' && requestEpoch === this._listEpoch) this.hasMore = false;
+        if (err?.name !== 'AbortError' && requestEpoch === this._listEpoch && !this.cards.length) this.hasMore = false;
       } finally {
         if (requestEpoch === this._listEpoch && this._listAbortController === requestController) {
           this._listAbortController = null;
@@ -345,6 +354,7 @@ function explorePage() {
           clickedId: card?.id || '',
         }));
       } catch {}
+      this.persistState();
     },
 
     bindBrowseRestoreEvents() {
@@ -369,7 +379,9 @@ function explorePage() {
       window.addEventListener('focus', () => setTimeout(restore, 40));
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') setTimeout(restore, 40);
+        else this.persistState();
       });
+      window.addEventListener('pagehide', () => this.persistState());
     },
 
     restoreBrowseState() {
@@ -418,6 +430,45 @@ function explorePage() {
             try { sessionStorage.removeItem(BROWSE_RESTORE_KEY); } catch {}
           }, 520);
         });
+      });
+    },
+
+    restorePersistentState(user = this.user) {
+      const state = readPageCache(EXPLORE_CACHE_SCOPE, user);
+      if (!state || !Array.isArray(state.cards) || !state.cards.length) return false;
+      this.page = Number(state.page) || 2;
+      this.pageSize = Number(state.pageSize) || DEFAULT_PAGE_SIZE;
+      this.total = Number(state.total) || state.cards.length;
+      this.hasMore = state.hasMore !== false;
+      this.searchKeyword = String(state.searchKeyword || '');
+      this.activeCategory = state.activeCategory || 'all';
+      this.activeSort = state.activeSort || 'random';
+      this.activeRank = state.activeRank || 'daily';
+      this.activeZone = state.activeZone === 'all' ? 'all' : 'clean';
+      this.randomSeed = Number(state.randomSeed) || this.randomSeed;
+      this.pictureless = !!state.pictureless;
+      this.cards = state.cards.slice(0, 80);
+      this.featuredPool = Array.isArray(state.featuredPool) ? state.featuredPool.slice(0, 2) : [];
+      this.syncAdvancedForm();
+      return true;
+    },
+
+    persistState() {
+      if (!this.user || !this.cards.length) return;
+      writePageCache(EXPLORE_CACHE_SCOPE, this.user, {
+        page: this.page,
+        pageSize: this.pageSize,
+        total: this.total,
+        hasMore: this.hasMore,
+        searchKeyword: this.searchKeyword,
+        activeCategory: this.activeCategory,
+        activeSort: this.activeSort,
+        activeRank: this.activeRank,
+        activeZone: this.activeZone,
+        randomSeed: this.randomSeed,
+        pictureless: this.pictureless,
+        cards: this.cards.slice(0, 80),
+        featuredPool: this.featuredPool.slice(0, 2),
       });
     },
   };
