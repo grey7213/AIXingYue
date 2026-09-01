@@ -4368,9 +4368,10 @@ function buildRuntimeUi() {
     bindComposerAttachmentButton();
     renderPresetLists();
     flushHostNotices();
-    if (window.matchMedia('(min-width: 761px)').matches) {
-        setDrawerOpen('left');
-    }
+    // Navigation is a drawer on every viewport.  Opening it automatically on
+    // desktop/landscape makes the background runtime visibly rearrange the
+    // local first frame several seconds after launch.
+    setDrawerOpen();
 }
 
 async function startNewConversation() {

@@ -4,10 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>社区 · 惑梦（Homer）</title>
-  <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png?v=20260901-download-warm">
-  <link rel="icon" href="/favicon.ico?v=20260901-download-warm">
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png?v=20260901-native-bridge">
+  <link rel="icon" href="/favicon.ico?v=20260901-native-bridge">
   <script src="/assets/vendor/tailwindcss-browser.js?v=20260713-local"></script>
-  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260901-download-warm">
+  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260901-native-bridge">
   <script type="module" src="/app/assets/js/community.js?v=20260812-license-removal"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
   <style>
@@ -140,7 +140,7 @@
                 <template x-for="row in rankings" :key="row.app_id">
                   <article class="cm-rank">
                     <span class="cm-rank__no" x-text="row.rank"></span>
-                    <img :src="row.cover_url || row.cover || row.icon || '/assets/img/apk/avatar.webp?v=20260901-download-warm'" alt="" onerror="this.src='/assets/img/apk/avatar.webp?v=20260901-download-warm'">
+                    <img :src="row.cover_url || row.cover || row.icon || '/assets/img/apk/avatar.webp?v=20260901-native-bridge'" alt="" onerror="this.src='/assets/img/apk/avatar.webp?v=20260901-native-bridge'">
                     <div class="min-w-0"><a :href="`/app/character.html?id=${encodeURIComponent(row.app_id)}`" x-text="row.name || row.app_name || row.app_id"></a><small x-text="`${row.votes || 0} 票${row.owner_name ? ` · ${row.owner_name}` : ''}`"></small></div>
                     <button type="button" class="xy-btn xy-btn-ghost text-xs" :class="{ 'is-active': row.voted }" @click="vote(row)" x-text="row.voted ? '已投票' : '投票'"></button>
                   </article>

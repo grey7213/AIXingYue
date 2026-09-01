@@ -56,8 +56,12 @@ const pendingCommands = [];
 
 function nativeCall(name, ...args) {
   try {
-    const method = window.HomerNative?.[name];
-    return typeof method === 'function' ? method(...args) : undefined;
+    const bridge = window.HomerNative;
+    // The method must be invoked with the injected object as receiver. A
+    // detached reference throws "Java bridge method can't be invoked on a
+    // non-injected object", which silently turned every native cache read and
+    // write into undefined — so conversation_cache never got a single row.
+    return typeof bridge?.[name] === 'function' ? bridge[name](...args) : undefined;
   } catch {
     return undefined;
   }
@@ -135,7 +139,7 @@ function markReady(roleName = '') {
   flushRuntimeCommands();
   postRuntimeCommand('request-state', {}, { queue: false });
   document.body.classList.remove('is-error');
-  launcherVisual.src = '/assets/img/brand/launch-loading-1080x1920.png?v=20260901-download-warm';
+  launcherVisual.src = '/assets/img/brand/launch-loading-1080x1920.png?v=20260901-native-bridge';
   launcher.setAttribute('aria-busy', 'false');
   window.setTimeout(() => {
     closeDrawers();
@@ -311,7 +315,7 @@ function renderHistory() {
     button.dataset.appId = appId;
     const avatar = document.createElement('span');
     avatar.className = 'preview-history-avatar';
-    const image = safePreviewImage(conversation?.app_icon) || new URL('/assets/img/apk/avatar.webp?v=20260901-download-warm', location.href).href;
+    const image = safePreviewImage(conversation?.app_icon) || new URL('/assets/img/apk/avatar.webp?v=20260901-native-bridge', location.href).href;
     avatar.style.backgroundImage = `url("${image.replaceAll('"', '%22')}")`;
     const strong = document.createElement('strong');
     strong.textContent = roleName;
@@ -355,7 +359,7 @@ function fail(error) {
   console.error('对话能力启动失败', error);
   showShell();
   document.body.classList.add('is-error');
-  launcherVisual.src = '/assets/img/brand/network-error-512.png?v=20260901-download-warm';
+  launcherVisual.src = '/assets/img/brand/network-error-512.png?v=20260901-native-bridge';
   networkDetail.textContent = error?.message || '本地会话仍可阅读，恢复网络后可以继续对话。';
   if (error instanceof ApiError && Number(error.code) === 401) {
     const next = location.pathname + location.search + location.hash;
@@ -577,7 +581,7 @@ async function switchConversation(appId, conversationId) {
 async function start() {
   clearReadyTimer();
   runtimeReady = false;
-  launcherVisual.src = '/assets/img/brand/launch-loading-1080x1920.png?v=20260901-download-warm';
+  launcherVisual.src = '/assets/img/brand/launch-loading-1080x1920.png?v=20260901-native-bridge';
   showShell();
   history = readCachedHistory();
   renderHistory();
@@ -601,7 +605,7 @@ frame.addEventListener('error', () => fail(new Error('对话能力连接失败�
 retry.addEventListener('click', () => void start());
 networkRetry.addEventListener('click', () => void start());
 previewAvatar.addEventListener('error', () => {
-  const fallback = new URL('/assets/img/apk/avatar.webp?v=20260901-download-warm', location.href).href;
+  const fallback = new URL('/assets/img/apk/avatar.webp?v=20260901-native-bridge', location.href).href;
   if (previewAvatar.src !== fallback) previewAvatar.src = fallback;
 });
 menuButton.addEventListener('click', () => openDrawer('left'));
@@ -665,5 +669,11 @@ previewInput.addEventListener('input', () => {
   previewInput.style.height = 'auto';
   previewInput.style.height = `${Math.min(128, previewInput.scrollHeight)}px`;
 });
+
+// The local conversation shell is already fully interactive at this point.
+// Tell the Android container to reveal it now; the heavier dialogue runtime
+// continues warming in the background and reports its own readiness later.
+document.documentElement.dataset.homerShellReady = 'true';
+nativeCall('notifyShellReady', location.href);
 
 void start();

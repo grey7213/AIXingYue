@@ -314,7 +314,7 @@ select.xy-input option:hover {
   height: 20px;
   border: 0;
   border-radius: 6px;
-  background: url('/assets/img/brand/pull-refresh-active-64.png?v=20260901-download-warm') center / contain no-repeat;
+  background: url('/assets/img/brand/pull-refresh-active-64.png?v=20260901-native-bridge') center / contain no-repeat;
   animation: xy-loader-breathe .9s ease-in-out infinite;
 }
 

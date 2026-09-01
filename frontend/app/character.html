@@ -4,10 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>角色详情 · 惑梦（Homer）</title>
-  <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png?v=20260901-download-warm">
-  <link rel="icon" href="/favicon.ico?v=20260901-download-warm">
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png?v=20260901-native-bridge">
+  <link rel="icon" href="/favicon.ico?v=20260901-native-bridge">
   <script src="/assets/vendor/tailwindcss-browser.js?v=20260713-local"></script>
-  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260901-download-warm">
+  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260901-native-bridge">
   <script type="module" src="/app/assets/js/character.js?v=20260812-license-removal"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
@@ -32,7 +32,7 @@
 
       <section x-show="!loading && card" class="app-page-pad max-w-6xl mx-auto grid lg:grid-cols-[380px_1fr] gap-6 character-detail-layout">
         <div class="detail-cover">
-          <img :src="card?.cover || card?.icon || '/assets/img/apk/avatar.webp?v=20260901-download-warm'" :alt="card?.name" referrerpolicy="no-referrer" onerror="this.src='/assets/img/apk/avatar.webp?v=20260901-download-warm'">
+          <img :src="card?.cover || card?.icon || '/assets/img/apk/avatar.webp?v=20260901-native-bridge'" :alt="card?.name" referrerpolicy="no-referrer" onerror="this.src='/assets/img/apk/avatar.webp?v=20260901-native-bridge'">
           <div class="detail-cover__shade"></div>
           <div class="detail-cover__caption">
             <span x-text="card?.source === 'user' ? characterText('user_badge', '用户角色') : characterText('official_badge', '官方角色')"></span>

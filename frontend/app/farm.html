@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>惑梦农场 · 惑梦（Homer）</title>
   <meta name="theme-color" content="#f3eddb">
-  <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png?v=20260901-download-warm">
-  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260901-download-warm">
-  <link rel="stylesheet" href="/app/assets/css/farm.css?v=20260901-download-warm">
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png?v=20260901-native-bridge">
+  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260901-native-bridge">
+  <link rel="stylesheet" href="/app/assets/css/farm.css?v=20260901-native-bridge">
   <script type="module" src="/app/assets/js/farm.js?v=20260812-license-removal"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
 </head>
@@ -36,7 +36,7 @@
         </div>
 
         <div class="farm-error" x-show="loadError && !state">
-          <img src="/assets/img/brand/network-error-512.png?v=20260901-download-warm" alt=""><h2>农场暂时没有响应</h2><p x-text="loadError"></p>
+          <img src="/assets/img/brand/network-error-512.png?v=20260901-native-bridge" alt=""><h2>农场暂时没有响应</h2><p x-text="loadError"></p>
           <button type="button" @click="loadAll(true)">重新加载</button>
         </div>
 

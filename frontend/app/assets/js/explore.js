@@ -1,5 +1,5 @@
 import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js?v=20260717-handoff-merge';
-import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260901-download-warm';
+import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260901-native-bridge';
 
 const DEFAULT_PAGE_SIZE = 12;
 const INITIAL_RANDOM_SEED = Math.floor(Math.random() * 2147483647);

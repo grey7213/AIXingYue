@@ -4,6 +4,7 @@
 
 ## 当前主要入口
 
+- 首屏本地壳接管与 1.14.1 (266) 上线：`homer-native-shell-handover-20260901-tasks.md`（覆盖更新包增量合并、WebView Java 桥 receiver bug、七场景实机验收）
 - 交接 ZIP 合并与 1.14.0 (265) 上线：`homer-zip-merge-20260831-tasks.md`（三方合并方法、从 ZIP 改回的 9 处、新增 6 个验证工具）
 - 生产数据本地备份：`homer-production-backup-20260824-requirements.md`、`homer-production-backup-20260824-design.md`、`homer-production-backup-20260824-tasks.md`
 - 对话与模型选择生产恢复：`homer-chat-model-recovery-20260820-requirements.md`、`homer-chat-model-recovery-20260820-design.md`、`homer-chat-model-recovery-20260820-tasks.md`
