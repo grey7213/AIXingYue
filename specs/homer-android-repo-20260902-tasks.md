@@ -107,9 +107,53 @@ violations` 挡下，加回来才通。CI 上报的 check 名确认是 `build`�
 fork 路线（任何人，我零操作，首个 PR 要我点 Approve and run）与 collaborator
 路线（省掉 fork，发 Release 的必要条件）。`read`/`triage` 建不了 Release。
 
+## 首个外部 PR 的实测（2026-09-03）
+
+@thebasui 从 fork 提了 PR #2「修复历史会话与新建对话路由」：99 增 5 删，
+改 `HomerActivity.switchPersistentPage`、加 1 个单测、带 1 个 web 补丁。
+流程整体走通了，但暴露两处工具链缺陷。
+
+### 缺陷一：缓存命中时补丁全军覆没
+
+PR #2 首跑 CI 在「落地 PR 内的 web 补丁」失败，三个文件全报
+`does not match index`，而补丁 preimage 哈希与 pin 的 blob 逐字节一致。
+
+根因：`git apply` 判断目标文件「未修改」用的是 index 里的 stat（mtime/size/inode），
+不是内容哈希。CI 从 `actions/cache` 解包 `.web-cache` 时 mtime 全是新的，
+内容没动的文件也被判成已修改。只有缓存命中那一路会踩到 —— PR #1 是首次跑、
+缓存未命中、现场 clone，index stat 是新写的，所以没暴露。
+
+修复：`apply_web_patches.py` 落补丁前先 `git update-index --refresh`（PR #3）。
+本地把四个目标文件 mtime 改旧复现过：不带修复报 3 个 `does not match index`
+与 CI 日志一致，带修复 `[落地]` 通过；另在临时仓库确认内容真有差异时
+refresh 之后 `git apply` 仍然失败，检查强度没被削弱。
+
+### 缺陷二：基线推进后旧补丁必须删
+
+`push_web_base.py` 把 pin 推到 `f418c3f` 之后，`web-patches/` 里那个已落地的
+补丁让 `apply_web_patches.py --strict` 报「基线不符」，之后每个 PR 都会红灯。
+MAINTAINER.md 的「推进 web 基线」已补上删补丁这一步（和提交 pin 同一个提交）。
+
+### 走过的完整路径
+
+1. fork PR 的 workflow 要在 Actions 页点 Approve and run —— 实测确认
+   `gh api -X POST .../actions/runs/<id>/approve` 也能批
+2. `gh pr update-branch 2` 让分支跟上 `main`（strict 规则要求），
+   更新后又产生一个新的 `action_required` run，要再批一次
+3. 本地独立验证：`testDebugUnitTest assembleDebug` + `verify_apk_assets.py`
+   （109 个前端文件缺 0 个），不只信 CI
+4. web 补丁 `git apply -3` 落进主仓库并单独提交
+5. `gh pr merge 2 --squash --delete-branch`
+6. `push_web_base.py` 推进基线 → 删旧补丁 + 提交 pin
+7. 版本号 267/1.14.2 → 268/1.14.3，`sync_apk_build_workspace.py` +
+   robocopy 同步到 `E:\homer-apk-1140`，`assembleRelease` → zipalign →
+   apksigner，拆包确认 `assets/client/web/` 里是修复后的代码
+8. `publish_homer_apk.py` 发到生产，`release-1.14.3-268` 发到
+   homer-android-apk 的 Releases
+
 ## 待办
 
-- [ ] 收第一个外部 PR，验证补丁落地流程在真实分歧下的表现
+- [x] 收第一个外部 PR，验证补丁落地流程在真实分歧下的表现（PR #2，见上）
 - [ ] 有人要发 Release 时给 homer-android-apk 的 write
 
 ## 风险
@@ -121,5 +165,10 @@ fork 路线（任何人，我零操作，首个 PR 要我点 Approve and run）�
   `~DEFAULT_BRANCH`，不挡 `web-base`
 - 仓库无 LICENSE 文件。构建编入 AGPL-3.0 的 SillyTavern，README 已说明，
   但本项目自有代码的许可仍未声明
+- `hub-pages.js` 里 `groupConversations` / `archived_conversations` 现在没人调用，
+  `archiveLabel` 也永远返回空串（`archive_count` 只有分组逻辑会写）。
+  PR #2 没清，这次发版也没顺手删 —— 留给下次改历史页时一起处理
+- 这一版没在真机/模拟器上点过历史页。本机 MuMu 已不在（`adb devices` 空），
+  只做了拆包核对与单测。多存档恢复这条路的端到端行为未经人工验收
 
 
