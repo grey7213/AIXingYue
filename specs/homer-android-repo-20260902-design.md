@@ -24,11 +24,12 @@ Java 桥 receiver 修复。这些回退在 diff 里看不出来，它们表现�
 | 仓库 | 可见性 | 内容 |
 | --- | --- | --- |
 | `grey7213/AIXingYue` | 公开 | 主仓库。web 端真源，完整工作区 |
-| `grey7213/homer-android` | 私有 | `main`：原生壳 + 脚本；`web-base`：web 两棵树的孤立分支 |
-| `grey7213/homer-android-apk` | 私有 | 只走 Releases |
+| `grey7213/homer-android` | 公开 | `main`：原生壳 + 脚本；`web-base`：web 两棵树的孤立分支 |
+| `grey7213/homer-android-apk` | 公开 | 只走 Releases |
 
-两个新仓库都私有：原生壳源码、内置补丁机制、服务端职责文档不适合公开。
-代价是贡献者要逐个邀请为 collaborator（`push` 权限），Actions 分钟数计费。
+两个新仓库最初建成私有，同日转公开。公开换到三样东西：ruleset 免费（私有仓要
+GitHub Pro 才能设 required status checks）、Actions 分钟不计费、任何人 fork 都能提 PR
+而不必我逐个邀请。转之前审计过凭据，结论见 tasks 文档的「转公开前的凭据审计」。
 
 ## web 端为什么不进 homer-android
 
@@ -61,7 +62,8 @@ Java 桥 receiver 修复。这些回退在 diff 里看不出来，它们表现�
 改成在 homer-android 里开孤立分支 `web-base`，只含那两棵树。`tools/push_web_base.py`
 从主仓库 HEAD 取 tree、`commit-tree` 造孤立提交、推上去、更新 pin。
 校验过 `web-base:frontend` 与主仓库 `HEAD:frontend` 的 tree SHA 逐字节一致。
-公开仓一个字不动，`main` 保持 1.8 MB，贡献者本来就有这个私有仓的权限。
+AIXingYue 一个字不动，`main` 保持 1.8 MB。（写这段时 homer-android 还是私有，
+转公开后 `web-base` 也随之公开 —— 内容与已公开的 AIXingYue 那两棵树一致，不新增暴露面。）
 
 ## web 改动为什么走 patch
 
@@ -102,9 +104,12 @@ Java 桥 receiver 修复。这些回退在 diff 里看不出来，它们表现�
 `assembleDebug` → 校验资源完整性 → 传 debug APK 当 artifact（14 天）。
 
 `.web-cache` 整体走一个缓存 key（`node_modules` 就在它里面，分两个缓存会因路径
-重叠打架）。私有仓的 `web-base` 靠一条 `url.insteadOf` 全局改写规则带上
+重叠打架）。仓库还私有时，`web-base` 靠一条 `url.insteadOf` 全局改写规则带上
 `github.token` —— `actions/checkout` 的凭据只写进它自己的 `.git/config`，
-bootstrap 在 `.web-cache/tree` 另起仓库拿不到。
+bootstrap 在 `.web-cache/tree` 另起仓库拿不到。转公开后这步删掉了。
+
+`main` 用 ruleset 锁成必须过 PR 且 `build` 绿灯，bypass 给 admin。check 名必须
+与 workflow 上报的一致（这里是 job id `build`），对不上会让 PR 永远卡在等待。
 
 ## 成品包
 
@@ -122,3 +127,8 @@ APK 单包 40 MB 以上。三个方案对比：
 - pin 更新后必须把 `web-base.json` 提交到 `main`，否则贡献者 bootstrap
   报「基线动了而 pin 没跟上」。`push_web_base.py` 结尾会提示这条命令。
 - 贡献者拿不到正式签名私钥，交的都是 debug 包。正式签名仍在我这边。
+- 仓库转公开后 Releases 里的 debug 包任何人可下。那些包 `debuggable` 打开且指向
+  生产服务器，`homer-android-apk/README.md` 里明确写了普通用户应去下载区拿正式版。
+- `non_fast_forward` 只作用于 `~DEFAULT_BRANCH`，不挡 `web-base` 的 force push —— 这是有意的。
+- 两个仓库都没有 LICENSE。构建编入 AGPL-3.0 的 SillyTavern，README 已说明，
+  但自有代码的许可仍未声明。
