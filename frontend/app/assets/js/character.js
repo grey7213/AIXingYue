@@ -360,7 +360,11 @@ function characterPage() {
         });
         const data = result?.data || result || {};
         if (!data.conversation_id) throw new Error('未能创建会话');
-        location.href = `/app/chat.html?conv_id=${encodeURIComponent(data.conversation_id)}`;
+        const params = new URLSearchParams({
+          app_id: String(data.app_id || this.card.id),
+          conversation_id: String(data.conversation_id),
+        });
+        location.href = `/app/chat.html?${params}`;
       } catch (error) {
         this.startError = error?.message || '创建版本会话失败，请稍后重试';
       } finally {

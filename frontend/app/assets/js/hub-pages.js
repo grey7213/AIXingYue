@@ -154,7 +154,7 @@ export function historiesPage() {
       this.loading = true;
       try {
         const r = await api.conversations();
-        this.conversations = this.groupConversations(r?.data?.list || []);
+        this.conversations = (r?.data?.list || []).map(item => this.normalizeConversation(item));
       } finally { this.loading = false; }
     },
     async toggleLike(c, event) {
