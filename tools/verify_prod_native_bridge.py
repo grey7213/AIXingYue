@@ -17,8 +17,9 @@ BASE = "https://patcher.villainy.top"
 ARTIFACTS = Path(__file__).resolve().parents[1] / "output" / "playwright" / "prod-native-bridge"
 # 每轮上线要改的两个常量。硬编码上一轮的值会让断言永远为真/永远为假 —— 之前
 # 这里写死 v1.14.1 和 20260901-download-warm，本轮 267 上线时两条都失去意义。
-EXPECTED_VERSION = "v1.14.2"
-STALE_TOKENS = ("20260901-download-warm", "20260901-native-bridge", "20260831-silvercat-v1")
+EXPECTED_VERSION = "v1.14.4"
+STALE_TOKENS = ("20260901-download-warm", "20260901-native-bridge", "20260831-silvercat-v1",
+                "20260830-warm-runtime-v3")
 WATCH = (
     "/module/dialogue/scripts/extensions/homer-bridge/index.js",
     "/module/dialogue/scripts/extensions/homer-bridge/style.css",

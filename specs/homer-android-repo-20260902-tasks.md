@@ -151,10 +151,65 @@ MAINTAINER.md 的「推进 web 基线」已补上删补丁这一步（和提交 
 8. `publish_homer_apk.py` 发到生产，`release-1.14.3-268` 发到
    homer-android-apk 的 Releases
 
+## 第二个外部 PR（2026-09-04，PR #4 → 1.14.4/269）
+
+@thebasui 提了 PR #4「修复重复建会话并让历史存档本地优先打开」：纯 web 补丁，
+177 行，改 5 个文件，无原生壳改动。流程本身没再出新问题（缓存那条已被 PR #3 修掉，
+CI 一次绿），但查出了 web 前端交付链上的两件事。
+
+### 端点有第二条建会话路径
+
+`dialogue/session` 在只给 `app_id`、不给 `conversation_id` 时会自己 `upsert_conversation`
+（`tools/ai_fengyue_local_server.py` 20220 行附近），和 `conversations/start` 并列。
+角色页的预热正好命中这条路，所以每张新卡多一条空壳存档。后端直连实测：
+`?app_id=X&launch_only=1` 新增 1 条会话，而隐藏帧启动时那个不带任何 id 的
+`?launch_only=1` 探测新增 0 条 —— 写验证脚本时必须区分这两个，否则断言会误报。
+
+### 缓存串只 bump 了一半（本轮的真实缺口）
+
+补丁把 `layout.js` 里指向 `dialogue-prewarm.js` 的令牌换成
+`20260904-instant-history-v1`，但引用 `layout.js` 的 10 处令牌全部没动，仍是
+`20260901-persistent-pages`。APK 的 `ClientAssetStore` 对 `.js` 发
+`public, max-age=31536000, immutable`，nginx 那边 `/app/assets/` 是 `expires 1h`。
+
+用真实 `frontend/` 树 + 这套响应头复现（`E:\tmp` 下的一次性脚本，未入库）：
+旧版填满缓存后把 5 个文件换成新内容，重载时 `hub-pages.js` / `layout.js` /
+`dialogue-prewarm.js` 的 `transferSize` 全是 0，取到的仍是旧代码。也就是说
+**光靠这个补丁，老用户在缓存过期前拿不到 prewarm 修复**。chat 页不受影响 ——
+`chat.html` 是 `no-cache`，且 `chat.js` 的令牌确实换了。
+
+APK 侧其实躲过了这一发：`assets/client/index.txt` 走的是包内拦截，装新包等于换
+文件，实测模拟器 268 覆盖装 269 后 code-cache 里 `dialogue-prewarm.js` 的条目
+从旧令牌 `4fb8193ab4bb8bd8_0` 变成新令牌 `99bfd98c1e3cc0a8_0`，执行的是新码。
+纯网页端用户才是受影响的那一批，需要在下次前端上线时把那 10 处令牌一起 bump。
+
+### 模拟器验收（这次补上了 PR #2 缺的那一步）
+
+Pixel_6_API_33（WebView 109）：
+- 268 覆盖装 269，`firstInstallTime` 保留、`lastUpdateTime` 更新，冷启动无崩溃
+- debug 包指向 `http://10.0.2.2:8080/` 的本机离线栈，用裸 CDP over
+  `adb forward` 驱动（Playwright 的 `connect_over_cdp` 会先发
+  `Browser.setDownloadBehavior`，Android WebView 不支持 browser context 管理，
+  直接报错，所以只能自己发 CDP）
+- 角色页停留期间 app-only 预热请求 0 次
+- 历史点击：本地壳 267ms 出现且输入框可用、已渲染 1 条缓存消息，
+  运行时 ready 要 7919ms —— 壳确实先到（改动前这 7.9 秒是白屏等待）
+- 运行时内切历史：URL 立即换到目标会话，输入框可用，运行时未崩
+
+写探针时踩到两个 CDP 坑，记下来免得重踩：`Page.addScriptToEvaluateOnNewDocument`
+在没 `Page.enable` 时静默不注入（调用返回成功，脚本从不执行）；探针里不能用
+`MutationObserver` observe `document.documentElement`，document-start 时它可能
+还是 null，构造就抛，探针等于没装。另外别拿 `body.has-preview` 当「壳到了」的
+信号 —— `chat.html` 的 `<body>` 静态就带这个类，首帧即为真，断言永远通过。
+真正的信号是 `documentElement.dataset.homerShellReady`，原生壳也是靠它揭开
+本地快照层的。
+
 ## 待办
 
 - [x] 收第一个外部 PR，验证补丁落地流程在真实分歧下的表现（PR #2，见上）
 - [ ] 有人要发 Release 时给 homer-android-apk 的 write
+- [ ] 下次改前端时把引用 `layout.js` 的 10 处 `?v=` 令牌一起 bump，
+      让纯网页端老用户也能拿到 prewarm 修复
 
 ## 风险
 

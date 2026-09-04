@@ -1392,7 +1392,7 @@ def site_settings_defaults() -> dict:
     return {
         "home": {
             "nav_tagline": "让想象 · 照进二次元",
-            "status_text": "服务运行中 · 客户端 v1.14.2 · 全球节点",
+            "status_text": "服务运行中 · 客户端 v1.14.4 · 全球节点",
             "hero_title": "让想象·照进二次元",
             "hero_subtitle": "与你心中那个角色，说一句你想说很久的话",
             "hero_secondary": "AI 角色扮演 · 剧情创作 · 沉浸互动",
@@ -1420,7 +1420,7 @@ def site_settings_defaults() -> dict:
                 {"title": "持续更新", "description": "活跃维护，定期推送新角色、新功能、新模型。社区反馈直达开发者。"},
             ],
             "download_facts": [
-                {"label": "版本", "value": "v1.14.2"},
+                {"label": "版本", "value": "v1.14.4"},
                 {"label": "系统要求", "value": "Android 8.0+"},
                 {"label": "架构", "value": "全机型通用"},
                 {"label": "语言", "value": "简体中文"},
