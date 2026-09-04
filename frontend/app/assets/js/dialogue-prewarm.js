@@ -77,7 +77,8 @@ function rememberTarget(target) {
 
 function readRememberedTarget() {
   try {
-    return normalizeTarget(JSON.parse(sessionStorage.getItem(LAST_TARGET_KEY) || 'null'));
+    const target = normalizeTarget(JSON.parse(sessionStorage.getItem(LAST_TARGET_KEY) || 'null'));
+    return target?.appId && target?.conversationId ? target : null;
   } catch {
     return null;
   }
@@ -104,7 +105,11 @@ function runtimeUrlForTarget(target) {
 
 function requestPreparation(target, activateWhenReady = false) {
   const normalized = normalizeTarget(target);
-  if (!normalized) return;
+  // Warming an app without a concrete conversation asks the dialogue session
+  // endpoint to create one.  Character pages create their conversation only
+  // after the user presses "开始聊天", so an app-only warm-up would leave a
+  // second, partially initialized archive behind.
+  if (!normalized?.appId || !normalized?.conversationId) return;
   normalized.preview = Boolean(!activateWhenReady && normalized.appId && !normalized.conversationId);
   if (activateWhenReady) pendingActivation = normalized;
   if (preparedTarget && sameTarget(preparedTarget, normalized)) {
@@ -182,13 +187,9 @@ function hideFrame() {
 }
 
 function nearestChatTarget(root = document) {
-  const pageId = String(new URLSearchParams(location.search).get('id') || '').trim();
-  if (location.pathname === '/app/character.html' && pageId) {
-    return { appId: pageId, conversationId: '' };
-  }
   const links = [...root.querySelectorAll('a[href]')]
     .map(link => targetFromUrl(link.href))
-    .filter(Boolean);
+    .filter(target => target?.appId && target?.conversationId);
   return links[0] || readRememberedTarget();
 }
 
@@ -290,9 +291,27 @@ function onDocumentClick(event) {
   if (!target || event.defaultPrevented || event.button > 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
     return;
   }
+  // A cold or still-loading warm frame must never hold the navigation hostage.
+  // Let the normal chat page open immediately; its local conversation shell
+  // renders cached messages and keeps the composer usable while the runtime
+  // finishes in the background.  Reuse the hidden frame only when this exact
+  // conversation is already ready.
+  if (!runtimeReady || !preparedTarget || preparedTarget.preview || !sameTarget(preparedTarget, target)) {
+    performance.mark('homer:warm:navigation-fallback');
+    // Android keeps the histories WebView alive after switching to chat.  Park
+    // an unfinished warm frame so it does not continue downloading a second
+    // dialogue runtime behind the newly opened local-first chat page.
+    if (frame && !active) frame.src = 'about:blank';
+    runtimeReady = false;
+    preparingTarget = null;
+    preparedTarget = null;
+    sentTarget = null;
+    pendingActivation = null;
+    return;
+  }
   event.preventDefault();
   performance.mark('homer:warm:activation-requested');
-  requestPreparation(target, true);
+  activateFrame(preparedTarget);
 }
 
 function onTargetIntent(event) {

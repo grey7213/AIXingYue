@@ -4448,6 +4448,11 @@ async function switchConversation(conversation) {
     document.body.classList.add('homer-switching-chat');
     setDrawerOpen();
     notifyHostLoading('正在切换历史会话…');
+    notifyHost('conversation-switching', {
+        app_id: targetAppId.slice(0, 160),
+        conversation_id: targetConversationId.slice(0, 160),
+        role_name: String(conversation?.app_name || conversation?.title || '角色对话').slice(0, 120),
+    });
     try {
         const currentAppId = String(launch?.app_id || '');
         const currentConversationId = String(launch?.conversation_id || '');
@@ -4514,6 +4519,9 @@ async function switchConversation(conversation) {
         buildRuntimeUi();
         console.error(`${MODULE_ID}: conversation switch failed`, error);
         showHostNotice(String(error?.message || '历史会话切换失败'), 'error');
+        // The host exposes its local shell while this switch runs.  Restore the
+        // previous ready runtime immediately if the target cannot be loaded.
+        notifyHostConversation();
     } finally {
         loadingLaunch = false;
         document.body.classList.remove('homer-switching-chat');

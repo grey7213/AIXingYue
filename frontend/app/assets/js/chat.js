@@ -353,6 +353,31 @@ function showShell() {
   launcher.setAttribute('aria-busy', 'false');
 }
 
+function showConversationSwitchShell(message) {
+  const appId = String(message?.app_id || '').trim();
+  const conversationId = String(message?.conversation_id || '').trim();
+  if (!appId || !conversationId) return;
+  clearReadyTimer();
+  runtimeReady = false;
+  pendingDraft = '';
+  previewSend.disabled = false;
+  closeDrawers();
+  updateVisibleConversationUrl(appId, conversationId);
+  showShell();
+  const cached = renderCachedConversation(conversationId);
+  if (!cached) {
+    const target = history.find(item => String(item?.id || item?.conversation_id || '') === conversationId);
+    renderConversation({
+      conversation_id: conversationId,
+      app_id: appId,
+      title: String(message?.role_name || target?.app_name || target?.title || '角色对话'),
+      avatar: target?.app_icon || '',
+      messages: [],
+    }, { save: false });
+  }
+  void loadQuickPreview(conversationId);
+}
+
 function fail(error) {
   clearReadyTimer();
   runtimeReady = false;
@@ -496,6 +521,10 @@ function handleRuntimeMessage(event) {
   if (message.type === 'ready') {
     updateVisibleConversationUrl(message.app_id, message.conversation_id);
     markReady(message.role_name || message.title || '');
+    return;
+  }
+  if (message.type === 'conversation-switching') {
+    showConversationSwitchShell(message);
     return;
   }
   if (message.type === 'state') {
