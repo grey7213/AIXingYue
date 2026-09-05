@@ -56,6 +56,7 @@ from card_version_workshop import (
     resolve_versioned_app,
 )
 from community_workshop import CommunityStore, ensure_community_schema, handle_community_route
+from notifications_extension import ensure_notification_schema, list_notifications, mutate_notification
 from card_extra_workshop import (
     card_extra_payload,
     ensure_card_extra_schema,
@@ -1392,7 +1393,7 @@ def site_settings_defaults() -> dict:
     return {
         "home": {
             "nav_tagline": "让想象 · 照进二次元",
-            "status_text": "服务运行中 · 客户端 v1.14.4 · 全球节点",
+            "status_text": "服务运行中 · 客户端 v1.15.0 · 全球节点",
             "hero_title": "让想象·照进二次元",
             "hero_subtitle": "与你心中那个角色，说一句你想说很久的话",
             "hero_secondary": "AI 角色扮演 · 剧情创作 · 沉浸互动",
@@ -1420,7 +1421,7 @@ def site_settings_defaults() -> dict:
                 {"title": "持续更新", "description": "活跃维护，定期推送新角色、新功能、新模型。社区反馈直达开发者。"},
             ],
             "download_facts": [
-                {"label": "版本", "value": "v1.14.4"},
+                {"label": "版本", "value": "v1.15.0"},
                 {"label": "系统要求", "value": "Android 8.0+"},
                 {"label": "架构", "value": "全机型通用"},
                 {"label": "语言", "value": "简体中文"},
@@ -3465,6 +3466,7 @@ class Store:
         ensure_community_schema(self.conn, self.lock)
         ensure_card_extra_schema(self.conn, self.lock)
         ensure_chat_mod_schema(self.conn, self.lock)
+        ensure_notification_schema(self.conn, self.lock)
         self.ensure_chat_memory_columns()
         self.ensure_user_model_preset_columns()
         self.ensure_default_user()
@@ -20166,6 +20168,11 @@ class Handler(BaseHTTPRequestHandler):
     def route(self, path: str, query: str, body: object) -> object:
         normalized = path.lstrip("/")
 
+        if normalized == "console/api/public/notifications":
+            if self.command.upper() != "GET":
+                return error_response("method not allowed", 405)
+            return ok_response({"list": list_notifications(self.store, public=True)})
+
         if normalized == "console/api/public/site-settings":
             return ok_response(public_site_settings_json(self.store.site_settings()))
 
@@ -22521,6 +22528,22 @@ class Handler(BaseHTTPRequestHandler):
 
             if normalized == "admin/api/content-cache/stats":
                 return ok_response(self.store.content_cache_stats())
+
+            if normalized == "admin/api/notifications" or normalized.startswith("admin/api/notifications/"):
+                method = self.command.upper()
+                notice_id = normalized[len("admin/api/notifications"):].strip("/")
+                if "/" in notice_id:
+                    return error_response("not found", 404)
+                if method == "GET" and not notice_id:
+                    return ok_response({"list": list_notifications(self.store)})
+                if method not in ("POST", "PUT", "DELETE"):
+                    return error_response("method not allowed", 405)
+                try:
+                    return ok_response(mutate_notification(self.store, method, notice_id, body))
+                except LookupError as exc:
+                    return error_response(str(exc), 404)
+                except ValueError as exc:
+                    return error_response(str(exc), 400)
 
             if normalized == "admin/api/site-settings":
                 if self.command.upper() == "GET":

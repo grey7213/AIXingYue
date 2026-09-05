@@ -219,6 +219,9 @@ def guard_upgrade_path(info: dict, previous: dict | None) -> None:
         raise SystemExit(
             f"refusing to publish: versionCode {info['version_code']} is lower "
             f"than the published {prev_code}")
+    if (prev_code is not None and info["version_code"] == prev_code
+            and info["sha256"] != canonical.get("sha256")):
+        raise SystemExit("refusing to replace an existing versionCode with different bytes; increment versionCode")
     if prev_cert and prev_cert != info["cert_sha256"]:
         raise SystemExit(
             f"refusing to publish: signing certificate changed\n"
@@ -255,6 +258,11 @@ def write_release_json(ssh: paramiko.SSHClient, entries: list[dict], canonical: 
             "bytes": canonical["bytes"],
             "sha256": canonical["sha256"],
             "source": canonical["name"],
+            "package": canonical["package"],
+            "version_name": canonical["version_name"],
+            "version_code": canonical["version_code"],
+            "cert_sha256": canonical["cert_sha256"],
+            "release_notes": canonical.get("release_notes", "性能与稳定性改进。"),
         },
         "files": entries,
         "notice": (
@@ -305,6 +313,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="发布 APK 到 Homer 生产下载目录")
     parser.add_argument("apk", type=Path, help="本地已签名 APK")
     parser.add_argument("--remote-name", help="服务器文件名，默认按版本自动生成")
+    parser.add_argument("--notes-file", type=Path, help="UTF-8 更新说明，发布到应用内更新提示")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--user", default=DEFAULT_USER)
     parser.add_argument("--key", type=Path, default=DEFAULT_KEY)
@@ -318,6 +327,10 @@ def main() -> int:
         raise SystemExit(f"APK not found: {apk}")
 
     info = inspect_apk(apk)
+    info["release_notes"] = (args.notes_file.read_text(encoding="utf-8-sig").strip()
+                             if args.notes_file else "性能与稳定性改进。")
+    if len(info["release_notes"]) > 10000:
+        raise SystemExit("release notes must be at most 10000 characters")
     log(f"local  : {info['package']} {info['version_name']} ({info['version_code']})")
     log(f"         label={info['label']} launcher={info['launcher']}")
     log(f"         {info['bytes']:,} bytes sha256={info['sha256']}")
@@ -340,21 +353,32 @@ def main() -> int:
 
         remote_name = args.remote_name or (
             f"homer-android-{info['version_name']}-{info['version_code']}-release.apk")
+        if (not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*\.apk", remote_name)
+                or remote_name == CANONICAL_NAME):
+            raise SystemExit("remote-name must be an immutable versioned APK filename")
 
         if args.dry_run:
             log(f"dry-run: would upload as {remote_name} and repoint {CANONICAL_NAME}")
             return 0
 
-        upload(ssh, apk, remote_name)
+        existing_hash = run(ssh, f"test ! -f {shlex.quote(posixpath.join(DOWNLOAD_DIR, remote_name))} || "
+                            f"sha256sum {shlex.quote(posixpath.join(DOWNLOAD_DIR, remote_name))}", quiet=True).split()
+        if existing_hash and existing_hash[0] != info["sha256"]:
+            raise SystemExit("refusing to overwrite an immutable versioned APK with different bytes")
+        backup_dir = "/root/homer-apk-release-backup-" + datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        run(ssh, f"install -d -m 700 {backup_dir} && "
+                 f"if test -f {DOWNLOAD_DIR}/release.json; then cp -p {DOWNLOAD_DIR}/release.json {backup_dir}/; fi")
+        if not existing_hash:
+            upload(ssh, apk, remote_name)
         digest = remote_sha256(ssh, remote_name)
         if digest != info["sha256"]:
             raise SystemExit(f"remote hash mismatch: {digest} != {info['sha256']}")
         log(f"verify : remote sha256 matches ({digest})")
 
-        run(ssh, f"cp -f {posixpath.join(DOWNLOAD_DIR, remote_name)} "
-                 f"{posixpath.join(DOWNLOAD_DIR, CANONICAL_NAME)} "
-                 f"&& chown www-data:www-data {posixpath.join(DOWNLOAD_DIR, CANONICAL_NAME)} "
-                 f"&& chmod 644 {posixpath.join(DOWNLOAD_DIR, CANONICAL_NAME)}")
+        canonical_path = posixpath.join(DOWNLOAD_DIR, CANONICAL_NAME)
+        run(ssh, f"cp {posixpath.join(DOWNLOAD_DIR, remote_name)} {canonical_path}.upload "
+                 f"&& chown www-data:www-data {canonical_path}.upload "
+                 f"&& chmod 644 {canonical_path}.upload && mv {canonical_path}.upload {canonical_path}")
         write_checksum(ssh, remote_name, digest)
         write_checksum(ssh, CANONICAL_NAME, digest)
 
@@ -379,6 +403,7 @@ def main() -> int:
             "build_type": "release",
             "signature_scheme": "v2+v3",
             "cert_sha256": info["cert_sha256"],
+            "release_notes": info["release_notes"],
         }]
         if not args.prune_debug and previous:
             for entry in previous.get("files") or []:
@@ -396,6 +421,7 @@ def main() -> int:
             "build_type": "release",
             "signature_scheme": "v2+v3",
             "cert_sha256": info["cert_sha256"],
+            "release_notes": info["release_notes"],
         })
         write_release_json(ssh, entries, info)
         log("release.json updated")

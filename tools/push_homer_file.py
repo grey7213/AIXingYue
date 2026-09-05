@@ -28,6 +28,11 @@ REPO = Path(__file__).resolve().parent.parent
 
 # name -> (local path, remote path, owner, mode, restart unit or None)
 TARGETS = {
+    "backend-notifications": (
+        "tools/notifications_extension.py",
+        "/opt/ai-fengyue-backend/notifications_extension.py",
+        "root:ai-xingyue", "0640", "ai-fengyue-backend",
+    ),
     "backend": (
         "tools/ai_fengyue_local_server.py",
         "/opt/ai-fengyue-backend/ai_fengyue_local_server.py",
@@ -237,7 +242,8 @@ def main() -> int:
                         f"(local={want[:12]} remote={have[:12] or 'absent'})")
                     pushed += 1
                     continue
-                backup = f"/root/homer-push-backup-{stamp}-{posixpath.basename(remote)}"
+                path_tag = hashlib.sha256(remote.encode("utf-8")).hexdigest()[:12]
+                backup = f"/root/homer-push-backup-{stamp}-{path_tag}-{posixpath.basename(remote)}"
                 run(ssh, f"[ -f {shlex.quote(remote)} ] && install -m 600 -o root -g root "
                          f"{shlex.quote(remote)} {shlex.quote(backup)} || true", quiet=True)
                 # 新增资源目录（如 assets/img/brand/）在线上可能还不存在，

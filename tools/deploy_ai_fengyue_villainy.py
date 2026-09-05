@@ -22,6 +22,7 @@ DEFAULT_BACKEND = ROOT / "tools" / "ai_fengyue_local_server.py"
 DEFAULT_CARD_MEDIA_EXTENSION = ROOT / "tools" / "card_experience_extension.py"
 DEFAULT_CARD_VERSION_WORKSHOP = ROOT / "tools" / "card_version_workshop.py"
 DEFAULT_COMMUNITY_WORKSHOP = ROOT / "tools" / "community_workshop.py"
+DEFAULT_NOTIFICATIONS_EXTENSION = ROOT / "tools" / "notifications_extension.py"
 DEFAULT_CARD_EXTRA_WORKSHOP = ROOT / "tools" / "card_extra_workshop.py"
 DEFAULT_CHAT_MOD_WORKSHOP = ROOT / "tools" / "chat_mod_workshop.py"
 DEFAULT_SPINE_MEDIA_SUPPORT = ROOT / "tools" / "spine_media_support.py"
@@ -700,6 +701,13 @@ def download_locations(apk_download_enabled: bool) -> str:
         add_header X-Content-Type-Options "nosniff" always;
     }
 
+    # Version discovery must always revalidate, including for existing APK clients.
+    location = /download/release.json {
+        try_files $uri =404;
+        default_type application/json;
+        expires -1;
+    }
+
     location /download/ {
         try_files $uri =404;
         types { text/plain sha256; application/json json; }
@@ -997,6 +1005,7 @@ def main() -> int:
     parser.add_argument("--card-media-extension", type=Path, default=DEFAULT_CARD_MEDIA_EXTENSION)
     parser.add_argument("--card-version-workshop", type=Path, default=DEFAULT_CARD_VERSION_WORKSHOP)
     parser.add_argument("--community-workshop", type=Path, default=DEFAULT_COMMUNITY_WORKSHOP)
+    parser.add_argument("--notifications-extension", type=Path, default=DEFAULT_NOTIFICATIONS_EXTENSION)
     parser.add_argument("--card-extra-workshop", type=Path, default=DEFAULT_CARD_EXTRA_WORKSHOP)
     parser.add_argument("--chat-mod-workshop", type=Path, default=DEFAULT_CHAT_MOD_WORKSHOP)
     parser.add_argument("--spine-media-support", type=Path, default=DEFAULT_SPINE_MEDIA_SUPPORT)
@@ -1022,6 +1031,7 @@ def main() -> int:
         ("card_experience_extension.py", args.card_media_extension),
         ("card_version_workshop.py", args.card_version_workshop),
         ("community_workshop.py", args.community_workshop),
+        ("notifications_extension.py", args.notifications_extension),
         ("card_extra_workshop.py", args.card_extra_workshop),
         ("chat_mod_workshop.py", args.chat_mod_workshop),
         ("spine_media_support.py", args.spine_media_support),

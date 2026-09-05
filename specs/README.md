@@ -4,6 +4,8 @@
 
 ## 当前主要入口
 
+- Android PR #5 与 1.15.0 应用内更新：`homer-apk-update-20260905-tasks.md`（通知接口、更新入口、安装校验与系统安装器验收；原生源码在 `E:\homer-android`）
+
 - 首屏本地壳接管与 1.14.1 (266) 上线：`homer-native-shell-handover-20260901-tasks.md`（覆盖更新包增量合并、WebView Java 桥 receiver bug、七场景实机验收）
 - 交接 ZIP 合并与 1.14.0 (265) 上线：`homer-zip-merge-20260831-tasks.md`（三方合并方法、从 ZIP 改回的 9 处、新增 6 个验证工具）
 - 生产数据本地备份：`homer-production-backup-20260824-requirements.md`、`homer-production-backup-20260824-design.md`、`homer-production-backup-20260824-tasks.md`
