@@ -34,6 +34,10 @@
 
 ## Codebase Map
 
+- 原生 Android 源码真源为独立仓库 `E:\homer-android`（`grey7213/homer-android`），入口 `android-app/app/src/main/java/org/nebula/horizon/composeai/ctf/HomerActivity.java`。本仓库提供 Web/backend 真源；原生仓库 `web-base.json` 固定对应的 Web 快照。正式 APK 发布使用 `tools/publish_homer_apk.py`，成品同时放官网与 `grey7213/homer-android-apk` Releases。
+- 1.15.0 起，APK 自动检查更新（6 小时间隔），登录页及“我的”有手动检查入口；`/download/release.json` 必须返回 `Cache-Control: no-cache`，版本化 APK 地址不可覆盖。更新必须保持包名、签名并提高 versionCode。更新说明由发布命令 `--notes-file` 提供。
+- 启动通知实现位于 `tools/notifications_extension.py`、`frontend/app/assets/js/notifications.js`；后台接口沿用管理员鉴权。新后端 import 该模块，定向推送时使用 `backend-notifications` 与 `backend` 同批发布。
+
 - `reverse-analysis/base-apk/unpacked/`: decoded FLAI APK.
 - `reverse-analysis/base-apk/unpacked/smali/com/stub/StubApp.smali`: protected Application stub.
 - `reverse-analysis/base-apk/unpacked/assets/libjiagu*.so`: protected loader/native hardening libraries.
@@ -65,6 +69,16 @@
 - Before committing, check `git status --short` and avoid staging unrelated user changes.
 
 ## Reusable Pitfalls
+
+- Symptom: 发了新 APK，应用内检查更新仍认为是旧版，或发布时客户端下载到正在复制的 canonical 文件。
+  Cause: 相同 versionCode 可以被不同字节覆盖，release.json 继承 `/download/` 的 1 小时缓存，canonical 使用直接 `cp` 覆盖。
+  Fix: 发布器拒绝同 code 的不同内容及不可变版本文件覆盖（相同字节允许幂等重试）；canonical 先写 `.upload` 再原子 mv；部署模板与线上均为 release.json 设置精确 no-cache 路由。
+  Verify: 2026-09-05 发布守卫 3 组测试通过；正式 1.15.0 的两个公网 APK 地址完整下载哈希均与本地一致；生产 release.json 返回 application/json/no-cache，正式 APK 内点击检查更新显示“当前版本 1.15.0 / 已是最新版本”。
+
+- Symptom: 同一批定向发布包含多个目录下的 index.html 时，备份文件可能互相覆盖。
+  Cause: `push_homer_file.py` 只用本次时间戳与 basename 命名备份，不区分远端目录。
+  Fix: 备份名加入完整远端路径的 SHA-256 短前缀，仍保存到 root-only 恢复位置。
+  Verify: 2026-09-05 45 个后端/网页/runtime 文件发布并逐一校验哈希；数据库、Nginx 与 release 元数据另存于 `/root/homer-apk-update-20260905-131548`，数据库 `quick_check=ok`。
 
 - Symptom: 从生产服务器往本机拉备份时，单流 scp 只有约 0.85 MB/s，加到 4 路、6 路并发总吞吐完全不变；换 paramiko SFTP 反而掉到 0.46 MB/s；Windows 侧 `rsync` 直接 exit 127。
   Cause: 瓶颈是链路本身而不是并发数或协议，堆并发无效。`C:\Program Files\OpenSSH\bin\rsync.exe` 缺 `cygcrypto-1.1.dll` 起不来；scp 的 `host:path` 解析器还会把 Windows 盘符 `E:\...` 当成远端主机名。
