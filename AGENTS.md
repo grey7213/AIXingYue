@@ -34,6 +34,8 @@
 
 ## Codebase Map
 
+- 生产备份使用 `tools/backup_homer_production.py` 和 `tools/verify_homer_backup.py`，本地放仓库外 `E:\homer-backups\`。2026-09-07 DNS/SSH 实测生产机为 `38.76.218.46`，不要沿用旧技能正文里的历史 IP。
+- 2026-09-07 完整恢复点为本地 `E:\homer-backups\homer-prod-20260907-150635\`（另有同名 ZIP）及服务器 `/opt/homer-backups/homer-prod-20260907-150635/`。后端 `backups/` 保留当次 `ai_fengyue-current-*.sqlite3` 和 `frontend-source-current-*.tgz` 各一份；清理旧备份前必须先验证本地完整备份、服务器保留包及精确删除清单。业务库/WAL、用户对话目录、当前 release、其他服务和独有导入/安全材料不属于旧备份清理范围。执行证据见 `specs/homer-backup-cleanup-20260907-tasks.md`。
 - 原生 Android 源码真源为独立仓库 `E:\homer-android`（`grey7213/homer-android`），入口 `android-app/app/src/main/java/org/nebula/horizon/composeai/ctf/HomerActivity.java`。本仓库提供 Web/backend 真源；原生仓库 `web-base.json` 固定对应的 Web 快照。正式 APK 发布使用 `tools/publish_homer_apk.py`，成品同时放官网与 `grey7213/homer-android-apk` Releases。
 - 1.15.0 起，APK 自动检查更新（6 小时间隔），登录页及“我的”有手动检查入口；`/download/release.json` 必须返回 `Cache-Control: no-cache`，版本化 APK 地址不可覆盖。更新必须保持包名、签名并提高 versionCode。更新说明由发布命令 `--notes-file` 提供。
 - 启动通知实现位于 `tools/notifications_extension.py`、`frontend/app/assets/js/notifications.js`；后台接口沿用管理员鉴权。新后端 import 该模块，定向推送时使用 `backend-notifications` 与 `backend` 同批发布。
@@ -69,6 +71,16 @@
 - Before committing, check `git status --short` and avoid staging unrelated user changes.
 
 ## Reusable Pitfalls
+
+- Symptom: Windows 上只收紧生产备份父目录后，归档文件仍有 `Everyone`、`Authenticated Users` 和 `Users` 的读取权限。
+  Cause: Cygwin/OpenSSH scp 会写入显式 Windows ACL，收紧父目录继承不能移除这些显式授权；敏感性标记也曾遗漏业务数据库中的模型凭据和私有对话。
+  Fix: `backup_homer_production.py` 创建本地目录时先限权，scp 返回后对已落地文件（含失败留下的部分文件）用 `icacls /reset` 清除显式 ACL，再禁用继承并仅授权当前用户 SID、SYSTEM、Administrators；DB/对话也标为私密。交付 ZIP 同样限权。无需通过新建完整 ACL 对象触发 `SeSecurityPrivilege`。
+  Verify: 2026-09-07 真实备份目录、17 个文件和 ZIP 共 19 个路径复核，非白名单 ACL 为 0；服务器保留目录为 root-only，归档与数据库校验通过。
+
+- Symptom: 本地备份独立复核通过，但 Linux 执行 `sha256sum -c SHA256SUMS.txt` 报文件名末尾含 `\r`、8 个归档全部找不到。
+  Cause: Windows `Path.write_text()` 默认将 LF 转为 CRLF，Python 校验器 `splitlines()` 掩盖了问题，GNU sha256sum 则把 CR 当作文件名的一部分。
+  Fix: 备份工具生成 `SHA256SUMS.txt`、`MANIFEST.json`、`RESTORE.md` 时显式使用 `newline="\n"`；已有本次清单转 LF 后同步到服务器并重打 ZIP，归档数据本身不改。
+  Verify: 2026-09-07 Linux 原生命令 `sha256sum -c` 8/8 通过，ZIP 内清单无 CR、17 个成员 SHA-256/CRC 全部通过，Python 语法检查通过。
 
 - Symptom: 发了新 APK，应用内检查更新仍认为是旧版，或发布时客户端下载到正在复制的 canonical 文件。
   Cause: 相同 versionCode 可以被不同字节覆盖，release.json 继承 `/download/` 的 1 小时缓存，canonical 使用直接 `cp` 覆盖。

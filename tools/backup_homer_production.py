@@ -26,9 +26,12 @@ removed only after every check passes.
 """
 import argparse
 import concurrent.futures
+import functools
 import hashlib
 import json
+import os
 import posixpath
+import re
 import shlex
 import shutil
 import subprocess
@@ -72,6 +75,35 @@ def human(num: float) -> str:
             return f"{int(num)} B" if unit == "B" else f"{num:,.1f} {unit}"
         num /= 1024
     return f"{num:,.1f} GB"
+
+
+@functools.lru_cache(maxsize=1)
+def windows_user_sid() -> str:
+    sid = subprocess.check_output(
+        ["powershell.exe", "-NoProfile", "-Command",
+         "[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value"],
+        text=True,
+    ).strip()
+    if not re.fullmatch(r"S-1-\d+(?:-\d+)+", sid):
+        raise RuntimeError("could not resolve the current Windows user SID")
+    return sid
+
+
+def restrict_local_backup_permissions(path: Path) -> None:
+    """Cygwin scp may write explicit Everyone/Users ACLs; inheritance alone is
+    insufficient. Reset file ACLs, then grant only the owner and system admins."""
+    if os.name != "nt":
+        path.chmod(0o700 if path.is_dir() else 0o600)
+        return
+    flags = "(OI)(CI)F" if path.is_dir() else "F"
+    if path.is_file():
+        subprocess.run(["icacls.exe", str(path), "/reset"], check=True,
+                       capture_output=True)
+    subprocess.run(
+        ["icacls.exe", str(path), "/inheritance:r", "/grant:r",
+         f"*{windows_user_sid()}:{flags}", f"*S-1-5-18:{flags}", f"*S-1-5-32-544:{flags}"],
+        check=True, capture_output=True,
+    )
 
 
 def connect(host: str, user: str, key: Path) -> paramiko.SSHClient:
@@ -187,6 +219,7 @@ def archive_plan(release: str) -> list[dict]:
             "note": "Live business DB: users, role cards (local_apps), content_versions, conversations, messages, api_settings (site copy + LLM presets). Snapshot taken with the SQLite Online Backup API; journal_mode=DELETE so no -wal/-shm needed.",
             "cmd": f"{ZSTD_DB} -c < {{staging}}/ai_fengyue.sqlite3 > {{path}}",
             "kind": "sqlite",
+            "sensitive": True,
         },
         {
             "name": "media-cache",
@@ -206,6 +239,7 @@ def archive_plan(release: str) -> list[dict]:
             ),
             "kind": "tar",
             "restore_hint": "tar -C /var/lib -xf - (owner homer-dialogue:homer-dialogue, dir mode 750)",
+            "sensitive": True,
         },
         {
             "name": "dialogue-runtime-source",
@@ -327,6 +361,9 @@ def scp_pull(key: Path, host: str, user: str, remote: str, dest_dir: Path, filen
         f"{user}@{host}:{remote}", f"./{filename}",
     ]
     proc = subprocess.run(cmd, cwd=str(dest_dir), capture_output=True, text=True)
+    downloaded = dest_dir / filename
+    if downloaded.is_file():
+        restrict_local_backup_permissions(downloaded)
     if proc.returncode != 0:
         raise RuntimeError(f"scp failed for {remote}: {proc.stderr.strip()}")
 
@@ -397,6 +434,8 @@ def write_restore_doc(out_dir: Path, manifest: dict, plan: list[dict], release: 
         ]
     lines += [
         "## ⚠️ 这个目录含密钥",
+        "",
+        "业务数据库含模型 API 凭据和用户数据，对话归档含用户私有聊天与设置；也须按私密备份保管。",
         "",
         "`backend.tar.zst` 里有 `ai-fengyue.env`（Resend SMTP 密码、ZPAY 商户密钥、ADMIN_EMAILS），",
         "`server-config.tar.zst` 里有 `/etc/letsencrypt` 的 TLS 私钥。不要提交到 git，不要放进任何同步盘。",
@@ -518,7 +557,7 @@ def write_restore_doc(out_dir: Path, manifest: dict, plan: list[dict], release: 
     for path, reason in manifest["excluded"].items():
         lines.append(f"- `{path}` — {reason}")
     lines.append("")
-    (out_dir / "RESTORE.md").write_text("\n".join(lines), encoding="utf-8")
+    (out_dir / "RESTORE.md").write_text("\n".join(lines), encoding="utf-8", newline="\n")
     log("wrote RESTORE.md")
 
 
@@ -539,6 +578,7 @@ def main() -> int:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     out_dir = args.dest / f"homer-prod-{stamp}"
     out_dir.mkdir(parents=True, exist_ok=False)
+    restrict_local_backup_permissions(out_dir)
     log(f"local destination {out_dir}")
 
     ssh = connect(args.host, args.user, args.key)
@@ -702,9 +742,9 @@ def main() -> int:
             entry["file"] for entry in plan if entry.get("sensitive"))
 
         (out_dir / "MANIFEST.json").write_text(
-            json.dumps(manifest, indent=2, sort_keys=True, ensure_ascii=False), encoding="utf-8")
+            json.dumps(manifest, indent=2, sort_keys=True, ensure_ascii=False), encoding="utf-8", newline="\n")
         checksum_lines = [f"{entry['local_sha256']}  {entry['file']}" for entry in plan]
-        (out_dir / "SHA256SUMS.txt").write_text("\n".join(checksum_lines) + "\n", encoding="utf-8")
+        (out_dir / "SHA256SUMS.txt").write_text("\n".join(checksum_lines) + "\n", encoding="utf-8", newline="\n")
         write_restore_doc(out_dir, manifest, plan, release)
 
         if args.keep_staging:
