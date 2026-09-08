@@ -38,6 +38,7 @@
 - 2026-09-07 完整恢复点为本地 `E:\homer-backups\homer-prod-20260907-150635\`（另有同名 ZIP）及服务器 `/opt/homer-backups/homer-prod-20260907-150635/`。后端 `backups/` 保留当次 `ai_fengyue-current-*.sqlite3` 和 `frontend-source-current-*.tgz` 各一份；清理旧备份前必须先验证本地完整备份、服务器保留包及精确删除清单。业务库/WAL、用户对话目录、当前 release、其他服务和独有导入/安全材料不属于旧备份清理范围。执行证据见 `specs/homer-backup-cleanup-20260907-tasks.md`。
 - 原生 Android 源码真源为独立仓库 `E:\homer-android`（`grey7213/homer-android`），入口 `android-app/app/src/main/java/org/nebula/horizon/composeai/ctf/HomerActivity.java`。本仓库提供 Web/backend 真源；原生仓库 `web-base.json` 固定对应的 Web 快照。正式 APK 发布使用 `tools/publish_homer_apk.py`，成品同时放官网与 `grey7213/homer-android-apk` Releases。
 - 1.15.0 起，APK 自动检查更新（6 小时间隔），登录页及“我的”有手动检查入口；`/download/release.json` 必须返回 `Cache-Control: no-cache`，版本化 APK 地址不可覆盖。更新必须保持包名、签名并提高 versionCode。更新说明由发布命令 `--notes-file` 提供。
+- 2026-09-08 正式 1.15.1 (271) 已发布，PR #7 修复后合并为 `3d54e8d`；真实正式包已通过应用内从 270 升到 271。记录见 `specs/homer-pr7-release-20260908-tasks.md`。社区入口暂隐藏，`preview=1` 必须通过 `/admin/api/me`；本轮没有新的 social 服务端，后台举报入口保持关闭。
 - 启动通知实现位于 `tools/notifications_extension.py`、`frontend/app/assets/js/notifications.js`；后台接口沿用管理员鉴权。新后端 import 该模块，定向推送时使用 `backend-notifications` 与 `backend` 同批发布。
 
 - `reverse-analysis/base-apk/unpacked/`: decoded FLAI APK.
