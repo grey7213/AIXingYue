@@ -72,6 +72,16 @@
 
 ## Reusable Pitfalls
 
+- Symptom: 页面并发读取 profile 和私有角色后，当前账号的角色被写入旧账号缓存。
+  Cause: 新请求先捕获旧 localStorage 账号，实际请求由当前 HttpOnly Cookie 鉴权；资料响应稍晚才更新账号身份。
+  Fix: 私有列表刷新等待权威 profile，缓存首屏仍可提前展示；返回时再次检查账号未变，再更新列表与对应账号缓存。
+  Verify: `tools/verify_pr7_web.py` 的 my-apps/workshop 跨账号夹具通过，当前私有角色只写入当前账号键；深色确认框、维护预览权限、外观草稿切换与群聊回归同批通过。
+
+- Symptom: 隔离 runtime 通过 node_modules Junction 复用依赖后，WASM 缩略图报 `Requested file path is outside of the server directory`。
+  Cause: Node 默认解析依赖真实路径，WASM 路径落到另一工作区，被既有目录白名单拒绝。
+  Fix: 仅给隔离测试进程设置 `NODE_OPTIONS=--preserve-symlinks --preserve-symlinks-main`，保持逻辑路径；不放宽 runtime 文件读取白名单。
+  Verify: 2026-09-08 本地真实后端/runtime 在 1440px 与 390px 完成启动、生成、消息状态持久化和后台页面验收。
+
 - Symptom: Windows 上只收紧生产备份父目录后，归档文件仍有 `Everyone`、`Authenticated Users` 和 `Users` 的读取权限。
   Cause: Cygwin/OpenSSH scp 会写入显式 Windows ACL，收紧父目录继承不能移除这些显式授权；敏感性标记也曾遗漏业务数据库中的模型凭据和私有对话。
   Fix: `backup_homer_production.py` 创建本地目录时先限权，scp 返回后对已落地文件（含失败留下的部分文件）用 `icacls /reset` 清除显式 ACL，再禁用继承并仅授权当前用户 SID、SYSTEM、Administrators；DB/对话也标为私密。交付 ZIP 同样限权。无需通过新建完整 ACL 对象触发 `SeSecurityPrivilege`。

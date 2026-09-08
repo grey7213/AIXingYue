@@ -4,6 +4,8 @@
 
 ## 当前主要入口
 
+- Android PR #7 与 1.15.1：`homer-pr7-release-20260908-tasks.md`（完整补丁审查、账号缓存隔离、社区预览权限、原生返回键和应用内升级验收）
+
 - 最新生产备份与服务器清理：`homer-backup-cleanup-20260907-tasks.md`（本地/服务器完整恢复点、35 项校验、265 个旧备份文件清理及磁盘复核）
 - Android PR #5 与 1.15.0 应用内更新：`homer-apk-update-20260905-tasks.md`（通知接口、更新入口、安装校验与系统安装器验收；原生源码在 `E:\homer-android`）
 
