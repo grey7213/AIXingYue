@@ -1,62 +1,9 @@
 <!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <title>社区 · 惑梦</title>
-  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260901-persistent-pages">
-  <link rel="stylesheet" href="/assets/css/community-feed.css?v=20260908-pr7">
-  <script>if(new URLSearchParams(location.search).get('preview')!=='1')location.replace('/app/explore.html');</script>
-  <script defer src="/assets/js/option-picker.js?v=20260908-pr7"></script>
-  <script type="module" src="/app/assets/js/community-feed.js?v=20260908-pr7"></script>
-  <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
-<style>html:not([data-homer-community-preview="allowed"]) body{display:none!important}</style></head>
-<body class="social-page">
-<div class="app-shell" x-data="socialPage()" x-cloak>
-  <aside class="app-sidebar" data-app-sidebar></aside>
-  <main class="app-main social-main">
-    <header class="social-header">
-      <div><p class="social-kicker">惑梦社区</p><h1>和同好分享灵感</h1></div>
-      <div class="social-header-actions"><button class="social-icon" aria-label="刷新社区" @click="load(true)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 11a8 8 0 0 0-14.9-4L3 10m0-6v6h6M4 13a8 8 0 0 0 14.9 4L21 14m0 6v-6h-6"/></svg></button><button class="social-icon" aria-label="搜索社区" @click="searchOpen=!searchOpen;$nextTick(()=>{if(searchOpen)$refs.search.focus()})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="10.5" cy="10.5" r="7.5"/><path d="m16 16 5 5"/></svg></button></div>
-    </header>
-    <nav class="social-scope" aria-label="社区范围"><button :class="{'is-active':scope==='public'}" @click="setScope('public')">推荐</button><button :class="{'is-active':scope==='following'}" @click="setScope('following')">关注</button><button :class="{'is-active':scope==='mine'}" @click="setScope('mine')">我的帖子</button><button :class="{'is-active':scope==='saved'}" @click="setScope('saved')">已收藏</button></nav>
-    <div class="social-toolbar"><span x-text="loading ? '正在更新社区内容…' : (posts.length ? '为你精选的社区动态' : '')"></span><div class="social-sort"><button :class="{'is-active':sort==='latest'}" @click="setSort('latest')">最新</button><button :class="{'is-active':sort==='hot'}" @click="setSort('hot')">热门</button></div></div>
-    <form x-show="searchOpen" class="social-search" @submit.prevent="load(true)"><input type="search" x-ref="search" x-model="query" placeholder="搜索帖子内容" aria-label="搜索帖子内容"><button type="submit">搜索</button></form>
-    <nav class="social-topics" aria-label="社区话题">
-      <button :class="{'is-active':!topic}" @click="setTopic('')"><span class="social-topic-symbol">▦</span>全部</button>
-      <template x-for="(item,index) in topics" :key="item"><button :class="{'is-active':topic===item}" @click="setTopic(item)"><span class="social-topic-symbol" :class="'tone-'+index" x-text="['聊','书','创','荐','信'][index] || '话'"></span><span x-text="item"></span></button></template>
-    </nav>
-    <div class="social-destinations"><a href="/app/community-contest.html?preview=1"><span>♜</span><strong>本期创作者比赛</strong><span>›</span></a><a href="/app/community-library.html?preview=1"><span>▧</span><strong>作品库</strong><span>›</span></a></div>
-    <p class="social-feedback" role="status" x-show="loading && !posts.length">正在获取社区内容…</p>
-    <div class="social-feedback" role="alert" x-show="error"><p x-text="error"></p><button @click="load(true)" :disabled="loading">重试</button></div>
-    <div class="social-empty" x-show="!loading && !error && !posts.length"><h2 x-text="scope==='following'?'还没有关注的动态':scope==='saved'?'还没有收藏的帖子':'这里还没有帖子'"></h2><p x-text="scope==='following'?'在推荐里关注感兴趣的作者，他们的新帖会出现在这里。':scope==='saved'?'看到喜欢的内容，点收藏后可以随时回来查看。':'分享一次有趣的对话，或者你的创作心得。'"></p><button x-show="scope!=='saved'" @click="openEditor()">发布第一篇</button><button x-show="scope==='saved'" @click="setScope('public')">去看看推荐</button></div>
-    <section aria-label="社区帖子">
-      <template x-for="post in posts" :key="post.id"><article class="social-post">
-        <header><span class="social-avatar" x-text="post.author.slice(0,1)"></span><span class="social-author" x-text="post.author"></span><time x-text="formatTime(post.created_at)"></time><button class="social-icon" :aria-label="'更多操作：'+(post.title || '帖子')" @click="openActions(post)">···</button></header>
-        <button class="social-post-content" @click="openPost(post)"><h2 x-show="post.title" x-text="post.title"></h2><p x-text="post.content"></p></button>
-        <div class="social-images" x-show="post.images.length"><template x-for="url in post.images.slice(0,3)" :key="url"><button @click="openPost(post)"><img :src="url" alt="帖子配图" loading="lazy" referrerpolicy="no-referrer"></button></template><span x-show="post.images.length>3" x-text="'共 '+post.images.length+' 张'"></span></div>
-        <footer><button class="social-topic-tag" @click="setTopic(post.topic)" x-text="'# '+post.topic"></button><div><button @click="openPost(post)" :aria-label="'评论 '+post.comment_count">▢ <span x-text="post.comment_count"></span></button><button @click="like(post)" :class="{'is-liked':post.liked}" :disabled="busy===post.id" :aria-pressed="post.liked" aria-label="点赞帖子">♡ <span x-text="post.like_count"></span></button><button @click="save(post)" :class="{'is-saved':post.saved}" :disabled="busy===post.id" :aria-pressed="post.saved" aria-label="收藏帖子">☆ <span x-text="post.save_count"></span></button></div></footer>
-      </article></template>
-    </section>
-    <div class="social-more" x-show="posts.length"><button x-show="hasMore" @click="load(false)" :disabled="loading" x-text="loading?'正在获取…':'查看更多'"></button><span x-show="!hasMore">已经看完了</span></div>
-    <button class="social-publish" @click="openEditor()" aria-label="发布帖子">＋</button>
-  </main>
-  <nav class="app-bottom-nav" data-app-bottom-nav></nav>
-  <dialog x-ref="detailDialog" class="social-detail" @close="detail=null;commentError=''" aria-label="帖子详情">
-    <template x-if="detail"><div class="social-detail-shell">
-      <header class="social-dialog-header"><button @click="$refs.detailDialog.close()" aria-label="关闭帖子">‹</button><strong>帖子详情</strong><button @click="openActions(detail)" aria-label="帖子操作">···</button></header>
-      <article class="social-detail-content"><header><span class="social-avatar" x-text="detail.author.slice(0,1)"></span><strong x-text="detail.author"></strong><button x-show="!detail.is_owner" @click="follow(detail)" :disabled="busy===detail.id" x-text="detail.following?'已关注':'＋ 关注'"></button></header><h1 x-text="detail.title"></h1><p x-text="detail.content"></p><template x-for="url in detail.images" :key="url"><img :src="url" alt="帖子配图" referrerpolicy="no-referrer"></template><small x-text="formatTime(detail.created_at)+' · '+detail.topic"></small><div class="social-detail-actions"><button @click="like(detail)" :disabled="busy===detail.id" :aria-pressed="detail.liked" x-text="(detail.liked?'已赞 ':'点赞 ')+detail.like_count"></button><button @click="save(detail)" :disabled="busy===detail.id" :aria-pressed="detail.saved" x-text="(detail.saved?'已收藏 ':'收藏 ')+detail.save_count"></button><button @click="sharePost(detail)">分享</button></div></article>
-      <section class="social-comments" aria-label="评论列表"><h2 x-text="'评论 '+detail.comment_count"></h2><p x-show="commentsLoading">正在获取评论…</p><p x-show="!commentsLoading && !comments.length && !commentError">还没有评论，来聊两句吧。</p><template x-for="comment in comments" :key="comment.id"><article><header><strong x-text="comment.author"></strong><time x-text="formatTime(comment.created_at)"></time><button x-show="comment.can_delete" @click="removeComment(comment)" aria-label="删除评论">删除</button></header><p x-text="comment.content"></p></article></template><button x-show="commentsMore" @click="loadComments(false)" :disabled="commentsLoading">更多评论</button></section>
-      <p class="social-error" role="alert" x-show="commentError" x-text="commentError"></p>
-      <form class="social-reply" @submit.prevent="sendComment()"><textarea rows="1" maxlength="2000" x-model="commentDraft" placeholder="说说你的看法…" aria-label="评论内容"></textarea><button type="submit" :disabled="commentSending || !commentDraft.trim()" x-text="commentSending?'发送中':'发送'"></button></form>
-    </div></template>
-  </dialog>
-  <dialog x-ref="editorDialog" class="social-editor" aria-label="发布帖子">
-    <form @submit.prevent="publish()"><header class="social-dialog-header"><button type="button" @click="closeEditor()">取消</button><strong x-text="editingId?'编辑帖子':'发布帖子'"></strong><button type="submit" :disabled="publishing || uploading || !draft.content.trim()" x-text="publishing?'发布中':'发布'"></button></header>
-      <div class="social-editor-body"><input x-model="draft.title" maxlength="120" placeholder="标题（选填）" aria-label="帖子标题"><textarea x-model="draft.content" maxlength="10000" rows="9" placeholder="分享你的故事、想法或创作心得…" aria-label="帖子正文"></textarea><label>选择话题<select x-model="draft.topic"><template x-for="item in topics" :key="item"><option :value="item" x-text="item"></option></template></select></label><div class="social-edit-images"><template x-for="(url,index) in draft.images" :key="url"><figure><img :src="url" alt="待发布图片"><button type="button" @click="draft.images.splice(index,1)" aria-label="移除图片">×</button></figure></template><label class="social-upload" x-show="draft.images.length<9"><span x-text="uploading?'上传中…':'＋ 图片'"></span><input type="file" accept="image/png,image/jpeg,image/webp" multiple @change="uploadImages($event)" :disabled="uploading"></label></div><p class="social-error" role="alert" x-show="editorError" x-text="editorError"></p></div>
-    </form>
-  </dialog>
-  <dialog x-ref="actionsDialog" class="social-actions" aria-label="帖子操作"><template x-if="actionPost"><div><button @click="save(actionPost);$refs.actionsDialog.close()" x-text="actionPost.saved?'取消收藏':'收藏帖子'"></button><button @click="sharePost(actionPost);$refs.actionsDialog.close()">分享帖子</button><button x-show="!actionPost.is_owner" @click="follow(actionPost);$refs.actionsDialog.close()" x-text="actionPost.following?'取消关注':'关注作者'"></button><button x-show="actionPost.is_owner" @click="openEditor(actionPost)">编辑帖子</button><button x-show="actionPost.can_delete" @click="removePost(actionPost)">删除帖子</button><button x-show="!actionPost.is_owner" @click="reportPost(actionPost)">举报帖子</button><button @click="$refs.actionsDialog.close()">取消</button></div></template></dialog>
-  <dialog x-ref="reportDialog" class="social-editor social-report" aria-label="举报帖子"><form @submit.prevent="submitReport()"><header class="social-dialog-header"><strong>举报帖子</strong><button type="button" @click="$refs.reportDialog.close()" aria-label="关闭举报">×</button></header><div class="social-editor-body"><textarea rows="4" maxlength="1000" x-model="reportReason" placeholder="请说明问题，管理员会核查处理" aria-label="举报原因"></textarea><p class="social-error" x-text="reportError"></p><button type="submit" :disabled="reporting || !reportReason.trim()" x-text="reporting?'提交中':'提交举报'"></button></div></form></dialog>
-  <p class="social-toast" role="status" x-show="toast" x-text="toast"></p>
-</div>
-</body></html>
+<html lang="zh-CN"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>社区 · 惑梦</title>
+<link rel="stylesheet" href="/app/assets/css/app.css?v=20260917-r8">
+<link rel="stylesheet" href="/assets/css/community-controls.css?v=20260917-r8">
+<link rel="stylesheet" href="/assets/css/community-screens.css?v=20260917-r8">
+<script type="module" src="/app/assets/js/community-screen.js?v=20260917-r8"></script>
+</head><body class="community-app"><main class="c-page"><header class="c-header"><h1>社区</h1></header></main></body></html>
