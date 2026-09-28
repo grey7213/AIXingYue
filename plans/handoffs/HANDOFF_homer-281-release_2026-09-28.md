@@ -494,3 +494,11 @@ adb：E:/Android/Sdk/platform-tools/adb.exe
 3. tools/webview-compat/build.mjs 不重生成 .js.map，source map 会过期 —— 要不要修？（仅观感问题）
 4. sync_apk_build_workspace.py 要不要扩展覆盖 tools/webview-compat，让下一轮不再踩这个坑？
 5. AGENTS.md:8 那条 R28 规则改写到什么程度算诚实又不误导后来人？
+
+---
+
+## Session Closed
+
+**Closed at:** 2026-09-28T03:19:19Z（11:19:19 +0800）
+**Commit:** `7077635`
+**Session status:** Handed off to next session
