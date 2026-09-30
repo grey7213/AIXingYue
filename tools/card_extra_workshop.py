@@ -89,10 +89,10 @@ def prepare_card_extra(conn, lock, user_id: str, data: dict, existing: dict | No
     ui_versions = []
     for index, work_id in enumerate(ui_ids):
         row = store.get_work(work_id)
-        if not row or row.get("work_type") != "ui_template" or not store.can_use_work(user_id, row):
+        if not row or row.get("work_type") not in {"ui_template", "regex"} or not store.can_use_work(user_id, row):
             raise ValueError("selected UI template is not available or favorited")
         version_id = requested_ui_versions[index] if index < len(requested_ui_versions) else str(row.get("current_version_id") or "")
-        if not store.versions.get_version(version_id, "ui_template", work_id):
+        if not store.versions.get_version(version_id, row["work_type"], work_id):
             raise ValueError("selected UI template version is invalid")
         ui_versions.append(version_id)
     return {

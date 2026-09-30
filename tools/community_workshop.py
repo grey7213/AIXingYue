@@ -10,13 +10,13 @@ import uuid
 from card_version_workshop import ContentVersionStore
 
 
-WORK_TYPES = {"mod", "ui_template", "preset"}
+WORK_TYPES = {"mod", "ui_template", "preset", "regex"}
 MAX_WORKS_PER_USER = 100
 MAX_VERSIONS_PER_WORK = 100
 MIN_VERSION_INTERVAL_MS = 10_000
 MAX_STRUCTURED_ENTRIES = 400
-MAX_ENTRY_JSON_BYTES = 32 * 1024
-MAX_CONTENT_JSON_BYTES = 512 * 1024
+MAX_ENTRY_JSON_BYTES = 8 * 1024 * 1024
+MAX_CONTENT_JSON_BYTES = 8 * 1024 * 1024
 MAX_UI_DEMO_BYTES = 200 * 1024
 
 
@@ -133,7 +133,7 @@ def _snapshot(row: dict) -> dict:
 
 def _entry_titles(work_type: str, content) -> list[str]:
     if isinstance(content, dict):
-        values = content.get("entries") or content.get("prompts") or content.get("blocks") or []
+        values = content.get("entries") or content.get("prompts") or content.get("blocks") or content.get("regex_scripts") or []
         if isinstance(values, dict):
             values = list(values.values())
     else:
@@ -142,7 +142,7 @@ def _entry_titles(work_type: str, content) -> list[str]:
     for item in values[:200]:
         if not isinstance(item, dict):
             continue
-        name = item.get("name") or item.get("title") or item.get("comment") or item.get("identifier")
+        name = item.get("scriptName") or item.get("name") or item.get("title") or item.get("comment") or item.get("identifier")
         if not name and work_type == "mod":
             keys = item.get("keys") or item.get("key") or []
             name = keys[0] if isinstance(keys, list) and keys else ""
@@ -156,7 +156,7 @@ def _content_entries(content) -> list:
         return content
     if not isinstance(content, dict):
         return []
-    for key in ("entries", "prompts", "blocks"):
+    for key in ("entries", "prompts", "blocks", "regex_scripts"):
         value = content.get(key)
         if isinstance(value, dict):
             return list(value.values())
@@ -166,7 +166,7 @@ def _content_entries(content) -> list:
 
 
 def _validate_work_payload(work_type: str, content, demo_html: str = "") -> None:
-    if work_type in {"mod", "preset"}:
+    if work_type in {"mod", "preset", "regex"} or (work_type == "ui_template" and isinstance(content, dict) and "regex_scripts" in content):
         entries = _content_entries(content)
         if not entries:
             raise ValueError("content entries are required")
@@ -175,6 +175,8 @@ def _validate_work_payload(work_type: str, content, demo_html: str = "") -> None
         for entry in entries:
             if not isinstance(entry, dict):
                 raise ValueError("content entries must be objects")
+            if work_type in {"regex", "ui_template"} and not isinstance(entry.get("findRegex", entry.get("find")), str):
+                raise ValueError("regex pattern is required")
             if len(json.dumps(entry, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > MAX_ENTRY_JSON_BYTES:
                 raise ValueError("content entry is too large")
     raw_content = json.dumps(content, ensure_ascii=False, separators=(",", ":")) if content is not None else "null"
@@ -236,9 +238,9 @@ class CommunityStore:
             "current_version_id": row.get("current_version_id") or "",
             "created_at": int(row.get("created_at") or 0), "updated_at": int(row.get("updated_at") or 0),
         }
-        if row.get("work_type") in {"mod", "preset"}:
+        if row.get("work_type") in {"mod", "preset", "regex"}:
             out["entry_count"] = len(_entry_titles(str(row.get("work_type")), content))
-        if detail and row.get("work_type") in {"mod", "preset"}:
+        if detail and row.get("work_type") in {"mod", "preset", "regex"}:
             out["entry_titles"] = _entry_titles(str(row.get("work_type")), content)
         if detail and row.get("work_type") == "ui_template":
             out["demo_html"] = row.get("demo_html") or ""
@@ -251,7 +253,9 @@ class CommunityStore:
 
     def list_works(self, work_type: str, scope: str, user_id: str, search: str = "", limit: int = 60):
         where, args = [], []
-        if work_type in WORK_TYPES:
+        if work_type in {"ui_template", "regex"}:
+            where.append("work_type in ('ui_template','regex')")
+        elif work_type in WORK_TYPES:
             where.append("work_type=?"); args.append(work_type)
         if scope == "mine":
             where.append("owner_user_id=?"); args.append(user_id)

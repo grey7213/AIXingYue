@@ -25,6 +25,8 @@ import time
 import uuid
 import zipfile
 import zlib
+from homer_generation import display_regex, execute_prompt_regex, generation_error, preset_fingerprint, validate_upstream_event, require_generated_text, settle_delivered_generation
+from homer_images import route as image_route, ImageError
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
@@ -68,6 +70,8 @@ from card_extra_workshop import (
     sync_card_extra_flags,
 )
 from chat_mod_workshop import (
+    ConversationModStore,
+    _mod_entries,
     apply_conversation_mods,
     apply_locked_community_assets,
     ensure_chat_mod_schema,
@@ -967,7 +971,7 @@ def token_for(user_id: str) -> str:
 SILLYTAVERN_BRIDGE_TOKEN_TTL_SECONDS = 15 * 60
 
 
-def sillytavern_bridge_token_for(user_id: str, app_id: str, conversation_id: str = "") -> str:
+def sillytavern_bridge_token_for(user_id: str, app_id: str, conversation_id: str = "", *, admin_preview: bool = False) -> str:
     """Issue a short-lived token scoped to one Homer user/card/conversation."""
     if len(AUTH_TOKEN_SECRET.encode("utf-8")) < 32:
         raise RuntimeError("AUTH_TOKEN_SECRET must be at least 32 bytes")
@@ -980,6 +984,7 @@ def sillytavern_bridge_token_for(user_id: str, app_id: str, conversation_id: str
             "iat": issued_at,
             "exp": issued_at + SILLYTAVERN_BRIDGE_TOKEN_TTL_SECONDS,
             "scope": "sillytavern-chat",
+            "admin_preview": bool(admin_preview),
         },
         separators=(",", ":"),
     ).encode("utf-8")
@@ -1026,6 +1031,7 @@ def sillytavern_bridge_claims(value: str | None) -> dict | None:
         "app_id": str(claims["app"]),
         "conversation_id": str(claims.get("conv") or ""),
         "expires_at": int(claims["exp"]),
+        "admin_preview": bool(claims.get("admin_preview")),
     }
 
 
@@ -9551,6 +9557,11 @@ class Store:
         return {"prompt": self.global_prompt_presets(), "regex": self.global_regex_presets()}
 
     def _save_global_collection(self, key: str, collection: dict) -> None:
+        if key == GLOBAL_REGEX_PRESETS_KEY:
+            try:
+                execute_prompt_regex([], {"enabled": True, "scripts": [rule for preset in collection.get("items") or [] for rule in preset.get("scripts") or []]})
+            except RuntimeError as exc:
+                raise ValueError("HM-R422: 正则语法校验失败，请修正或停用无效条目后重试") from exc
         raw = json.dumps(collection, ensure_ascii=False, separators=(",", ":"))
         if len(raw.encode("utf-8")) > 4 * 1024 * 1024:
             raise ValueError("global preset collection is too large")
@@ -10002,22 +10013,22 @@ class Store:
     def public_model_presets(self) -> dict:
         presets, default_id = self.llm_presets(include_secrets=False)
         visible: list[dict] = []
-        seen_models: set[str] = set()
+        seen_models: set[tuple[str, str]] = set()
         for p in presets:
             if not p.get("enabled"):
                 continue
             models = split_model_names(p.get("models") or p.get("model")) or [p.get("model") or ""]
             default_model = str(p.get("model") or "") if str(p.get("model") or "") in models else models[0]
             for model in models:
-                if not model or model in seen_models:
+                if not model or (p["id"], model) in seen_models:
                     continue
-                seen_models.add(model)
+                seen_models.add((p["id"], model))
                 model_config = model_config_for_preset(p, model)
                 pricing = normalize_model_pricing(model_config.get("pricing"))
                 points_cost = model_charge_points(pricing)
                 visible.append({
                     "id": model_selection_id(p["id"], model) if len(split_model_names(p.get("models") or p.get("model"))) > 1 else p["id"],
-                    "preset_id": p["id"],
+                    "preset_id": p["id"], "group_id": p["id"], "group_name": str(p.get("name") or "站点模型"), "preset_name": str(p.get("name") or "站点模型"),
                     "name": model_config.get("display_name") or p.get("name") or p.get("model") or p["id"],
                     "protocol": p.get("protocol") or "openai",
                     "model": model,
@@ -10033,7 +10044,7 @@ class Store:
             model = p.get("model") or ""
             model_config = model_config_for_preset(p, model)
             pricing = normalize_model_pricing(model_config.get("pricing"))
-            visible = [{"id": p["id"], "preset_id": p["id"], "name": model_config.get("display_name") or p.get("name") or model or p["id"], "protocol": p.get("protocol") or "openai", "model": model, "enabled": True, "is_default": True, "points_cost": model_charge_points(pricing), "pricing": pricing, "price_label": model_price_label(pricing), "preset_id_bound": model_config.get("preset_id") or ""}]
+            visible = [{"id": p["id"], "preset_id": p["id"], "group_id": p["id"], "group_name": str(p.get("name") or "站点模型"), "preset_name": str(p.get("name") or "站点模型"), "name": model_config.get("display_name") or p.get("name") or model or p["id"], "protocol": p.get("protocol") or "openai", "model": model, "enabled": True, "is_default": True, "points_cost": model_charge_points(pricing), "pricing": pricing, "price_label": model_price_label(pricing), "preset_id_bound": model_config.get("preset_id") or ""}]
             default_id = p["id"]
         else:
             default_id = next((p["id"] for p in visible if p.get("is_default")), visible[0]["id"] if visible else default_id)
@@ -12125,7 +12136,10 @@ def chat_greetings_from_card(card: dict, char_name: str = "", user_name: str = "
             template_context=template_context,
             phase="generate",
         )
-        text = apply_regex_scripts(text, card or {})
+        # Persist source, never display-regex output. The SillyTavern runtime
+        # owns display processing; a second pass can inject an HTML document
+        # into its own trigger and expose the remaining source as Markdown.
+        text = apply_regex_scripts(text, card or {}, source_only=True)
         key = _dedupe_text_key(text)
         if text and key and key not in {_dedupe_text_key(g) for g in greetings}:
             greetings.append(text)
@@ -12196,6 +12210,7 @@ def local_app_to_card(row: dict, *, include_tavern_helper_scripts: bool = True) 
     regex_scripts = extra.get("regex_scripts")
     if not isinstance(regex_scripts, list):
         regex_scripts = []
+    regex_scripts = recover_legacy_regex_replacements(regex_scripts, extra)
     media_assets = extra.get("media_assets") if isinstance(extra.get("media_assets"), list) else []
     card_experience = extra.get("card_experience") if isinstance(extra.get("card_experience"), dict) else {}
     card_prompt_preset = normalize_card_prompt_preset(extra.get("card_prompt_preset"))
@@ -12572,7 +12587,7 @@ def silly_card_to_app(card: dict) -> dict:
             ext = {}
         meta = ext.get("homer_import_meta") if isinstance(ext.get("homer_import_meta"), dict) else {}
         if statusbar_val.strip():
-            meta["statusbar"] = statusbar_val.strip()[:REGEX_REPLACE_MAX_CHARS]
+            meta["statusbar"] = checked_regex_replacement(statusbar_val.strip())
         if isinstance(page_depth_val, (int, float)):
             meta["pageDepth"] = int(page_depth_val)
         ext["homer_import_meta"] = meta
@@ -14441,7 +14456,14 @@ def normalize_full_regex_script(value: object, index: int = 0) -> dict:
     raw["id"] = str(raw.get("id") or f"regex-{index + 1}")[:160]
     raw["scriptName"] = str(raw.get("scriptName") or raw.get("name") or f"Regex {index + 1}")[:200]
     raw["findRegex"] = str(raw.get("findRegex") if raw.get("findRegex") is not None else raw.get("find") or raw.get("pattern") or "")[:12000]
-    raw["replaceString"] = str(raw.get("replaceString") if raw.get("replaceString") is not None else raw.get("replace") or raw.get("replacement") or "")[:REGEX_REPLACE_MAX_CHARS]
+    # Exact compatibility repair for the audited truncated deletion rule. Never
+    # infer arbitrary broken patterns; require both the known source and intent.
+    if (raw["scriptName"] == "去生理状态栏美化"
+            and raw["findRegex"] == '/(<status_profile name="[^"]+">[\\s\\S]*?<\\/'
+            and not raw.get("replaceString", raw.get("replace", ""))):
+        raw["findRegex"] = '/(<status_profile name="[^"]+">[\\s\\S]*?<\\/status_profile>)/g'
+        raw["compatibility_repair"] = "status-profile-closing-tag-r29"
+    raw["replaceString"] = checked_regex_replacement(raw.get("replaceString") if raw.get("replaceString") is not None else raw.get("replace") or raw.get("replacement") or "")
     raw["trimStrings"] = list(raw.get("trimStrings") or [])[:100] if isinstance(raw.get("trimStrings"), list) else []
     placement = raw.get("placement")
     if not isinstance(placement, list):
@@ -14556,7 +14578,63 @@ def split_silly_regex_pattern(value: object) -> tuple[str, str]:
     return text, ""
 
 
-REGEX_REPLACE_MAX_CHARS = 240000
+REGEX_REPLACE_MAX_BYTES = 8 * 1024 * 1024
+
+
+def checked_regex_replacement(value: object) -> str:
+    text = str(value if value is not None else "")
+    if len(text.encode("utf-8")) > REGEX_REPLACE_MAX_BYTES:
+        raise ValueError("界面模板（正则）单条替换内容不能超过 8 MiB；未保存，请缩小文件后重试")
+    return text
+
+
+def recover_legacy_regex_replacements(rules: list, extra: dict) -> list:
+    """Repair only the provable old 240000-character truncation, without a DB migration.
+
+    The retained original card is the same version, not a newer creator resource.
+    Never replace edited text, change flags/order, resurrect deleted rules, or
+    choose between conflicting source candidates.
+    """
+    if not any(isinstance(r, dict) and len(str(r.get("replace", ""))) == 240000 for r in rules):
+        return rules
+    candidates = []
+    snapshot = extra.get("sillytavern_card")
+    roots = [extra]
+    if isinstance(snapshot, dict):
+        roots.append(snapshot)
+        if isinstance(snapshot.get("data"), dict):
+            roots.append(snapshot["data"])
+    for root in roots:
+        extensions = root.get("extensions")
+        if isinstance(extensions, dict):
+            for key in ("regex_scripts", "TavernHelper_scripts", "tavern_helper_scripts"):
+                if isinstance(extensions.get(key), list):
+                    candidates.extend(extensions[key])
+        if root is not extra and isinstance(root.get("regex_scripts"), list):
+            candidates.extend(root["regex_scripts"])
+    by_key = {}
+    for index, candidate in enumerate(candidates):
+        if not isinstance(candidate, dict):
+            continue
+        try:
+            normalized = normalize_regex_scripts([dict(candidate, id=candidate.get("id") or f"regex-{index + 1}")])
+        except ValueError:
+            continue
+        if not normalized:
+            continue
+        candidate = normalized[0]
+        key = (candidate["id"], candidate["find"], candidate["flags"])
+        by_key.setdefault(key, set()).add(candidate["replace"])
+    restored = []
+    for rule in rules:
+        if not isinstance(rule, dict):
+            restored.append(rule)
+            continue
+        text = str(rule.get("replace", ""))
+        matches = {value for value in by_key.get((rule.get("id"), rule.get("find"), rule.get("flags", "")), ())
+                   if len(text) == 240000 and len(value) > len(text) and value.startswith(text)}
+        restored.append(dict(rule, replace=matches.pop()) if len(matches) == 1 else rule)
+    return restored
 
 
 def normalize_regex_scripts(value: object) -> list:
@@ -14583,7 +14661,7 @@ def normalize_regex_scripts(value: object) -> list:
             "id": str(raw.get("id") or f"regex-{idx + 1}")[:80],
             "name": str(raw.get("name") or raw.get("scriptName") or f"Regex {idx + 1}")[:80],
             "find": find[:1000],
-            "replace": replace[:REGEX_REPLACE_MAX_CHARS],
+            "replace": checked_regex_replacement(replace),
             # Preserve JavaScript flags for the native SillyTavern projection.
             # The Python renderer still consumes only i/m/s where applicable.
             "flags": "".join(dict.fromkeys(ch for ch in flags if ch in "gimsuy"))[:6],
@@ -14639,14 +14717,14 @@ def regex_script_to_sillytavern(value: object, index: int = 0) -> dict:
         "id": str(raw.get("id") or f"regex-{index + 1}")[:80],
         "scriptName": str(raw.get("name") or raw.get("scriptName") or f"Regex {index + 1}")[:80],
         "findRegex": find_regex[:1100],
-        "replaceString": str(
+        "replaceString": checked_regex_replacement(
             raw.get("replace")
             if raw.get("replace") is not None
             else raw.get("replacement")
             if raw.get("replacement") is not None
             else raw.get("replaceString")
             or ""
-        )[:REGEX_REPLACE_MAX_CHARS],
+        ),
         "trimStrings": list(raw.get("trimStrings") or []) if isinstance(raw.get("trimStrings"), list) else [],
         "placement": placement or [1, 2],
         "disabled": not enabled,
@@ -15691,6 +15769,7 @@ def app_to_silly_card_png_data_url(
 
 
 def extract_upstream_chat_answer(payload: object) -> str | None:
+    validate_upstream_event(payload)
     if isinstance(payload, dict):
         content_blocks = payload.get("content")
         if isinstance(content_blocks, list):
@@ -15716,13 +15795,13 @@ def extract_upstream_chat_answer(payload: object) -> str | None:
             value = choice.get("text")
             if isinstance(value, str) and value.strip():
                 return value.strip()
-        for key in ("reply", "answer", "content", "text", "message"):
+        for key in ("reply", "answer", "content", "text"):
             value = payload.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
         data = payload.get("data")
         if isinstance(data, dict):
-            for key in ("reply", "answer", "content", "text", "message"):
+            for key in ("reply", "answer", "content", "text"):
                 value = data.get(key)
                 if isinstance(value, str) and value.strip():
                     return value.strip()
@@ -15753,8 +15832,9 @@ def extract_sse_answer(raw_text: str) -> str | None:
         try:
             payload = json.loads(joined)
         except Exception:
-            last = joined.strip()
-            continue
+            if joined.strip() == '[DONE]':
+                continue
+            raise RuntimeError('模型返回了无效响应，请更换模型')
         answer = extract_upstream_chat_answer(payload)
         if answer:
             last = answer
@@ -16528,9 +16608,18 @@ def expand_silly_regex_replacement(template: str, match: re.Match) -> str:
     return "".join(out)
 
 
-def apply_regex_scripts(text: str, app: dict) -> str:
+def apply_regex_scripts(text: str, app: dict, *, source_only: bool = False) -> str:
     value = str(text or "")
     for script in enabled_regex_scripts(app):
+        if source_only:
+            # Follow native source-stage semantics. Display-only rules render
+            # in the client, prompt-only rules belong to model input. Keep
+            # source-transforming assistant rules working for ordinary cards.
+            if script.get("markdownOnly") or script.get("promptOnly"):
+                continue
+            placements = script.get("placement") or [2]
+            if 2 not in placements:
+                continue
         replacement = str(script.get("replace") or "")
         appends_document = bool(
             re.search(r"<!doctype\s+html|<html[\s>]", replacement, flags=re.IGNORECASE)
@@ -16599,9 +16688,7 @@ def apply_global_regex_scripts(text: object, preset: object, *, placement: int, 
         try:
             pattern = re.compile(find, flags=flags)
             replacement = str(script.get("replaceString") or "")
-            value = pattern.sub(lambda match: expand_silly_regex_replacement(replacement, match), value)
-            if len(value) > REGEX_REPLACE_MAX_CHARS:
-                value = value[:REGEX_REPLACE_MAX_CHARS]
+            value = checked_regex_replacement(pattern.sub(lambda match: expand_silly_regex_replacement(replacement, match), value))
         except (re.error, ValueError, OverflowError) as exc:
             log(f"global regex script skipped for {preset.get('id')}: {exc}")
     return value
@@ -17643,6 +17730,7 @@ def call_image_model(prompt: str, settings: dict) -> dict:
 
 
 def extract_stream_delta(payload: object) -> str:
+    validate_upstream_event(payload)
     if not isinstance(payload, dict):
         return ""
     delta = payload.get("delta") if isinstance(payload.get("delta"), dict) else {}
@@ -17693,6 +17781,7 @@ def chunk_text(text: str, size: int = 12):
 
 
 def _stream_event_is_terminal(event: object) -> bool:
+    validate_upstream_event(event)
     if not isinstance(event, dict):
         return False
     event_type = str(event.get("type") or event.get("event") or "").strip().lower()
@@ -17932,6 +18021,36 @@ def _merge_sillytavern_anthropic_dialogue(messages: list[dict]) -> list[dict]:
     return merged
 
 
+def admin_dialogue_configuration(store, app, user_id, draft=None):
+    """Admin-only caller. Normalize ephemeral overrides without writing global settings."""
+    draft = draft if isinstance(draft, dict) else {}
+    if len(json.dumps(draft, ensure_ascii=False)) > 2_000_000:
+        raise ValueError("会话草稿过大")
+    settings = store.effective_llm_settings(app, user_id=user_id)
+    prompt = normalize_full_prompt_preset(draft["prompt"]) if isinstance(draft.get("prompt"), dict) else settings.get("global_prompt_preset") or {}
+    regex = normalize_full_regex_preset(draft["regex"]) if isinstance(draft.get("regex"), dict) else settings.get("global_regex_preset") or {}
+    worldbook = normalize_world_info(draft["worldbook"]) if isinstance(draft.get("worldbook"), list) else normalize_world_info(app_extras(app).get("world_info") or [])
+    mod_ids = draft.get("mod_ids") or []
+    if not isinstance(mod_ids, list) or len(mod_ids) > 30:
+        raise ValueError("invalid mods")
+    mod_ids = list(dict.fromkeys(str(value) for value in mod_ids))
+    mod_worldbook = []
+    if mod_ids:
+        community = ConversationModStore(store.conn, store.lock).community
+        for mod_index, work_id in enumerate(mod_ids):
+            work = community.get_work(work_id)
+            if not work or work.get("work_type") != "mod" or not community.can_use_work(user_id, work):
+                raise ValueError("mod unavailable")
+            snapshot = community.versions.snapshot(str(work.get("current_version_id") or ""), "mod", work_id)
+            if not snapshot:
+                raise ValueError("mod version unavailable")
+            for entry_index, entry in enumerate(normalize_world_info(_mod_entries(snapshot.get("content")))):
+                entry.update(id=f"mod:{work_id}:{entry_index}", _homer_world_group="mod", _homer_world_group_index=mod_index, _homer_world_sequence=entry_index)
+                mod_worldbook.append(entry)
+    execute_prompt_regex([], regex)
+    return {"prompt": prompt, "regex": regex, "worldbook": worldbook, "mod_ids": mod_ids, "mod_worldbook": mod_worldbook, "display_regex": display_regex(regex)}
+
+
 def prepare_sillytavern_bridge_generation(store: "Store", claims: dict, body: dict) -> dict:
     """Build a provider request from an authenticated, conversation-scoped ST prompt."""
     user_id = str(claims.get("user_id") or "")
@@ -17940,6 +18059,10 @@ def prepare_sillytavern_bridge_generation(store: "Store", claims: dict, body: di
     user = store.get_user_by_id(user_id)
     if not user:
         raise ValueError("user not found")
+    if claims.get("admin_preview") and not is_admin(user):
+        raise PermissionError("admin only")
+    if "homer_preview" in body and not (claims.get("admin_preview") and is_admin(user)):
+        raise PermissionError("admin preview only")
     app_row = (
         store.versioned_app_for_conversation(app_id, conversation_id, user_id)
         if conversation_id
@@ -17974,6 +18097,14 @@ def prepare_sillytavern_bridge_generation(store: "Store", claims: dict, body: di
     context = store.chat_context(user_id, app_id, conversation_id, last_user, history) if conversation_id else {}
 
     settings = store.effective_llm_settings(app, user_id=user_id)
+    if claims.get("admin_preview"):
+        config = admin_dialogue_configuration(store, app, user_id, body.get("homer_preview"))
+        settings = dict(settings, global_prompt_preset=config["prompt"], global_regex_preset=config["regex"])
+        app["extra_settings"] = dict(app_extras(app), world_info=config["mod_worldbook"] + config["worldbook"])
+    effective_regex = dict(settings.get("global_regex_preset") or {})
+    if conversation_id and effective_regex.get("id"):
+        overrides = store.conversation_preset_override_map(conversation_id, user_id).get("regex", {}).get(effective_regex["id"], {})
+        effective_regex["scripts"] = [dict(rule, disabled=not overrides.get(rule.get("id"), not rule.get("disabled"))) for rule in effective_regex.get("scripts") or []]
     if isinstance(context.get("conversation_settings"), dict):
         context["conversation_settings"]["prompt_preset"] = settings.get("global_prompt_preset") or {}
         context["conversation_settings"]["regex_preset"] = settings.get("global_regex_preset") or {}
@@ -17981,12 +18112,16 @@ def prepare_sillytavern_bridge_generation(store: "Store", claims: dict, body: di
         app,
         last_user,
         [],
-        settings,
+        dict(settings, global_regex_preset={"enabled": False, "scripts": []}),
         store.get_persona(user_id),
         context,
     )
     if not request_info.get("enabled"):
         raise RuntimeError("模型服务配置不可用")
+    # Apply official prompt regex to the final runtime messages, not the temporary
+    # single-user payload that is replaced below. Keep display transformations out.
+    messages = execute_prompt_regex(messages, effective_regex,
+        user_name=str((store.get_persona(user_id) or {}).get("name") or "用户"), character_name=str(app.get("name") or "角色"))
     protocol = str(request_info.get("protocol") or "openai")
     payload = dict(request_info.get("payload") if isinstance(request_info.get("payload"), dict) else {})
     # 提示词硬预算。上游按 token 计费且有上下文上限，长会话不设界会直接 400，
@@ -18132,6 +18267,14 @@ def prepare_sillytavern_bridge_generation(store: "Store", claims: dict, body: di
         "conversation_id": conversation_id,
         "pricing": normalize_model_pricing(settings.get("pricing")),
         "input_tokens_estimate": estimate_payload_input_tokens(payload),
+        "diagnostic": {
+            "prompt_id": str((settings.get("global_prompt_preset") or {}).get("id") or ""),
+            "prompt_revision": preset_fingerprint(settings.get("global_prompt_preset")),
+            "regex_id": str(effective_regex.get("id") or ""),
+            "regex_revision": preset_fingerprint(effective_regex),
+            "regex_count": sum(not rule.get("disabled") for rule in effective_regex.get("scripts") or []),
+            "worldbook_revision": preset_fingerprint(app_extras(app).get("world_info")),
+        },
         "prompt_stats": prompt_stats,
     }
 
@@ -18159,7 +18302,7 @@ def sillytavern_bridge_completion(request_info: dict) -> str:
     answer = extract_upstream_chat_answer(data) or extract_sse_answer(text)
     if not answer:
         raise RuntimeError("模型没有返回有效内容，请重试")
-    return answer
+    return require_generated_text(answer)
 
 
 def stream_sillytavern_bridge_completion(request_info: dict):
@@ -18179,7 +18322,7 @@ def stream_sillytavern_bridge_completion(request_info: dict):
     with urlopen(req, timeout=90) as response:
         for raw_line in response:
             line = raw_line.decode("utf-8", errors="replace").strip()
-            if not line or line.startswith(":"):
+            if not line or line.startswith((":", "event:", "id:", "retry:")):
                 continue
             if line.startswith("data:"):
                 line = line[5:].strip()
@@ -18191,7 +18334,8 @@ def stream_sillytavern_bridge_completion(request_info: dict):
             try:
                 event = json.loads(line)
             except Exception:
-                continue
+                raise RuntimeError('模型返回了无效流式响应，请更换模型')
+            validate_upstream_event(event)
             usage = merge_token_usage(usage, extract_token_usage(event))
             delta = extract_stream_delta(event)
             if delta:
@@ -19825,12 +19969,15 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(200, {"object": "list", "data": data})
 
     def handle_sillytavern_chat_completions(self, body: object) -> None:
+        request_id = uuid.uuid4().hex[:16]
+        def failure(status=502, reason=""):
+            return generation_error(status, reason, request_id)
         claims = sillytavern_bridge_claims(self.headers.get("Authorization"))
         if not claims:
-            self.send_json(401, {"error": {"message": "无效或已过期的酒馆会话，请刷新页面", "type": "authentication_error"}})
+            self.send_json(401, failure(401))
             return
         if self.command.upper() != "POST" or not isinstance(body, dict):
-            self.send_json(400, {"error": {"message": "invalid request", "type": "invalid_request_error"}})
+            self.send_json(400, failure(400))
             return
         try:
             request_info = prepare_sillytavern_bridge_generation(self.store, claims, body)
@@ -19847,11 +19994,14 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError as exc:
             message = str(exc)[:500] or "invalid request"
             status = 402 if "积分不足" in message else 404 if "not found" in message else 409 if "mismatch" in message else 400
-            self.send_json(status, {"error": {"message": message, "type": "invalid_request_error"}})
+            self.send_json(status, failure(status))
+            return
+        except PermissionError:
+            self.send_json(403, failure(403))
             return
         except Exception as exc:
-            log(f"sillytavern request preparation failed: {type(exc).__name__}: {exc}")
-            self.send_json(503, {"error": {"message": "酒馆模型出口准备失败", "type": "server_error"}})
+            log(f"generation {request_id} preparation failed: {type(exc).__name__}")
+            self.send_json(503, failure(503, "regex" if str(exc) == "HM-R422" else ""))
             return
 
         completion_id = "chatcmpl-homer-" + uuid.uuid4().hex
@@ -19866,22 +20016,31 @@ class Handler(BaseHTTPRequestHandler):
             )
             slot.__enter__()
         except Exception as exc:
-            self.send_json(429, {"error": {"message": str(exc)[:500] or "请求过于频繁", "type": "rate_limit_error"}})
+            self.send_json(429, failure(429))
             return
 
         if not stream:
             try:
-                answer = sillytavern_bridge_completion(request_info)
+                answer = require_generated_text(sillytavern_bridge_completion(request_info))
                 usage = request_info.get("usage") if isinstance(request_info.get("usage"), dict) else {}
                 actual_input_tokens = int(usage.get("input_tokens") or request_info.get("input_tokens_estimate") or 1)
                 actual_output_tokens = int(usage.get("output_tokens") or estimate_text_tokens(answer))
                 points_cost = model_charge_points(request_info.get("pricing"), actual_input_tokens, actual_output_tokens)
-                charge = self.store.spend_credit_points(
+                def deliver(charge):
+                    self.send_json(200, {
+                        "id": completion_id, "object": "chat.completion", "created": created, "model": model,
+                        "choices": [{"index": 0, "message": {"role": "assistant", "content": answer}, "finish_reason": "stop"}],
+                        "usage": {"prompt_tokens": actual_input_tokens, "completion_tokens": actual_output_tokens, "total_tokens": actual_input_tokens + actual_output_tokens},
+                        "homer": charge,
+                        "homer_diagnostic": dict(request_info.get("diagnostic") or {}, request_id=request_id),
+                    })
+                    self.wfile.flush()
+                settle_delivered_generation(
+                    self.store,
                     str(request_info["user_id"]),
                     points_cost,
-                    event_type="sillytavern_chat_cost",
-                    summary="角色对话消耗",
                     payload={
+                        "request_id": request_id,
                         "app_id": request_info["app_id"],
                         "conversation_id": request_info["conversation_id"],
                         "model": model,
@@ -19889,26 +20048,15 @@ class Handler(BaseHTTPRequestHandler):
                         "input_tokens": actual_input_tokens,
                         "output_tokens": actual_output_tokens,
                     },
+                    deliver=deliver,
                 )
-                self.send_json(200, {
-                    "id": completion_id,
-                    "object": "chat.completion",
-                    "created": created,
-                    "model": model,
-                    "choices": [{
-                        "index": 0,
-                        "message": {"role": "assistant", "content": answer},
-                        "finish_reason": "stop",
-                    }],
-                    "usage": {"prompt_tokens": actual_input_tokens, "completion_tokens": actual_output_tokens, "total_tokens": actual_input_tokens + actual_output_tokens},
-                    "homer": charge,
-                })
             except HTTPError as exc:
                 log(f"sillytavern upstream HTTP error: {exc.code}")
-                self.send_json(502, {"error": {"message": f"模型服务返回 HTTP {exc.code}", "type": "upstream_error"}})
+                self.send_json(502, failure(429 if exc.code == 429 else 502))
             except Exception as exc:
-                log(f"sillytavern completion failed: {type(exc).__name__}: {exc}")
-                self.send_json(502, {"error": {"message": "模型请求失败，请稍后重试", "type": "upstream_error"}})
+                log(f"generation {request_id} failed: {type(exc).__name__}")
+                status = 402 if isinstance(exc, ValueError) and '积分不足' in str(exc) else 504 if isinstance(exc, (TimeoutError, socket.timeout)) else 502
+                self.send_json(status, failure(status, "empty" if "没有返回有效内容" in str(exc) else ""))
             finally:
                 slot.__exit__(None, None, None)
             return
@@ -19927,6 +20075,8 @@ class Handler(BaseHTTPRequestHandler):
                     "finish_reason": finish_reason,
                 }],
             }
+            if delta.get("role") or finish_reason:
+                payload["homer_diagnostic"] = dict(request_info.get("diagnostic") or {}, request_id=request_id)
             self.wfile.write(
                 ("data: " + json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n\n").encode("utf-8")
             )
@@ -19940,16 +20090,21 @@ class Handler(BaseHTTPRequestHandler):
                     text_chunk = str(chunk)
                     output_parts.append(text_chunk)
                     write_openai_chunk({"content": text_chunk})
+            require_generated_text(''.join(output_parts))
             usage = request_info.get("usage") if isinstance(request_info.get("usage"), dict) else {}
             actual_input_tokens = int(usage.get("input_tokens") or request_info.get("input_tokens_estimate") or 1)
             actual_output_tokens = int(usage.get("output_tokens") or estimate_text_tokens("".join(output_parts)))
             points_cost = model_charge_points(request_info.get("pricing"), actual_input_tokens, actual_output_tokens)
-            self.store.spend_credit_points(
+            def deliver(_charge):
+                write_openai_chunk({}, "stop")
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+            settle_delivered_generation(
+                self.store,
                 str(request_info["user_id"]),
                 points_cost,
-                event_type="sillytavern_chat_cost",
-                summary="角色对话消耗",
                 payload={
+                    "request_id": request_id,
                     "app_id": request_info["app_id"],
                     "conversation_id": request_info["conversation_id"],
                     "model": model,
@@ -19957,19 +20112,12 @@ class Handler(BaseHTTPRequestHandler):
                     "input_tokens": actual_input_tokens,
                     "output_tokens": actual_output_tokens,
                 },
+                deliver=deliver,
             )
-            write_openai_chunk({}, "stop")
-            self.wfile.write(b"data: [DONE]\n\n")
-            self.wfile.flush()
         except Exception as exc:
-            log(f"sillytavern stream failed: {type(exc).__name__}: {exc}")
+            log(f"generation {request_id} stream failed: {type(exc).__name__}")
             try:
-                error_payload = {
-                    "error": {
-                        "message": "模型流式请求失败，请稍后重试",
-                        "type": "upstream_error",
-                    }
-                }
+                error_payload = failure(402 if isinstance(exc, ValueError) and '积分不足' in str(exc) else 504 if isinstance(exc, (TimeoutError, socket.timeout)) else 429 if isinstance(exc, HTTPError) and exc.code == 429 else 502, "empty" if "没有返回有效内容" in str(exc) else "")
                 self.wfile.write(
                     ("data: " + json.dumps(error_payload, ensure_ascii=False, separators=(",", ":")) + "\n\n").encode("utf-8")
                 )
@@ -20166,6 +20314,8 @@ class Handler(BaseHTTPRequestHandler):
             if status < 400 or status > 599:
                 status = 400
         request_log_body = body_text
+        if path == '/admin/api/image-models' or path.startswith('/console/api/web/images/'):
+            request_log_body = '[private image request]'
         if path in (
             "/console/api/web/dialogue/events",
             "/console/api/web/sillytavern/events",
@@ -20240,6 +20390,19 @@ class Handler(BaseHTTPRequestHandler):
     def route(self, path: str, query: str, body: object) -> object:
         normalized = path.lstrip("/")
 
+        if normalized == 'admin/api/image-models' or normalized.startswith('console/api/web/images/'):
+            try:
+                image_user = self.authenticated_token_user()
+                # homer_images 以 user['is_admin'] 判定管理员；直接传数据库行会把 ADMIN_EMAILS
+                # 里的环境变量管理员（其 users.is_admin 仍为 0）挡在生图配置之外，与社区管理端同理。
+                if image_user is not None:
+                    image_user = dict(image_user, is_admin=is_admin(image_user))
+                return ok_response(image_route(self.store, self.command.upper(), normalized, parse_qs(query or ''), body, image_user))
+            except ImageError as exc:
+                return error_response(str(exc), exc.status)
+            except Exception:
+                return error_response('[HM-I500] 生图服务暂不可用，请稍后重试', 500)
+
         if normalized == "console/api/public/notifications":
             if self.command.upper() != "GET":
                 return error_response("method not allowed", 405)
@@ -20254,6 +20417,79 @@ class Handler(BaseHTTPRequestHandler):
             return ok_response("ok")
 
         user = self.authenticated_user()
+
+        if normalized == "admin/api/dialogue/configuration":
+            if not is_admin(self.authenticated_token_user()):
+                return error_response("forbidden: admin only", 403)
+            if self.command.upper() != "POST" or not isinstance(body, dict):
+                return error_response("method not allowed", 405)
+            app_id = self.store.resolve_local_app_id(str(body.get("app_id") or ""))
+            try:
+                app_row = self.store.versioned_app_for_new_conversation(app_id, str(user["id"]))[0]
+            except PermissionError:
+                return error_response("role not found", 404)
+            if not user_can_play_app(app_row, str(user["id"])):
+                return error_response("character unavailable", 404)
+            app = dict(app_row)
+            model = self.store.public_model_selection(body.get("model"))
+            if model:
+                app["llm_model"] = model
+            try:
+                config = admin_dialogue_configuration(self.store, app, str(user["id"]), body.get("draft"))
+                if body.get("include_library"):
+                    config["library"] = self.store.global_presets()
+                return ok_response(config)
+            except (ValueError, RuntimeError):
+                return error_response("[HM-R422] 会话配置无效，请检查正则与条目内容", 422)
+
+        if normalized in ("admin/api/dialogue/preview", "console/api/web/dialogue/regex"):
+            if self.command.upper() != "GET":
+                return error_response("method not allowed", 405)
+            if not user:
+                return error_response("unauthorized", 401)
+            preview = normalized == "admin/api/dialogue/preview"
+            if preview and not is_admin(self.authenticated_token_user()):
+                return error_response("forbidden: admin only", 403)
+            user_id = str(user["id"])
+            app_id = self.store.resolve_local_app_id(parse_query_str(query, "app_id", ""))
+            conv_id = parse_query_str(query, "conversation_id", "")
+            conversation = self.store.get_conversation(conv_id, user_id) if conv_id else None
+            if conv_id and (not conversation or self.store.resolve_local_app_id(str(conversation.get("app_id") or "")) != app_id):
+                return error_response("conversation not found", 404)
+            try:
+                app_row = self.store.versioned_app_for_conversation(app_id, conv_id, user_id) if conv_id else self.store.versioned_app_for_new_conversation(app_id, user_id)[0]
+            except PermissionError:
+                return error_response("role not found", 404)
+            if not user_can_play_app(app_row, user_id):
+                return error_response("character unavailable", 404)
+            app_data = dict(app_row)
+            selected = self.store.public_model_selection(parse_query_str(query, "model", ""))
+            if selected:
+                app_data["llm_model"] = selected
+            settings = self.store.effective_llm_settings(app_data, user_id=user_id)
+            preset = dict(settings.get("global_regex_preset") or {})
+            if conv_id and preset.get("id"):
+                overrides = self.store.conversation_preset_override_map(conv_id, user_id).get("regex", {}).get(preset["id"], {})
+                preset["scripts"] = [dict(rule, disabled=not overrides.get(rule.get("id"), not rule.get("disabled"))) for rule in preset.get("scripts") or []]
+            rules = display_regex(preset)
+            if not preview:
+                return ok_response(rules)
+            # Read-only launch: no conversation row, no history writes, no cloud token
+            # for a real conversation. The signed preview claim is rechecked on generate.
+            card = local_app_to_card(app_data)
+            preview_card = silly_card_with_homer_cover(local_app_to_silly_card(app_data, card), str(app_data.get("cover_url") or ""))
+            # The authoritative backend applies the editable worldbook once. Do not
+            # also embed a stale duplicate in the native runtime prompt.
+            preview_card.setdefault("data", {})["character_book"] = {"entries": []}
+            return ok_response({
+                "user": {"id": user_id, "name": str(user["name"] or "管理员"), "is_admin": True},
+                "runtime": {"backend_base_url": PUBLIC_BASE_URL.rstrip("/"), "public_url": SILLYTAVERN_PUBLIC_URL},
+                "launch": {"app_id": app_id, "conversation_id": "preview-" + uuid.uuid4().hex,
+                    "admin_preview": True, "card": preview_card,
+                    "messages": [], "runtime_config": {}, "runtime_profile": {}, "display_regex": rules,
+                    "bridge_token": sillytavern_bridge_token_for(user_id, app_id, admin_preview=True),
+                    "bridge_token_ttl_seconds": SILLYTAVERN_BRIDGE_TOKEN_TTL_SECONDS},
+            })
 
         if normalized in (
             "console/api/web/dialogue/session",

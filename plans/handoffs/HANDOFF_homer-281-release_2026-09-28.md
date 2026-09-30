@@ -502,3 +502,122 @@ adb：E:/Android/Sdk/platform-tools/adb.exe
 **Closed at:** 2026-09-28T03:19:19Z（11:19:19 +0800）
 **Commit:** `7077635`
 **Session status:** Handed off to next session
+
+---
+
+## Step 2 完成记录 — 2026-09-30
+
+对账 3 个 server hunk 并部署：**已完成，生产在跑**。
+
+### 部署内容
+
+生产布局是平铺的（`/opt/ai-fengyue-backend/` 下没有 `tools/` 子目录），所以 8 个文件直接落该目录，
+`homer_generation.execute_prompt_regex` 用 `Path(__file__).with_name("homer_regex.cjs")` 解析 worker，
+平铺布局满足它。
+
+| 文件 | LF sha256[:16] |
+| --- | --- |
+| `ai_fengyue_local_server.py` | `8e60b2e5ef39962b`（部署后） |
+| `community_workshop.py` | `3c3da5a135b41227` |
+| `card_extra_workshop.py` | `964fbe2fd0c888cf` |
+| `chat_mod_workshop.py` | `9475a71f3c6a94ee` |
+| `homer_generation.py` | `cbc0ca5385cf1791` |
+| `homer_images.py` | `4a7286df2ec2db6d` |
+| `homer_regex.cjs` | `2debab49316fbe81` |
+| `requirements-images.txt` | `c400c15a410e3574` |
+
+对账基线确认：部署前生产 `ai_fengyue_local_server.py` LF 归一化 `a222aa7f17151740` / 1,096,173 bytes，
+与 handoff 记录的前置状态、以及本地 git HEAD **完全一致**；三个 workshop 模块同样 `prod == HEAD`。
+生产零漂移，因此不存在「已装旧补丁需要保留」的差异。
+
+备份（都在 root-only 0700 目录）：
+- `/root/homer-281-deploy-20260930-123641/` — 4 个被替换文件的部署前副本
+- `/root/homer-281-fix-20260930-125330/ai_fengyue_local_server.py.before` — 本轮修复前的 `20ac7dbcc7fe5657`
+- `/opt/ai-fengyue-backend/backups/ai_fengyue-current-20260930-123641.sqlite3` — SQLite Online Backup，
+  `quick_check=ok` / `integrity_check=ok`，2,998,075,392 bytes
+
+### 发现并修复的两个缺陷（都在 r33 新增代码里）
+
+**1. 未捕获的 `PermissionError` 直接断连（本地 + 生产均已修复并验证）**
+
+`admin/api/dialogue/configuration` 和 `admin/api/dialogue/preview` / `console/api/web/dialogue/regex`
+在 `app_id` 未知时，`versioned_app_for_new_conversation()` 抛 `PermissionError("role not found")`。
+`PermissionError` 不是 `ValueError`/`RuntimeError` 的子类，路由的 `except (ValueError, RuntimeError)` 接不住；
+`handle_any` 外层又没有兜底，异常穿透到 `socketserver`，**连接被直接丢弃、没有任何 HTTP 响应**。
+其中 `console/api/web/dialogue/regex?app_id=<任意值>` 任何登录用户都能触发。
+
+影响面已核实：这四条路由在 git HEAD 里出现 0 次，全是 r33 新增；同文件其他所有调用点都有防护
+（`except (ValueError, PermissionError)` 见于 19575/19799/20536/20561/21687/21843/22104，
+`except PermissionError` 见于 19999/22380），只有这两处漏了。修复即按文件自身既有写法补上
+`except PermissionError: return error_response("role not found", 404)`。
+
+**2. `homer_images.route()` 读原始列判断管理员，把 env 管理员挡在外面（生产已复现并修复）**
+
+`homer_images.py` 用 `user['is_admin']`（数据库原始列）判定，而全后端其余地方用 `is_admin(user)`
+（= `ADMIN_EMAILS` 环境变量 **或** 数据库列）。生产唯一管理员 `local@ctf.test` 走的是环境变量路径，
+其 `users.is_admin` 列为 `0`：
+
+```
+raw users.is_admin column : 0     -> 403 FORBIDDEN
+S.is_admin(row)           : True  -> ALLOWED
+S.admin_source(row)       : env
+```
+
+后果是**运营在后台配不了生图模型**，正好是 handoff 阻塞 3 要避免的「死按钮」。
+该陷阱本仓库早有记录（见 `ai_fengyue_local_server.py:20737` 注释「只读 users.is_admin 会把 env 管理员
+挡在社区管理端之外」），属于同类问题在新模块里复发。修复放在调用点，不改进贡献者模块的接口：
+
+```python
+image_user = self.authenticated_token_user()
+if image_user is not None:
+    image_user = dict(image_user, is_admin=is_admin(image_user))
+```
+
+### 验证（真实执行，非推断）
+
+本地（改动后的文件）**144 项断言全绿**，服务端 traceback 计数 0：
+
+| 套件 | 结果 |
+| --- | --- |
+| `verify_regex_worker.py` | 24/24 |
+| `verify_admin_dialogue_config.py` | 18/18 |
+| `verify_image_tasks.py` | 30/30 |
+| `verify_homer_images.py`（需 Pillow，用 Anconda） | 48/48 |
+| `live_admin_probe.py` | 8/8 |
+| `happy_path_probe.py` | 7/7 |
+| `verify_env_admin_image_route.py`（本轮新增回归） | 9/9 |
+| `probe2.py`（5 条曾经断连的路由） | 5/5 全部返回干净 404，不再 DROP |
+
+生产（`prod_guard_probe.py`，对真实 8008 打真实请求，**17/17 通过**）：
+- 曾断连的 5 条路由现在分别返回 404 / 404 / 404 / 405（preview 是 GET-only，属设计）/ 404
+- 生图管理路由：匿名 401、普通用户 403、**env 管理员 200**（修复前是 403）
+- 正常路径未回归：真实公开卡 `dialogue/regex` 200；生图用户路由 401/200/400/404 均为预期
+- 未知路由不再丢连接，匿名 401、带凭证返回通用空信封并回显 `path`
+
+生产最终状态：`ai-fengyue-backend` / `homer-dialogue` / `nginx` 三者 active，`NRestarts=0`，
+loopback 与公网 `/health` 均 200，监听 `127.0.0.1:8008`(python3, pid 2020423) 与 `127.0.0.1:8091`(node)，
+业务库 `quick_check=ok`，users 225 / local_apps 8824 / conversations 1476 / messages 4359（部署前后一致），
+`homer_image_tasks` 表已由新模块建出（0 行），证明新代码在生产真的初始化了。
+
+另外以服务账号 `ai-xingyue` 在生产实测了 node 正则 worker：`execute_prompt_regex` 正确改写 assistant 消息、
+不动 system/user 消息，`generation_error(402)` 返回 `HM-G402`。
+
+### Pillow 决策
+
+jammy 的 `python3-pil` 候选版本是 **9.0.1**，低于 `requirements-images.txt` 声明的 `Pillow>=11.3,<13`。
+我没有接受发行版包：2022 年的 Pillow 要解析不受信任的远端图片，带已知 CVE。
+改为装 pip 与 `Pillow==12.3.0`（cp310 manylinux wheel），与本地版本一致。
+
+### homer-dialogue 重启：明确延后到 Step 3
+
+handoff Step 2 写的是「部署重启 Python/Node」，本轮只重启了 Python。理由：这一步改动的文件里
+没有任何一个属于 `homer-dialogue` 运行时——runtime 代码要等累计 web 补丁（Step 3）落地才变。
+现在重启 Node 不会带来任何变化，等 Step 3 一起重启更干净。8091 目前仍在跑 pid 671。
+
+### 剩余风险
+
+- 服务端文件真正的 r33 基线不可恢复，这 3 个 hunk 只能做**语义校验**，不能做哈希校验。
+- 生图**仍未端到端跑通**：还没有配置任何图片服务商。配置时要注意 `endpoint()` 的 SSRF 守卫要求
+  主机名解析出的**每一条**记录都是全局地址，否则会以「不允许连接本机或内网地址」被拒。
+- 未知路由对已登录用户返回 `200 + 空信封` 是本后端既有兜底行为（不是 r33 引入），
+  `prod_guard_probe.py` 现在按实际行为断言并回显 `path`。

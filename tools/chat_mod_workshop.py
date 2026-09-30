@@ -172,16 +172,27 @@ def apply_locked_community_assets(conn, lock, app: dict) -> dict:
     template_experience: dict = {}
     template_legacy: dict = {}
     applied_ui: list[dict] = []
+    template_regex: list[dict] = []
     for index, work_id_raw in enumerate(ui_ids):
         work_id = str(work_id_raw or "")
         version_id = str(ui_versions[index] or "") if index < len(ui_versions) else ""
         if not work_id or not version_id:
             continue
-        snapshot = community.versions.snapshot(version_id, "ui_template", work_id)
+        work = community.get_work(work_id)
+        if not work or work.get("work_type") not in {"ui_template", "regex"}:
+            continue
+        snapshot = community.versions.snapshot(version_id, work["work_type"], work_id)
         if not snapshot:
             continue
         content = _snapshot_content(snapshot)
         source = content.get("ui_template") if isinstance(content.get("ui_template"), dict) else content
+        rules = source.get("regex_scripts", [])
+        for rule_index, raw_rule in enumerate(rules if isinstance(rules, list) else []):
+            if not isinstance(raw_rule, dict) or not isinstance(raw_rule.get("findRegex"), str):
+                continue
+            rule = dict(raw_rule)
+            rule["id"] = f"work-regex:{work_id}:{version_id}:{rule_index}"
+            template_regex.append(rule)
         experience = source.get("card_experience") if isinstance(source.get("card_experience"), dict) else {}
         legacy = source.get("legacy_rp_hub") if isinstance(source.get("legacy_rp_hub"), dict) else {}
         template_experience = _deep_merge(template_experience, experience)
@@ -193,6 +204,10 @@ def apply_locked_community_assets(conn, lock, app: dict) -> dict:
         extras["card_experience"] = _deep_merge(template_experience, own_experience)
     if template_legacy:
         extras["legacy_rp_hub"] = _deep_merge(template_legacy, own_legacy)
+    if template_regex:
+        # Idempotent hydration: keep author rules, replace only our own projection.
+        authored = [rule for rule in extras.get("regex_scripts", []) if isinstance(rule, dict) and not str(rule.get("id", "")).startswith("work-regex:")]
+        extras["regex_scripts"] = template_regex + authored
     if applied_ui:
         extras["_applied_ui_template_versions"] = applied_ui
     app["extra_settings"] = extras
