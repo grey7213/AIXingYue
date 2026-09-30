@@ -26,6 +26,10 @@ DEFAULT_NOTIFICATIONS_EXTENSION = ROOT / "tools" / "notifications_extension.py"
 DEFAULT_CARD_EXTRA_WORKSHOP = ROOT / "tools" / "card_extra_workshop.py"
 DEFAULT_CHAT_MOD_WORKSHOP = ROOT / "tools" / "chat_mod_workshop.py"
 DEFAULT_SPINE_MEDIA_SUPPORT = ROOT / "tools" / "spine_media_support.py"
+DEFAULT_HOMER_GENERATION = ROOT / "tools" / "homer_generation.py"
+DEFAULT_HOMER_IMAGES = ROOT / "tools" / "homer_images.py"
+DEFAULT_HOMER_REGEX = ROOT / "tools" / "homer_regex.cjs"
+DEFAULT_IMAGES_REQUIREMENTS = ROOT / "tools" / "requirements-images.txt"
 DEFAULT_REQUIRED_WORLD_BOOK = ROOT / "tools" / "data" / "tavo_anti_scrape_worldbook.json"
 DEFAULT_FRONTEND = ROOT / "frontend"
 DEFAULT_DIALOGUE_RUNTIME = ROOT / "sillytavern-runtime"
@@ -1009,6 +1013,14 @@ def main() -> int:
     parser.add_argument("--card-extra-workshop", type=Path, default=DEFAULT_CARD_EXTRA_WORKSHOP)
     parser.add_argument("--chat-mod-workshop", type=Path, default=DEFAULT_CHAT_MOD_WORKSHOP)
     parser.add_argument("--spine-media-support", type=Path, default=DEFAULT_SPINE_MEDIA_SUPPORT)
+    parser.add_argument("--homer-generation", type=Path, default=DEFAULT_HOMER_GENERATION,
+                        help="续写/生成链路模块")
+    parser.add_argument("--homer-images", type=Path, default=DEFAULT_HOMER_IMAGES,
+                        help="聊天生图模块；漏传会让 backend import 失败")
+    parser.add_argument("--homer-regex", type=Path, default=DEFAULT_HOMER_REGEX,
+                        help="隔离正则 worker，与 backend 同目录")
+    parser.add_argument("--images-requirements", type=Path, default=DEFAULT_IMAGES_REQUIREMENTS,
+                        help="生图依赖声明；本脚本只上传，不安装依赖")
     parser.add_argument("--frontend", type=Path, default=DEFAULT_FRONTEND, help="前端目录，会上传到 /var/www/ai-fengyue-frontend")
     parser.add_argument("--dialogue-runtime", type=Path, default=DEFAULT_DIALOGUE_RUNTIME, help="固定 SillyTavern runtime 源码目录")
     parser.add_argument("--dialogue-port", type=int, default=8091, help="内部 dialogue runtime loopback 端口")
@@ -1035,10 +1047,15 @@ def main() -> int:
         ("card_extra_workshop.py", args.card_extra_workshop),
         ("chat_mod_workshop.py", args.chat_mod_workshop),
         ("spine_media_support.py", args.spine_media_support),
+        ("homer_generation.py", args.homer_generation),
+        ("homer_images.py", args.homer_images),
+        ("homer_regex.cjs", args.homer_regex),
     ]
     for _, local_path in backend_modules:
         if not local_path.is_file():
             raise FileNotFoundError(local_path)
+    if not args.images_requirements.is_file():
+        raise FileNotFoundError(args.images_requirements)
     if not args.skip_dialogue_runtime and not args.dialogue_runtime.is_dir():
         raise FileNotFoundError(args.dialogue_runtime)
     if not args.key.exists():
@@ -1171,6 +1188,9 @@ def main() -> int:
             run(ssh, f"[ -f {remote_path} ] && cp {remote_path} {remote_path}.bak-{timestamp} || true")
             log(f"uploading backend module {local_path.name} to {remote_path}")
             put_file(sftp, local_path, remote_path, 0o644)
+        remote_requirements = posixpath.join(args.deploy_dir, "requirements-images.txt")
+        log(f"uploading images requirements to {remote_requirements} (this script does not install dependencies)")
+        put_file(sftp, args.images_requirements, remote_requirements, 0o644)
         if DEFAULT_REQUIRED_WORLD_BOOK.exists():
             remote_worldbook = posixpath.join(args.deploy_dir, "data", "tavo_anti_scrape_worldbook.json")
             log(f"uploading required world book to {remote_worldbook}")
