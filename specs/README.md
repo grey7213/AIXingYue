@@ -4,6 +4,8 @@
 
 ## 当前主要入口
 
+- 工坊账号缓存隔离修复与 1.17.4（282）发布：`workshop-cache-isolation-20261001.md`（浏览器/实际 APK WebView 竞态测试、旧缓存迁移、281→282 覆盖升级、Web/APK/GitHub 发布证据）
+
 - Android PR #7 与 1.15.1：`homer-pr7-release-20260908-tasks.md`（完整补丁审查、账号缓存隔离、社区预览权限、原生返回键和应用内升级验收）
 
 - 最新生产备份与服务器清理：`homer-backup-cleanup-20260907-tasks.md`（本地/服务器完整恢复点、35 项校验、265 个旧备份文件清理及磁盘复核）

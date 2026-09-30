@@ -18,7 +18,7 @@
 - [x] 桌面/手机浏览器回归：8 场景 × 2 视口，共 16/16 通过。
 - [x] 构建包含修复的 APK，Pixel 6 API 33 的实际 APK WebView 8/8 场景通过；43/43 Release 单测通过。
 - [x] 备份后定向更新 Web 生产 3 文件，上传哈希全部一致。
-- [ ] 记录实际结果、发布范围和剩余限制，以 grey7213 署名提交备份。
+- [x] 记录实际结果、发布范围和剩余限制，以 grey7213 署名提交备份。
 
 ## 已验证结果
 
@@ -32,4 +32,15 @@
 
 ## 发布状态
 
-Web 修复已上线；APK 正在完成正式覆盖升级与发布验收。已安装的 281 从自身 APK 读取 JS，必须升级到 282 才能获得此修复。
+Web 修复和正式 APK 1.17.4（282）均已上线。已安装的 281 从自身 APK 读取 JS，必须升级到 282 才能获得此修复。
+
+- 生产 URL 的合成 API 浏览器回归也为 16/16；确认使用实际公网静态文件，未写入业务数据。
+- Pixel 6 模拟器正式包覆盖安装从 281→282 成功，`firstInstallTime=2026-09-22 11:04:46` 保持不变；正式 Activity 在前台，旧会话原有消息仍可见，应用进程 FATAL EXCEPTION 计数为 0。没有卸载或清理正式包数据。
+- 官网不可变包：`https://patcher.villainy.top/download/homer-android-1.17.4-282-release.apk`。版本包与 canonical 两个地址均完成完整下载 SHA-256 校验，与本地正式包一致。
+- `release.json` 当前为 1.17.4 / 282，canonical 和不可变兄弟条目各唯一，包名/哈希/字节数一致，`Cache-Control: no-cache`。
+- GitHub 成品：`https://github.com/grey7213/homer-android-apk/releases/tag/release-1.17.4-282`，APK asset digest 与本地一致，Release 作者为 `grey7213`。
+- Web 修复提交：`2cda666`；Android PR #18 已在远端 build 成功（1m19s）后合并，提交 `0f41f3b`。通过本地快进推送保留用户 Author/Committer；GitHub API 核实两个提交的 Author 和 Committer 均为 `grey7213`。
+- Web 备份为 `/root/homer-push-backup-20260930-173548-*`（本次 3 文件，权限 600）；APK 更新元数据备份为 `/root/homer-apk-release-backup-20260930-174906/`（服务器 UTC 时间）。后端、dialogue、Nginx 均 active，内外 `/health` 返回 OK。
+- 本轮新装的独立 debug 测试包已卸载；正式 282 保留在模拟器。所有截图/日志/合成测试数据均留在忽略的 output 目录，不上传用户会话截图。
+
+没有实体手机连接；“真机”验证按用户明确选择使用本机 Pixel 6 模拟器执行。设备竞态场景使用合成账号/API，正式包另做真实覆盖安装、启动和原会话恢复检查，未进行新付费聊天或生图请求。
