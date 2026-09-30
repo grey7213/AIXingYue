@@ -118,7 +118,7 @@ def run():
                 return {"cache_keys": list(caches)}
 
             case("my-apps-account-isolation", lambda page: account_cache(page, "my-apps", "my-apps"))
-            case("workshop-account-isolation", lambda page: account_cache(page, "workshop", "workshop"))
+            case("workshop-account-isolation", lambda page: account_cache(page, "workshop", "workshop-v2"))
 
             def confirmation(page):
                 page.goto(base + "/__review__", wait_until="networkidle")

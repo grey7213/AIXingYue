@@ -44,3 +44,14 @@ export function clearPageCache(scope, user) {
   try { localStorage.removeItem(key); } catch { /* storage can be unavailable */ }
 }
 
+export function clearPageCacheScope(scope) {
+  const cleanScope = String(scope || '').replace(/[^a-z0-9_.-]/gi, '').slice(0, 80);
+  if (!cleanScope) return;
+  const prefix = `${CACHE_PREFIX}.${cleanScope}.`;
+  try {
+    for (const key of Object.keys(localStorage)) {
+      if (key.startsWith(prefix)) localStorage.removeItem(key);
+    }
+  } catch { /* storage can be unavailable */ }
+}
+

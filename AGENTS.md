@@ -74,6 +74,11 @@
 
 ## Reusable Pitfalls
 
+- Symptom: Android 工坊退出登录后，尚未结束的资料请求又恢复账号/私有作品；旧工坊缓存还会串到另一账号。
+  Cause: R25–R33 将 profile 与私有列表重新并发；原生清理账号会触发页面显示事件，刷新合并逻辑又在检查登录状态前排队。
+  Fix: 工坊每轮刷新先确认 profile，使用代次和账号双检查；排队前、每轮开始及结果应用前均检查登录状态，退出/销毁使旧请求失效；只清理旧 workshop scope，并使用 workshop-v2 缓存。缓存中的私有作品也须等待 profile 确认后展示。
+  Verify: `tools/verify_workshop_account_isolation.py` 桌面/390px 共 16 场景通过；`tools/verify_workshop_android.cjs` 使用 Playwright Android transport 在 Pixel 6 API 33 实际 APK WebView 验证 8 场景，资源头为 `X-Homer-Client-Asset: apk`。不要用普通 connect_over_cdp 连接 Android WebView，其 Browser.setDownloadBehavior 不支持；也不要把离线快照 WebView 当作 HTTPS 产品页面。
+
 - Symptom: 页面并发读取 profile 和私有角色后，当前账号的角色被写入旧账号缓存。
   Cause: 新请求先捕获旧 localStorage 账号，实际请求由当前 HttpOnly Cookie 鉴权；资料响应稍晚才更新账号身份。
   Fix: 私有列表刷新等待权威 profile，缓存首屏仍可提前展示；返回时再次检查账号未变，再更新列表与对应账号缓存。

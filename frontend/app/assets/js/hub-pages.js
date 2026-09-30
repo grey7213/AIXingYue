@@ -1,7 +1,7 @@
 import { confirmAction, showMessage } from '/assets/js/dialogs.js?v=20260917-r8';
-import { api, requireAuth, getCachedUser, setCachedUser, clearAuth, ApiError } from '/app/assets/js/app-core.js?v=20260917-r8';
+import { api, requireAuth, isLoggedIn, getCachedUser, setCachedUser, clearAuth, ApiError } from '/app/assets/js/app-core.js?v=20260917-r8';
 import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260917-r8';
-import { readPageCache, writePageCache } from './page-cache.js';
+import { readPageCache, writePageCache, clearPageCacheScope } from './page-cache.js?v=20261001-workshop-auth';
 import { messagePreview } from '/assets/js/message-preview.js';
 
 async function loadUser(ctx) {
@@ -265,49 +265,131 @@ export function historiesPage() {
 }
 
 export function workshopPage() {
+  // Keep promises outside Alpine's reactive proxy. Re-entry invalidates pending work.
+  let refreshPromise = null;
+  let refreshEpoch = 0;
+  let refreshQueued = false;
+  let destroyed = false;
+  const cacheScope = 'workshop-v2';
+  const identity = user => String(user?.id || user?.user_id || '');
   return {
     user: null, points: 0, stats: null, myApps: [], myTotal: 0, siteSettings: null, ready: false,
     refreshing: false, appsLoaded: false, refreshError: '',
     async init() {
       injectLayout('workshop');
       if (!requireAuth()) return;
-      this.user = getCachedUser();
-      const cached = readPageCache('workshop', this.user);
-      if (cached) {
-        this.stats = cached.stats || null;
-        this.myApps = cached.list || [];
-        this.myTotal = cached.total ?? this.myApps.length;
-        this.appsLoaded = Array.isArray(cached.list);
-      }
+      // Old entries may already contain another account's private works.
+      clearPageCacheScope('workshop');
       // Local navigation and new-card tools do not depend on server statistics.
       this.ready = true;
       this._onVisible = () => { void this.refreshWorkshop(); };
-      window.addEventListener('homer:page-visible', this._onVisible);
-      await Promise.allSettled([loadSiteSettings(this), this.refreshWorkshop(), (async () => {
-        const previousOwner = String(this.user?.id || this.user?.user_id || '');
-        if (!await loadUser(this)) return;
-        if (previousOwner !== String(this.user?.id || this.user?.user_id || '')) {
-          this.myApps = []; this.myTotal = 0; this.appsLoaded = false; this.stats = null;
+      this._onAccountCleared = () => {
+        ++refreshEpoch;
+        refreshQueued = false;
+        this.user = null;
+        this.points = 0;
+        this.clearWorkshop();
+      };
+      this._onStorage = event => {
+        if (event.key === null || ['ai_xingyue_user', 'ai_xingyue_logged_in'].includes(event.key)) {
+          this._onVisible();
         }
-      })()]);
+      };
+      window.addEventListener('homer:page-visible', this._onVisible);
+      window.addEventListener('pageshow', this._onVisible);
+      window.addEventListener('homer-account-cleared', this._onAccountCleared);
+      window.addEventListener('storage', this._onStorage);
+      await Promise.allSettled([loadSiteSettings(this), this.refreshWorkshop()]);
     },
-    destroy() { window.removeEventListener('homer:page-visible', this._onVisible); },
-    async refreshWorkshop() {
-      if (this.refreshing) return;
-      const owner = getCachedUser();
+    destroy() {
+      destroyed = true;
+      ++refreshEpoch;
+      window.removeEventListener('homer:page-visible', this._onVisible);
+      window.removeEventListener('pageshow', this._onVisible);
+      window.removeEventListener('homer-account-cleared', this._onAccountCleared);
+      window.removeEventListener('storage', this._onStorage);
+    },
+    clearWorkshop() {
+      this.myApps = []; this.myTotal = 0; this.appsLoaded = false; this.stats = null;
+    },
+    refreshWorkshop() {
+      if (destroyed) return Promise.resolve();
+      ++refreshEpoch;
+      this.clearWorkshop();
+      // Android may announce page visibility while a logout is still settling.
+      if (!isLoggedIn()) {
+        refreshQueued = false;
+        this.user = null;
+        this.points = 0;
+        return Promise.resolve();
+      }
+      if (refreshPromise) {
+        refreshQueued = true;
+        return refreshPromise;
+      }
+      if (!requireAuth()) return Promise.resolve();
       this.refreshing = true;
       this.refreshError = '';
-      await Promise.allSettled([
-        api.homeStats().then(s => { this.stats = s?.data || null; }),
-        api.myApps({ page: 1, page_size: 8 }).then(m => {
-          if (String(owner?.id || owner?.user_id || '') !== String(getCachedUser()?.id || getCachedUser()?.user_id || '')) return;
-          this.myApps = m?.data?.list || m?.data?.apps || [];
-          this.myTotal = m?.data?.total ?? this.myApps.length;
-          this.appsLoaded = true;
-          writePageCache('workshop', owner, { stats: this.stats, list: this.myApps, total: this.myTotal });
-        }).catch(() => { this.refreshError = '作品列表未能刷新，请重试；新建和导入仍可使用。'; }),
-      ]);
-      this.refreshing = false;
+      refreshPromise = (async () => {
+        do {
+          refreshQueued = false;
+          if (!isLoggedIn()) break;
+          const epoch = refreshEpoch;
+          const startingOwner = identity(getCachedUser());
+          const current = () => !destroyed && epoch === refreshEpoch && isLoggedIn();
+          try {
+            const response = await api.profile();
+            if (!current()) continue;
+            if (identity(getCachedUser()) !== startingOwner) {
+              refreshQueued = true;
+              continue;
+            }
+            const owner = response?.data || response;
+            if (!identity(owner)) throw new Error('invalid profile');
+            this.user = owner;
+            setCachedUser(owner);
+            const sameOwner = () => current() && identity(owner) === identity(getCachedUser());
+            // Display only cache whose owner has just been confirmed by the server.
+            const cached = readPageCache(cacheScope, owner);
+            if (Array.isArray(cached?.list)) {
+              this.myApps = cached.list;
+              this.myTotal = cached.total ?? cached.list.length;
+              this.stats = cached.stats || null;
+              this.appsLoaded = true;
+            }
+            const [stats, apps, points] = await Promise.allSettled([
+              api.homeStats(), api.myApps({ page: 1, page_size: 8 }), api.points(),
+            ]);
+            if (!sameOwner()) {
+              if (current()) { this.clearWorkshop(); refreshQueued = true; }
+              continue;
+            }
+            this.refreshError = '';
+            if (stats.status === 'fulfilled') this.stats = stats.value?.data || null;
+            if (points.status === 'fulfilled') {
+              this.points = parseInt(points.value?.points || points.value?.data?.points || 0, 10);
+            }
+            if (apps.status === 'fulfilled') {
+              const data = apps.value?.data || apps.value;
+              this.myApps = data?.list || data?.apps || [];
+              this.myTotal = data?.total ?? this.myApps.length;
+              this.appsLoaded = true;
+              writePageCache(cacheScope, owner, { stats: this.stats, list: this.myApps, total: this.myTotal });
+            } else {
+              this.refreshError = '作品列表未能刷新，请重试；新建和导入仍可使用。';
+            }
+          } catch {
+            if (current()) {
+              this.clearWorkshop();
+              this.refreshError = '暂时无法确认账号，请重试；新建和导入仍可使用。';
+            }
+          }
+        } while (refreshQueued && !destroyed);
+      })().finally(() => {
+        refreshPromise = null;
+        this.refreshing = false;
+      });
+      return refreshPromise;
     },
     get publicCount() {
       return this.myApps.filter((a) => a?.is_public !== false).length;

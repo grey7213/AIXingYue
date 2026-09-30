@@ -32,7 +32,7 @@
 - 生产影响：该文件在本轮 329 文件哈希检查中与本地完全一致，所以线上同样包含这处回归。
 - 建议修复：让首次私有列表读取等待权威 profile；页面重新可见的刷新也应复用身份就绪门控，保留返回时身份检查，并处理已写错的旧缓存。
 - 证据：`output/merge-review-20260930/cache-regression.json`、`confirm_cache_regression.py`、`workshop-before.png`、`workshop-current.png`。
-- 状态：未修复，需作为下一轮修复的首项。
+- 后续状态：2026-10-01 已修复并完成 Pixel 6 模拟器实际 APK WebView 回归，见 `workshop-cache-isolation-20261001.md` 的发布范围和验收记录。
 
 ## 实际通过的检查
 
