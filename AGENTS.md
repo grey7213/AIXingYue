@@ -66,6 +66,7 @@
 
 ## Git Backup Policy
 
+- 新提交统一以 `grey7213 <134256592+grey7213@users.noreply.github.com>` 作为 Author 和 Committer；提交前核对实际 Git 身份，提交后检查 trailers。禁止使用 Codex、Claude、Codex Backup 或其他代理的作者/联合署名；GitHub 操作使用 `grey7213`。不擅自改写已发布历史，保留第三方真实作者。
 - Every important implementation change, feature change, deployment-affecting fix, or project rule update must be committed to git after verification.
 - Push completed commits to `origin/main` when network/auth is available so GitHub remains the recoverable backup.
 - Keep commits focused and descriptive; do not include temporary screenshots, one-off scripts, traces, secrets, local tokens, or generated junk unless they are intentionally reusable project artifacts.
