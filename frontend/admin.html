@@ -7,9 +7,10 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png?v=20260901-persistent-pages">
   <link rel="icon" href="/favicon.ico?v=20260901-persistent-pages">
   <link rel="apple-touch-icon" sizes="180x180" href="/assets/img/apple-touch-icon.png?v=20260901-persistent-pages">
-  <script src="/assets/vendor/tailwindcss-browser.js?v=20260917-r8"></script>
+  <link rel="stylesheet" href="/assets/css/utilities.css?v=20260925-r25">
   <link rel="stylesheet" href="/assets/css/custom.css?v=20260917-r8">
   <link rel="stylesheet" href="/assets/css/admin.css?v=20260917-r8">
+  <link rel="stylesheet" href="/assets/css/admin-dialogue.css?v=20260926-r29">
   <script type="module" src="/assets/js/admin-app.js?v=20260917-r8"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
   <link rel="stylesheet" href="/assets/css/app-design.css?v=20260917-r8">
@@ -610,8 +611,40 @@
             </div>
           </div>
 
+          <section x-show="activeTab === 'image-models'" x-cloak class="space-y-4" id="admin-image-models">
+            <header class="flex items-center justify-between gap-3">
+              <div><h2 class="text-xl font-bold">生图模型</h2><p class="text-sm opacity-70 mt-1">用户长按消息即可生图 · 仅成功出图扣积分</p></div>
+              <button class="xy-btn xy-btn-ghost" @click="addImageModel" :disabled="imageBusy || !imageLoaded">添加模型</button>
+            </header>
+            <p x-show="imageError" x-text="imageError" role="alert"></p>
+            <button x-show="!imageLoaded" class="xy-btn xy-btn-ghost" @click="loadImageModels" :disabled="imageBusy" x-text="imageBusy ? '正在读取配置…' : '重新读取'"></button>
+            <div x-show="imageLoaded && !imageModels.length" class="xy-glass p-6"><h3>还没有生图模型</h3><p class="text-sm opacity-70 mt-2">添加 OpenAI 兼容接口和模型，启用后用户即可使用。</p></div>
+            <nav class="flex gap-2 overflow-x-auto pb-2" aria-label="生图模型列表">
+              <template x-for="model in imageModels" :key="model.id"><button type="button" class="xy-btn shrink-0" :class="imageSelected === model.id ? 'xy-btn-primary' : 'xy-btn-ghost'" @click="imageSelected = model.id" :aria-pressed="imageSelected === model.id" x-text="model.name"></button></template>
+            </nav>
+            <template x-for="model in imageModels.filter(m => m.id === imageSelected)" :key="model.id">
+              <form class="xy-glass p-5 space-y-4" @submit.prevent="saveImageModels">
+                <div class="flex justify-between items-center"><label class="flex gap-2 items-center"><input type="checkbox" x-model="model.enabled">向用户开放</label><button type="button" class="xy-btn xy-btn-ghost" @click="removeImageModel" :disabled="imageBusy">移除</button></div>
+                <div class="grid md:grid-cols-2 gap-4">
+                  <label class="block text-sm">展示名称<input class="xy-input mt-2" x-model="model.name" required maxlength="120" placeholder="用户看到的模型名"></label>
+                  <label class="block text-sm">模型标识<input class="xy-input mt-2" x-model="model.model" required placeholder="例如 gpt-image-2"></label>
+                  <label class="block text-sm md:col-span-2">API 地址<input type="url" class="xy-input mt-2" x-model="model.base_url" required placeholder="https://example.com/v1"><small class="opacity-60">OpenAI 兼容协议，自动使用 /images/generations</small></label>
+                  <label class="block text-sm md:col-span-2">API 密钥<input type="password" class="xy-input mt-2" x-model="model.api_key" autocomplete="new-password" :placeholder="model.has_api_key ? '已配置 · 留空保留原密钥' : '填写服务商密钥'"><small class="opacity-60">只保存在服务器，不下发至用户端。</small></label>
+                  <label class="block text-sm">单张积分<input type="number" class="xy-input mt-2" x-model.number="model.cost_points" min="0" max="1000000" step="1" required></label>
+                  <label class="block text-sm">图片尺寸<input class="xy-input mt-2" x-model="model.size" placeholder="1024x1024" required></label>
+                  <label class="block text-sm">质量（可选）<input class="xy-input mt-2" x-model="model.quality" placeholder="留空使用模型默认值"></label>
+                  <label class="block text-sm">模型说明（可选）<input class="xy-input mt-2" x-model="model.memo" maxlength="200" placeholder="展示给用户的特点或建议"></label>
+                </div>
+                <label class="flex items-center gap-2 text-sm"><input type="checkbox" x-model="model.clear_api_key">清除已保存密钥（需先关闭开放）</label>
+                <p class="text-sm opacity-65">每次生成 1 张；失败不扣分。更改只影响之后的新任务，不影响已有图片。</p>
+                <button type="submit" class="xy-btn xy-btn-primary" :disabled="imageBusy" x-text="imageBusy ? '正在保存…' : '保存全部生图模型'"></button>
+              </form>
+            </template>
+            <button x-show="imageLoaded && !imageModels.length" class="xy-btn xy-btn-primary" @click="saveImageModels" :disabled="imageBusy">保存空列表（关闭生图）</button>
+          </section>
+
           <!-- 模型配置 -->
-          <div x-show="activeTab === 'llm'">
+          <div x-show="activeTab === 'llm'" class="ui-model-page">
             <div class="flex items-center justify-between mb-6 flex-wrap gap-3">
               <div>
                 <h1 class="text-2xl font-bold xy-gradient-text">模型配置</h1>
@@ -633,7 +666,7 @@
                 <div class="ui-node-layout" x-show="uiModelSection === 'chat'">
                   <nav class="ui-node-list" aria-label="API 节点"><template x-for="node in llmForm.presets" :key="node.id"><button type="button" class="ui-node-tab" :class="currentModelNodeId() === node.id ? 'is-active' : ''" @click="uiNodeId = node.id; uiModelSearch = ''"><strong x-text="node.name || '未命名节点'"></strong><small x-text="(node.enabled ? '已启用' : '已停用') + ' · ' + (node.modelConfigs || []).length + ' 个模型'"></small></button></template></nav>
                   <div><template x-for="preset in visibleModelNodes()" :key="preset.id">
-                    <div class="ui-node-panel space-y-4">
+                    <div class="ui-node-panel space-y-4" x-data="{connectionOpen:false}">
                       <div class="flex items-center justify-between gap-3">
                         <div class="flex items-center gap-3">
                           <input type="radio" name="default_model_preset" :checked="llmForm.default_model_preset_id === preset.id" @change="setDefaultModelPreset(preset)" class="accent-violet-500">
@@ -653,6 +686,8 @@
                           <button type="button" @click="confirmRemoveModelNode(preset)" class="text-red-300 hover:text-red-200 text-xs">删除</button>
                         </div>
                       </div>
+                      <button type="button" class="ui-connection-entry" @click="connectionOpen=!connectionOpen" :aria-expanded="connectionOpen"><span><strong>连接设置</strong><small x-text="preset.protocol === 'anthropic' ? 'Anthropic · 密钥与接入地址' : 'OpenAI 兼容 · 密钥与接入地址'"></small></span><span aria-hidden="true" x-text="connectionOpen ? '−' : '›'"></span></button>
+                      <section class="ui-connection-settings" x-show="connectionOpen" aria-label="节点连接设置">
                       <div class="grid md:grid-cols-2 gap-3">
                         <div>
                           <label class="xy-label">供应商名称</label>
@@ -694,28 +729,35 @@
                           </div>
                         </div>
                       </div>
-                      <details class="ui-batch-models"><summary>批量添加 / 编辑模型 ID</summary><div>
+                      </section>
+                      <details class="ui-batch-models"><summary>添加模型 / 编辑模型 ID</summary><div>
                         <label class="xy-label">模型列表（每行一个，或用逗号分隔）</label>
                         <textarea class="xy-input" style="min-height:90px" x-model="preset.modelsText" @change="syncModelConfigs(preset)" placeholder="gpt-4o-mini&#10;gpt-4o&#10;gemini-2.5-flash"></textarea>
                         <div class="text-xs text-slate-500 mt-1">用户在编辑器里会看到「供应商 / 模型」的可搜索条目，所有模型共用这个供应商的 Base URL 和 API Key。</div>
                       </div></details>
-                      <div class="rounded-xl border border-violet-300/20 bg-violet-400/5 p-4 space-y-3">
+                      <div class="ui-model-catalog">
                         <div class="flex items-start justify-between gap-3 flex-wrap">
                           <div>
-                            <div class="text-sm font-semibold text-white">逐模型预设与计价</div>
-                            <div class="text-xs text-slate-500 mt-1">每个模型只能绑定一个预设；输入和输出分别计价。</div>
+                            <div class="text-sm font-semibold text-white">模型管理</div>
+                            <div class="text-xs text-slate-500 mt-1">勾选模型批量设置预设和价格，也可单独编辑。</div>
                           </div>
-                          <button type="button" class="xy-btn xy-btn-ghost text-xs" @click="syncModelConfigs(preset)">同步模型列表</button>
+                          <button type="button" class="xy-btn xy-btn-ghost text-xs" @click="uiModelSelecting=!uiModelSelecting" :aria-pressed="uiModelSelecting" x-text="uiModelSelecting ? '结束多选' : '批量管理'"></button>
                         </div>
                         <template x-if="!(preset.modelConfigs || []).length">
                           <div class="text-xs text-slate-500 rounded-lg border border-dashed border-white/10 p-3">填写模型列表后点击“同步模型列表”。</div>
                         </template>
                         <div class="ui-model-toolbar"><input class="xy-input" x-model="uiModelSearch" placeholder="搜索模型 ID 或名称" aria-label="搜索模型"><span x-text="`${filteredModelConfigs(preset).length} / ${(preset.modelConfigs || []).length} 个模型`"></span></div>
+                        <div class="ui-model-selection" aria-label="批量选择模型" x-show="uiModelSelecting">
+                          <div><strong x-text="`已选 ${selectedModelRows().length} 个模型`" aria-live="polite"></strong><button type="button" @click="uiModelSelected=[]" :disabled="!selectedModelRows().length">清空选择</button></div>
+                          <div><button type="button" @click="selectFilteredModels(preset)" x-text="`全选当前筛选结果（${filteredModelConfigs(preset).length}）`"></button><button type="button" @click="selectAllModels" x-text="`全选全部节点（${allModelRows().length}）`"></button></div>
+                          <button type="button" class="xy-btn xy-btn-primary" @click="openModelBulk" :disabled="!selectedModelRows().length">批量编辑</button>
+                        </div>
                         <div class="ui-model-list" aria-label="模型列表">
                           <template x-for="config in filteredModelConfigs(preset)" :key="config.model">
-                            <button type="button" class="ui-model-row" @click="openModelEditor(config)">
-                              <span><strong x-text="config.display_name || config.model"></strong><small x-text="config.model + ' · ' + modelPricingHint(config)"></small></span><span>配置 ›</span>
-                            </button>
+                            <div class="ui-model-row" :class="{'is-selected':uiModelSelected.includes(modelSelectionKey(preset,config))}">
+                              <label class="ui-model-check" x-show="uiModelSelecting"><input type="checkbox" :aria-label="'选择模型 '+(config.display_name || config.model)" :checked="uiModelSelected.includes(modelSelectionKey(preset,config))" @change="toggleModelSelection(preset,config)"></label>
+                              <button type="button" class="ui-model-edit" @click="openModelEditor(config)"><span><strong x-text="config.display_name || config.model"></strong><small x-text="config.model + ' · ' + modelPricingHint(config)"></small></span><span aria-hidden="true">›</span></button>
+                            </div>
                           </template>
                           <div class="ui-state" x-show="!filteredModelConfigs(preset).length">没有匹配的模型，换个关键词试试。</div>
                         </div>
@@ -748,68 +790,7 @@
                     </div>
                   </template></div>
                 </div>
-                <div class="rounded-xl border border-sky-300/15 bg-sky-400/5 p-4 space-y-4" x-show="uiModelSection === 'image'">
-                  <div class="flex items-start justify-between gap-3 flex-wrap">
-                    <div>
-                      <h3 class="font-semibold text-white">图片模型</h3>
-                      <p class="text-xs text-slate-400 mt-1">用于 `/app/image-chat.html` 的图片生成。Key 只保存在服务端，不会下发给用户。</p>
-                    </div>
-                    <label class="flex items-center gap-2 text-sm text-slate-200">
-                      <input type="checkbox" x-model="llmForm.image_model.enabled" class="accent-sky-500">
-                      启用图片模型
-                    </label>
-                  </div>
-                  <div class="grid md:grid-cols-2 gap-3">
-                    <div>
-                      <label class="xy-label">显示名称</label>
-                      <input class="xy-input" x-model="llmForm.image_model.name" placeholder="CelestiAI 图片模型">
-                    </div>
-                    <div>
-                      <label class="xy-label">模型名</label>
-                      <input class="xy-input" x-model="llmForm.image_model.model" placeholder="gpt-image-1">
-                    </div>
-                    <div>
-                      <label class="xy-label">Base URL</label>
-                      <input class="xy-input" x-model="llmForm.image_model.base_url" placeholder="https://api.celestiai.xyz/v1">
-                    </div>
-                    <div>
-                      <label class="xy-label">端点路径</label>
-                      <input class="xy-input" x-model="llmForm.image_model.endpoint_path" placeholder="/images/generations">
-                    </div>
-                    <div>
-                      <label class="xy-label">尺寸</label>
-                      <input class="xy-input" x-model="llmForm.image_model.size" placeholder="1024x1024">
-                    </div>
-                    <div>
-                      <label class="xy-label">返回格式</label>
-                      <select class="xy-input" x-model="llmForm.image_model.response_format">
-                        <option value="">自动</option>
-                        <option value="url">图片 URL</option>
-                        <option value="b64_json">Base64 图片</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label class="xy-label">图片数量</label>
-                      <input type="number" min="1" max="4" class="xy-input" x-model.number="llmForm.image_model.n">
-                    </div>
-                    <div>
-                      <label class="xy-label">超时秒数</label>
-                      <input type="number" min="10" max="300" class="xy-input" x-model.number="llmForm.image_model.timeout">
-                    </div>
-                    <div>
-                      <label class="xy-label">质量参数</label>
-                      <input class="xy-input" x-model="llmForm.image_model.quality" placeholder="留空为自动">
-                    </div>
-                    <div>
-                      <label class="xy-label">API Key</label>
-                      <input type="password" class="xy-input" x-model="llmForm.image_model.api_key" autocomplete="new-password" :placeholder="llmForm.image_model.has_api_key ? ('留空保留 ' + (llmForm.image_model.api_key_preview || '已配置密钥')) : '填写图片模型 API Key'">
-                    </div>
-                  </div>
-                  <label class="flex items-center gap-2 text-xs text-slate-400">
-                    <input type="checkbox" x-model="llmForm.image_model.clear_api_key" class="accent-red-500">
-                    清空图片模型 API Key
-                  </label>
-                </div>
+                <div x-show="uiModelSection === 'image'" class="xy-glass p-5 space-y-3"><h3>生图模型已独立管理</h3><p>在独立页面配置多个图片模型、展示名称和单张积分。</p><button type="button" class="xy-btn xy-btn-primary" @click="switchTab('image-models')">打开生图模型配置</button></div>
                 <div class="rounded-xl border border-fuchsia-300/15 bg-fuchsia-400/5 p-4 space-y-4" x-show="uiModelSection === 'memory'">
                   <div class="flex items-start justify-between gap-3 flex-wrap">
                     <div>
@@ -942,7 +923,32 @@
                                 </div>
                               </div>
                               <div class="text-xs text-violet-300" x-text="modelPricingHint(uiModelEditor)"></div>
-                            </div><footer><button type="button" class="xy-btn xy-btn-primary" @click="uiModelEditor = null">完成编辑</button></footer><p class="ui-field-hint">修改暂存于当前页面，点击“保存全部节点”后生效。</p></section></dialog></template>
+                            </div><p role="alert" class="ui-edit-error" x-text="uiModelEditError"></p><footer><button type="button" class="xy-btn xy-btn-ghost" @click="uiModelEditor=null">取消</button><button type="button" class="xy-btn xy-btn-primary" @click="applyModelEditor">应用修改</button></footer><p class="ui-field-hint">修改暂存于当前页面，点击“保存全部节点”后生效。</p></section></dialog></template>
+
+          <template x-if="uiModelBulk"><dialog class="ui-model-dialog ui-bulk-dialog" x-init="$el.showModal()" aria-label="批量编辑模型" @close="uiModelBulk=null" @click.self="uiModelBulk=null"><section class="ui-admin-dialog__sheet">
+            <header><div><p class="ui-eyebrow" x-text="`${uiModelBulk.groups.length} 个节点 · ${uiModelBulk.keys.length} 个模型`"></p><h2>批量编辑模型</h2></div><button type="button" class="ui-icon-button" aria-label="关闭批量编辑" @click="uiModelBulk=null">×</button></header>
+            <p class="ui-field-hint">仅修改勾选的字段。空白表示当前选中模型的值不一致，未勾选项保持原值。</p>
+            <div class="ui-bulk-field"><label><input type="checkbox" x-model="uiModelBulk.applyPreset">修改绑定预设</label><select class="xy-input" aria-label="批量绑定预设" x-model="uiModelBulk.preset_id" :disabled="!uiModelBulk.applyPreset"><option value="">请选择预设</option><template x-for="option in globalPromptPresetOptions()" :key="option.id"><option :value="option.id" x-text="option.name || option.id"></option></template></select></div>
+            <div class="ui-bulk-field"><label><input type="checkbox" x-model="uiModelBulk.applyMode">修改计价方式</label><select class="xy-input" aria-label="批量计价方式" x-model="uiModelBulk.mode" :disabled="!uiModelBulk.applyMode"><option value="">值不一致</option><option value="per_request">按次</option><option value="per_token">按量（1M Token）</option></select></div>
+            <div class="ui-bulk-field"><label><input type="checkbox" x-model="uiModelBulk.applyInput">修改输入单价</label><input class="xy-input" type="number" min="0" step="0.01" aria-label="批量输入单价" placeholder="保持原值" x-model="uiModelBulk.input_price" :disabled="!uiModelBulk.applyInput"></div>
+            <div class="ui-bulk-field"><label><input type="checkbox" x-model="uiModelBulk.applyOutput">修改输出单价</label><input class="xy-input" type="number" min="0" step="0.01" aria-label="批量输出单价" placeholder="保持原值" x-model="uiModelBulk.output_price" :disabled="!uiModelBulk.applyOutput"></div>
+            <p role="alert" class="ui-edit-error" x-text="uiModelEditError"></p><footer><button type="button" class="xy-btn xy-btn-ghost" @click="uiModelBulk=null">取消</button><button type="button" class="xy-btn xy-btn-primary" @click="applyModelBulk" x-text="`应用到 ${uiModelBulk.keys.length} 个模型`"></button></footer><p class="ui-field-hint">应用后仍需“保存全部节点”才会影响用户。不会修改模型 ID、名称或节点密钥。</p>
+          </section></dialog></template>
+
+          <section class="admin-dialogue" :class="{'is-chatting':previewStarted,'is-parked':activeTab!=='dialogue-preview'}" :aria-hidden="activeTab!=='dialogue-preview'" :inert="activeTab!=='dialogue-preview'" aria-label="会话工作区">
+            <header class="admin-dialogue__heading"><div><h1>会话工作区</h1><p>独立测试 · 生成消耗积分</p></div><div class="admin-dialogue__actions"><button class="xy-btn xy-btn-ghost" x-show="previewStarted" @click="previewSetupOpen=!previewSetupOpen" :aria-expanded="previewSetupOpen">切换角色</button></div></header>
+            <form class="admin-dialogue__controls" x-show="previewSetupOpen" @submit.prevent="loadPreviewCards(1)">
+              <label>查找角色<input class="xy-input" x-model="previewSearch" placeholder="输入名称或 ID" autocomplete="off"></label>
+              <button type="submit" class="xy-btn xy-btn-ghost" :disabled="previewBusy">搜索</button>
+              <label class="admin-dialogue__card">测试角色<select class="xy-input" x-model="previewCard" @change="preparePreviewCard()" :disabled="previewStarting" aria-label="测试角色"><option value="">请选择角色</option><template x-for="card in previewCards" :key="card.id"><option :value="card.id" x-text="card.name || card.id"></option></template></select></label>
+              <button type="button" class="xy-btn xy-btn-primary" @click="startPreview()" :disabled="previewBusy || previewStarting || !previewCard" x-text="previewStarting ? '正在连接…' : previewStarted ? '重新开始' : '开始会话'"></button>
+            </form>
+            <div class="admin-dialogue__pagination" x-show="previewSetupOpen && previewTotal > 30"><button class="xy-btn xy-btn-ghost" @click="loadPreviewCards(previewPage-1)" :disabled="previewBusy || previewPage <= 1">上一页</button><span x-text="previewPage + ' / ' + Math.ceil(previewTotal / 30)"></span><button class="xy-btn xy-btn-ghost" @click="loadPreviewCards(previewPage+1)" :disabled="previewBusy || previewPage*30 >= previewTotal">下一页</button></div>
+            <p class="admin-dialogue__hint">右上角调整模型、预设与世界书；应用会话草稿后从下一轮生效，不影响其他用户。</p>
+            <p role="alert" class="admin-dialogue__error" x-show="previewError" x-text="previewError"></p>
+            <div class="admin-dialogue__empty" x-show="!previewStarted"><h2 x-text="previewBusy ? '正在读取角色…' : '选择角色，进入会话工作区'"></h2><p>边聊边调整模型、预设、世界书与正则；支持停止、重新生成和逐条复制诊断。</p><p>工作区消息与草稿仅保留在当前页面，不写入普通历史。日志不包含正文、预设内容或密钥。</p></div>
+            <template x-if="previewUrl"><iframe id="admin-dialogue-frame" class="admin-dialogue__frame" :class="{'is-preparing':!previewStarted}" :aria-hidden="!previewStarted" :inert="!previewStarted" :src="previewUrl" title="管理员会话工作区" allow="clipboard-write"></iframe></template>
+          </section>
 
           <!-- 全局预设 -->
           <div x-show="activeTab === 'global-presets'">
@@ -961,6 +967,7 @@
                   <input type="file" accept=".zip,.json,application/zip,application/json" class="hidden" @change="importGlobalRegexFile">
                 </label>
                 <button type="button" class="xy-btn xy-btn-ghost text-sm" @click="loadGlobalPresets" :disabled="loading">刷新</button>
+                <button type="button" class="xy-btn xy-btn-primary text-sm" @click="openPreview()">会话工作区</button>
               </div>
             </div>
 
@@ -1031,7 +1038,7 @@
                       </div>
                       <div class="space-y-3 ui-preset-entries overflow-y-auto pr-1">
                         <template x-for="entry in globalPresetEntries()" :key="entry.identifier || entry.id || entry.scriptName">
-                          <details class="rounded-xl border border-white/10 bg-black/20 overflow-hidden">
+                          <details class="rounded-xl border border-white/10 bg-black/20 overflow-hidden" x-data="{entryOpen:false}" @toggle="entryOpen=$el.open">
                             <summary class="cursor-pointer px-4 py-3 flex items-center justify-between gap-3" @click="closeOtherPresetEntries($event)">
                               <span class="min-w-0">
                                 <span class="block text-sm text-slate-100 break-all" x-text="entry.name || entry.scriptName || entry.identifier || entry.id"></span>
@@ -1039,7 +1046,7 @@
                               </span>
                               <span class="text-[10px] rounded-full px-2 py-1 shrink-0" :class="isGlobalPresetEntryEnabled(entry) ? 'bg-emerald-400/15 text-emerald-300' : 'bg-slate-400/10 text-slate-400'" x-text="isGlobalPresetEntryEnabled(entry) ? '启用' : '停用'"></span>
                             </summary>
-                            <div class="border-t border-white/10 p-4 space-y-4">
+                            <template x-if="entryOpen"><div class="border-t border-white/10 p-4 space-y-4">
                               <template x-if="globalPresetKind === 'prompt'">
                                 <div class="space-y-4">
                                   <div class="flex gap-4 flex-wrap text-xs text-slate-300">
@@ -1094,6 +1101,7 @@
                                 <button type="button" class="xy-btn xy-btn-ghost text-xs mt-2" @click="applyGlobalEntryJson(entry)">应用条目 JSON</button>
                               </details>
                             </div>
+                            </template>
                           </details>
                         </template>
                       </div>
@@ -1117,6 +1125,7 @@
             <p class="xy-glass p-6" x-show="!socialReportError && !socialReports.length">暂无待处理的举报</p>
             <div class="space-y-3"><template x-for="report in socialReports" :key="report.id"><article class="xy-glass p-5"><h3 class="font-bold" x-text="report.title || '无标题帖子'"></h3><p class="whitespace-pre-wrap my-3" x-text="report.reason"></p><p class="text-sm text-slate-400" x-text="formatTime(report.created_at)"></p><button class="xy-btn xy-btn-ghost mt-3" :disabled="!!report.deleted" @click="removeReportedPost(report)" x-text="report.deleted ? '已下架' : '下架帖子'"></button></article></template></div>
           </section>
+          <template x-if="activeTab === 'creator-revenue'"><section class="revenue-admin" x-init="loadCreatorRevenue()" aria-label="创作收益配置"><h1>创作收益</h1><p>创作者获得角色卡实际消耗积分的一部分。收益只能作为积分使用，不可提现。</p><form @submit.prevent="saveCreatorRevenue"><label for="creator-revenue-rate">创作者收益比例</label><div><input id="creator-revenue-rate" class="xy-input" inputmode="decimal" type="number" min="0" max="100" step="0.01" x-model="revenueRate" :disabled="!revenueLoaded||revenueBusy"><span>%</span></div><small>默认 35%。修改后仅对新的消费生效，已结算收益不会重算。</small><p class="revenue-example" x-show="revenueLoaded">每消耗 100 积分，创作者获得 <b x-text="revenueRate"></b> 积分；不足 1 积分的部分累计结算。</p><p role="alert" x-text="revenueError" x-show="revenueError"></p><footer><button class="xy-btn xy-btn-ghost" type="button" @click="loadCreatorRevenue" :disabled="revenueBusy">重新读取</button><button class="xy-btn xy-btn-primary" :disabled="!revenueLoaded||revenueBusy" x-text="revenueBusy?'处理中…':'保存比例'"></button></footer></form></section></template>
           <section x-show="activeTab === 'notifications'" aria-label="通知管理">
             <div class="flex flex-wrap items-center justify-between gap-3 mb-6">
               <div><h1 class="text-2xl font-bold xy-gradient-text">通知管理</h1>
@@ -1167,26 +1176,27 @@
             </template>
 
             <template x-if="siteForm">
-              <form class="space-y-6" @submit.prevent="saveSiteSettings">
-                <section class="xy-glass p-6">
-                  <div class="flex items-center justify-between gap-3 mb-5">
-                    <div>
-                      <h2 class="font-semibold text-white">群聊页</h2>
-                      <p class="text-xs text-slate-500 mt-1">管理群聊列表、创建面板、输入框、toast 和确认提示</p>
-                    </div>
-                    <a href="/app/group-chat.html" target="_blank" class="xy-link text-sm">打开群聊 →</a>
-                  </div>
-                  <div class="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
-                    <template x-for="item in groupChatCopyItems" :key="item.key">
-                      <div>
-                        <label class="xy-label" x-text="item.label"></label>
-                        <input class="xy-input" x-model="siteForm.group_chat[item.key]" :maxlength="item.max">
-                      </div>
-                    </template>
-                  </div>
-                </section>
+<form class="space-y-6" @submit.prevent="saveSiteSettings" x-data="{configSection:'0'}">
+                <label class="ui-config-selector">配置分类<select class="xy-input" x-model="configSection" aria-label="运营配置分类">
+                  <option value="0">官网首页</option>
+                  <option value="1">登录 / 注册</option>
+                  <option value="2">App 导航标签</option>
+                  <option value="3">App 首页 / 探索</option>
+                  <option value="4">用户中心 / 我的页</option>
+                  <option value="5">我的角色管理</option>
+                  <option value="6">空状态 / 工作台 / 图片聊天</option>
+                  <option value="7">角色详情 / 聊天页</option>
+                  <option value="8">角色编辑器</option>
+                  <option value="9">首页功能卡片</option>
+                  <option value="10">下载信息</option>
+                  <option value="11">App 公告</option>
+                  <option value="12">App 信息中心</option>
+                  <option value="13">农场每日奖励</option>
+                  <option value="14">购买与兑换</option>
+                </select><small>切换分类不会丢失当前修改；完成后统一点击「保存配置」。</small></label>
+                <!-- Obsolete group-chat copy remains in stored configuration, not in the app editor. -->
 
-                <section class="xy-glass p-6">
+                <section class="xy-glass p-6" x-show="configSection === '0'">
                   <div class="flex items-center justify-between gap-3 mb-5">
                     <div>
                       <h2 class="font-semibold text-white">官网首页</h2>
@@ -1262,7 +1272,7 @@
                   </div>
                 </section>
 
-                <section class="xy-glass p-6">
+                <section class="xy-glass p-6" x-show="configSection === '1'">
                   <div class="flex items-center justify-between gap-3 mb-5">
                     <div>
                       <h2 class="font-semibold text-white">登录 / 注册</h2>
@@ -1280,7 +1290,7 @@
                   </div>
                 </section>
 
-                <section class="xy-glass p-6">
+                <section class="xy-glass p-6" x-show="configSection === '2'">
                   <div class="flex items-center justify-between gap-3 mb-5">
                     <div>
                       <h2 class="font-semibold text-white">App 导航标签</h2>
@@ -1325,7 +1335,7 @@
                   </div>
                 </section>
 
-                <section class="xy-glass p-6">
+                <section class="xy-glass p-6" x-show="configSection === '3'">
                   <div class="flex items-center justify-between gap-3 mb-5">
                     <div>
                       <h2 class="font-semibold text-white">App 首页 / 探索</h2>
@@ -1378,7 +1388,7 @@
                   </div>
                 </section>
 
-                <section class="xy-glass p-6">
+                <section class="xy-glass p-6" x-show="configSection === '4'">
                   <div class="flex items-center justify-between gap-3 mb-5">
                     <div>
                       <h2 class="font-semibold text-white">用户中心 / 我的页</h2>
@@ -1415,7 +1425,7 @@
                   </div>
                 </section>
 
-                <section class="xy-glass p-6">
+                <section class="xy-glass p-6" x-show="configSection === '5'">
                   <div class="flex items-center justify-between gap-3 mb-5">
                     <div>
                       <h2 class="font-semibold text-white">我的角色管理</h2>
@@ -1433,7 +1443,7 @@
                   </div>
                 </section>
 
-                <section class="xy-glass p-6">
+                <section class="xy-glass p-6" x-show="configSection === '6'">
                   <div class="flex items-center justify-between gap-3 mb-5">
                     <div>
                       <h2 class="font-semibold text-white">空状态 / 工作台 / 图片聊天</h2>
@@ -1450,7 +1460,7 @@
                   </div>
                 </section>
 
-                <section class="xy-glass p-6">
+                <section class="xy-glass p-6" x-show="configSection === '7'">
                   <div class="flex items-center justify-between gap-3 mb-5">
                     <div>
                       <h2 class="font-semibold text-white">角色详情 / 聊天页</h2>
@@ -1487,7 +1497,7 @@
                   </div>
                 </section>
 
-                <section class="xy-glass p-6">
+                <section class="xy-glass p-6" x-show="configSection === '8'">
                   <div class="flex items-center justify-between gap-3 mb-5">
                     <div>
                       <h2 class="font-semibold text-white">角色编辑器</h2>
@@ -1518,7 +1528,7 @@
 
 
 
-                <section class="xy-glass p-6">
+                <section class="xy-glass p-6" x-show="configSection === '9'">
                   <div class="flex items-center justify-between gap-3 mb-5">
                     <div>
                       <h2 class="font-semibold text-white">首页功能卡片</h2>
@@ -1556,7 +1566,7 @@
                   </div>
                 </section>
 
-                <section class="xy-glass p-6">
+                <section class="xy-glass p-6" x-show="configSection === '10'">
                   <div class="grid xl:grid-cols-[360px_1fr] gap-6">
                     <div>
                       <div class="flex items-center justify-between gap-3 mb-4">
@@ -1621,7 +1631,7 @@
                   </div>
                 </section>
 
-                <section class="xy-glass p-6">
+                <section class="xy-glass p-6" x-show="configSection === '11'">
                   <div class="flex items-center justify-between gap-3 mb-5">
                     <div>
                       <h2 class="font-semibold text-white">App 公告</h2>
@@ -1652,7 +1662,7 @@
                   </div>
                 </section>
 
-                <section class="xy-glass p-6">
+                <section class="xy-glass p-6" x-show="configSection === '12'">
                   <div class="flex items-center justify-between gap-3 mb-5">
                     <div>
                       <h2 class="font-semibold text-white">App 信息中心</h2>
@@ -1700,7 +1710,7 @@
                   </div>
                 </section>
 
-                <section class="xy-glass p-6">
+                <section class="xy-glass p-6" x-show="configSection === '13'">
                   <div class="flex items-center justify-between gap-3 mb-5">
                     <div>
                       <h2 class="font-semibold text-white">农场每日奖励</h2>
@@ -1755,7 +1765,7 @@
                   </div>
                 </section>
 
-                <section class="xy-glass p-6">
+                <section class="xy-glass p-6" x-show="configSection === '14'">
                   <div class="flex items-center justify-between gap-3 mb-5">
                     <div>
                       <h2 class="font-semibold text-white">购买与兑换</h2>

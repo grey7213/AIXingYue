@@ -1,0 +1,42 @@
+/* Relationship screens: independent layout based on the native reference's
+   compact search/list hierarchy. Uses Homer colors and original assets only. */
+.community-app .c-relation-header{gap:0}
+.community-app .c-relation-tabs{display:flex;align-items:stretch;justify-content:center;gap:30px;flex:1}
+.community-app .c-relation-tabs button{position:relative;display:flex;align-items:center;gap:5px;min-height:52px;padding:0 2px;border:0;border-radius:0;background:transparent;color:var(--app-muted);font-size:16px;white-space:nowrap}
+.community-app .c-relation-tabs small{font-size:12px;font-weight:400;font-variant-numeric:tabular-nums}
+.community-app .c-relation-tabs button[aria-pressed=true]{color:var(--app-text);font-weight:650;background:transparent}
+.community-app .c-relation-tabs button[aria-pressed=true]::after{content:'';position:absolute;bottom:5px;left:calc(50% - 10px);width:20px;height:3px;border-radius:2px;background:var(--app-text)}
+.community-app .c-relation-search{padding:8px 16px 14px;margin:0;border-bottom:5px solid var(--app-bg)}
+.community-app .c-relation-search>div{display:flex;align-items:center;position:relative;height:36px;background:var(--app-fill);border-radius:6px;color:var(--app-muted)}
+.community-app .c-relation-search>div>svg{width:17px;height:17px;margin-left:11px;pointer-events:none}
+.community-app .c-relation-search input{appearance:none;-webkit-appearance:none;flex:1;width:0;min-width:0;height:36px;border:0;box-shadow:none;border-radius:0;background:transparent;color:var(--app-text);padding:0 10px;font-size:13px;outline:none}
+.community-app .c-relation-search input::-webkit-search-cancel-button{display:none}
+.community-app .c-relation-search input::placeholder{color:var(--app-muted);opacity:1}
+.community-app .c-relation-search>div:focus-within{box-shadow:0 0 0 1px var(--app-accent)}
+.community-app .c-relation-search button{display:flex;align-items:center;justify-content:center;flex:none;width:48px;min-height:48px;padding:12px;color:var(--app-muted)}
+.community-app .c-relation-search button svg{width:17px;height:17px}
+.community-app .c-relations article{display:flex;align-items:center;gap:12px;min-height:76px;margin:0;padding:0 16px;position:relative}
+.community-app .c-relations article::after{content:'';position:absolute;bottom:0;left:72px;right:16px;height:1px;background:var(--app-line);opacity:.5}
+.community-app .c-relation-person{display:flex;align-items:center;gap:12px;flex:1;min-width:0;min-height:76px;padding:10px 0;border-radius:0;text-align:left;color:var(--app-text)}
+.community-app .c-relation-avatar{width:44px;height:44px;flex:none;object-fit:cover;border-radius:50%;background:var(--app-fill)}
+.community-app .c-relation-person>span{min-width:0}
+.community-app .c-relation-person strong{display:block;font-size:14px;line-height:20px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--app-text)}
+.community-app .c-relation-person small{display:block;margin-top:3px;font-size:12px;line-height:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--app-muted)}
+.community-app .c-relation-action{flex:none;width:82px;min-height:48px;padding:8px 0;background:transparent;border:0;border-radius:4px;color:var(--app-on-accent)}
+.community-app .c-relation-action>span{display:flex;align-items:center;justify-content:center;gap:3px;height:30px;border:1px solid transparent;border-radius:4px;background:var(--app-accent)}
+.community-app .c-relation-action b{font-size:12px;font-weight:500;white-space:nowrap}
+.community-app .c-relation-action svg{width:14px;height:14px}
+.community-app .c-relation-action[aria-pressed=true]{background:transparent;color:var(--app-muted)}
+.community-app .c-relation-action[aria-pressed=true]>span{background:transparent;border-color:var(--app-line)}
+.community-app .c-relation-note{padding:10px 16px;font-size:12px;line-height:1.5;color:var(--app-muted)}
+.community-app .c-relation-empty{text-align:center;padding:80px 24px 32px;color:var(--app-muted)}
+.community-app .c-relation-empty>svg{height:36px;width:36px;margin:0 0 16px;opacity:.6}
+.community-app .c-relation-empty h2{font-size:16px;font-weight:600;color:var(--app-text)}
+.community-app .c-relation-empty p{font-size:13px;line-height:1.6;margin:8px 0 14px}
+.community-app .c-relation-empty a,.community-app .c-relation-empty button{display:inline-flex;align-items:center;justify-content:center;min-height:48px;font-size:13px;color:var(--app-accent);background:transparent}
+.community-app .c-relation-empty a svg{width:14px;height:14px;margin-left:3px}
+.community-app .c-relation-skeleton{padding:0 16px}
+.community-app .c-relation-skeleton>div{height:76px;display:flex;align-items:center;gap:12px}
+.community-app .c-relation-skeleton i{width:44px;height:44px;border-radius:50%;background:var(--app-fill)}
+.community-app .c-relation-skeleton span{width:36%;height:12px;background:var(--app-fill);border-radius:3px}
+.community-app .c-relation-skeleton b{width:82px;height:30px;margin-left:auto;background:var(--app-fill);border-radius:4px}

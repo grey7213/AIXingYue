@@ -12,6 +12,7 @@ import {
 } from './lib.js';
 
 import { humanizedDateTime, favsToHotswap, getMessageTimeStamp, dragElement, isMobile, initRossMods } from './scripts/RossAscends-mods.js';
+import { protectFrontendFences } from './scripts/homer-html-fences.mjs';
 import { userStatsHandler, statMesProcess, initStats } from './scripts/stats.js';
 import {
     generateKoboldWithStreaming,
@@ -187,7 +188,7 @@ import {
 } from './scripts/utils.js';
 import { debounce_timeout, extension_prompt_roles, extension_prompt_types, GENERATION_TYPE_TRIGGERS, IGNORE_SYMBOL, inject_ids, MEDIA_DISPLAY, MEDIA_SOURCE, MEDIA_TYPE, OVERSWIPE_BEHAVIOR, SCROLL_BEHAVIOR, SWIPE_DIRECTION, SWIPE_SOURCE, SWIPE_STATE } from './scripts/constants.js';
 
-import { cancelDebouncedMetadataSave, doDailyExtensionUpdatesCheck, extension_settings, initExtensions, loadExtensionSettings, runGenerationInterceptors } from './scripts/extensions.js';
+import { cancelDebouncedMetadataSave, doDailyExtensionUpdatesCheck, extension_settings, initExtensions, loadExtensionSettings, prefetchExtensionDiscovery, runGenerationInterceptors } from './scripts/extensions.js';
 import { COMMENT_NAME_DEFAULT, CONNECT_API_MAP, executeSlashCommandsOnChatInput, initDefaultSlashCommands, initSlashCommandAutoComplete, isExecutingCommandsFromChatInput, pauseScriptExecution, stopScriptExecution, UNIQUE_APIS } from './scripts/slash-commands.js';
 import { initMacroAutoComplete } from './scripts/autocomplete/MacroAutoComplete.js';
 import {
@@ -686,6 +687,12 @@ async function firstLoadInit() {
         throw new Error('Initialization failed');
     }
 
+    if (isHomerEmbedded) prefetchExtensionDiscovery();
+    // Read only after CSRF is available, but overlap transfer with native UI
+    // setup. Consumption and SETTINGS_* events stay at the original point.
+    const startupSettings = isHomerEmbedded ? fetchSettingsResponse() : null;
+    startupSettings?.catch(() => {}); // observed below; no detached rejection
+
     const initLoaderOverlay = loader.createOverlay();
     initLoaderOverlay.classList.add('splash-screen');
 
@@ -744,7 +751,7 @@ async function firstLoadInit() {
     ToolManager.initToolSlashCommands();
     await initPresetManager();
     await initSystemMessages();
-    await getSettings(initLoaderHandle);
+    await getSettings(initLoaderHandle, startupSettings);
     performance.mark('homer-native-settings');
     await checkOpenRouterAuth();
     initKeyboard();
@@ -1239,7 +1246,7 @@ export function getEntitiesList({ doFilter = false, doSort = true } = {}) {
     return entities;
 }
 
-export async function getOneCharacter(avatarUrl) {
+export async function getOneCharacter(avatarUrl, { addIfMissing = false } = {}) {
     const response = await fetch('/api/characters/get', {
         method: 'POST',
         headers: getRequestHeaders(),
@@ -1257,10 +1264,17 @@ export async function getOneCharacter(avatarUrl) {
 
         if (indexOf !== -1) {
             characters[indexOf] = getData;
+            return indexOf;
+        } else if (addIfMissing) {
+            // Cloud card imports know the exact new avatar. Refreshing every
+            // card, group and character-list DOM is unnecessary for this path.
+            characters.push(getData);
+            return characters.length - 1;
         } else {
             toastr.error(t`Character ${avatarUrl} not found in the list`, t`Error`, { timeOut: 5000, preventDuplicates: true });
         }
     }
+    return -1;
 }
 
 export function getCharacterSource(chId = this_chid) {
@@ -1602,7 +1616,7 @@ export function cancelDebouncedChatSave() {
  * @param {object} [options] Options
  * @param {boolean} [options.clearData=false] Optionally clear the chat array's contents.
  */
-export async function clearChat({ clearData = false } = {}) {
+export async function clearChat({ clearData = false, preserveItemizedPrompts = true } = {}) {
     cancelDebouncedChatSave();
     cancelDebouncedMetadataSave();
     closeMessageEditor();
@@ -1617,7 +1631,7 @@ export async function clearChat({ clearData = false } = {}) {
         $('.zoomed_avatar[forChar]').remove();
     } else { console.debug('saw no avatars'); }
 
-    await saveItemizedPrompts(getCurrentChatId());
+    if (preserveItemizedPrompts) await saveItemizedPrompts(getCurrentChatId());
     itemizedPrompts.length = 0;
 
     if (clearData) chat.length = 0;
@@ -1834,6 +1848,8 @@ export function messageFormatting(mes, ch_name, isSystem, isUser, messageId, san
         });
     }
 
+    const frontendFences = !isSystem && !isUser && !isReasoning ? protectFrontendFences(mes) : null;
+    if (frontendFences) mes = frontendFences.markdown;
     if (power_user.auto_fix_generated_markdown) {
         mes = fixMarkdown(mes, true);
     }
@@ -1925,6 +1941,7 @@ export function messageFormatting(mes, ch_name, isSystem, isUser, messageId, san
         ADD_TAGS: ['custom-style'],
         ...sanitizerOverrides,
     };
+    if (frontendFences) mes = frontendFences.restore(mes);
     mes = encodeStyleTags(mes);
     mes = DOMPurify.sanitize(mes, config);
     mes = decodeStyleTags(mes, { prefix: '.mes_text ' });
@@ -7729,12 +7746,29 @@ export async function openCharacterChat(file_name, { persistCharacter = true } =
  * emitting CHAT_CHANGED after the cloud payload has been installed.
  * @param {string} file_name Chat file name without the JSONL suffix.
  */
-export async function bindCharacterChatWithoutLoad(file_name) {
+export async function bindCharacterChatWithoutLoad(file_name, { ephemeral = false } = {}) {
     await waitUntilCondition(() => !isChatSaving, debounce_timeout.extended, 10);
-    await clearChat({ clearData: true });
+    await clearChat({ clearData: true, preserveItemizedPrompts: !ephemeral });
     characters[this_chid].chat = file_name;
-    chat_metadata = {};
+    name2 = characters[this_chid].name;
+    chat_metadata = { integrity: uuidv4() };
     $('#selected_chat_pole').val(file_name);
+    if (!ephemeral) {
+        await Promise.all([
+            (async () => {
+                const response = await fetch('/api/chats/get', {
+                    method: 'POST', headers: getRequestHeaders(), cache: 'no-cache',
+                    body: JSON.stringify({ avatar_url: characters[this_chid].avatar,
+                        file_name, metadata_only: true }),
+                });
+                if (!response.ok) throw new Error('无法读取会话存档标识，请重新打开会话');
+                const header = await response.json();
+                chat_metadata = { ...(header?.chat_metadata || {}),
+                    integrity: header?.chat_metadata?.integrity || chat_metadata.integrity };
+            })(),
+            loadItemizedPrompts(getCurrentChatId()),
+        ]);
+    }
 }
 
 ////////// OPTIMZED MAIN API CHANGE FUNCTION ////////////
@@ -7896,13 +7930,17 @@ function reloadLoop() {
 
 //MARK: getSettings()
 ///////////////////////////////////////////
-export async function getSettings(initLoaderHandle = null) {
-    const response = await fetch('/api/settings/get', {
+function fetchSettingsResponse() {
+    return fetch('/api/settings/get', {
         method: 'POST',
         headers: getRequestHeaders(),
         body: JSON.stringify({}),
         cache: 'no-cache',
     });
+}
+
+export async function getSettings(initLoaderHandle = null, preparedResponse = null) {
+    const response = await (preparedResponse || fetchSettingsResponse());
 
     if (!response.ok) {
         reloadLoop();

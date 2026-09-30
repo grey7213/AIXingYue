@@ -8,6 +8,11 @@ const REQUEST_TIMEOUT_MS = Math.max(500, Number(getConfigValue('homerBridge.requ
 
 export const router = express.Router();
 
+router.get('/images/providers', (req, res) => forwardToHomer(req, res, '/console/api/web/images/providers'));
+router.get('/images/history', (req, res) => forwardToHomer(req, res, '/console/api/web/images/history'));
+router.get('/images/content/:id', (req, res) => forwardToHomer(req, res, `/console/api/web/images/content/${encodeURIComponent(req.params.id)}`));
+router.post('/images/tasks', (req, res) => forwardToHomer(req, res, '/console/api/web/images/tasks'));
+
 function readCookie(cookieHeader, name) {
     for (const item of String(cookieHeader || '').split(';')) {
         const [rawName, ...valueParts] = item.trim().split('=');
@@ -77,6 +82,23 @@ async function forwardToHomer(request, response, pathname, { decorateSession = f
 
 router.get('/session', (request, response) => {
     return forwardToHomer(request, response, '/console/api/web/dialogue/session', { decorateSession: true });
+});
+
+router.get('/admin-preview', (request, response) => {
+    return forwardToHomer(request, response, '/admin/api/dialogue/preview', { decorateSession: true });
+});
+
+router.post('/admin-configuration', (request, response) => {
+    return forwardToHomer(request, response, '/admin/api/dialogue/configuration');
+});
+
+router.post('/admin-presets/:kind/:presetId', (request, response) => {
+    if (!['prompt', 'regex'].includes(request.params.kind)) return response.sendStatus(400);
+    return forwardToHomer(request, response, `/admin/api/global-presets/${request.params.kind}/${encodeURIComponent(request.params.presetId)}`);
+});
+
+router.get('/regex', (request, response) => {
+    return forwardToHomer(request, response, '/console/api/web/dialogue/regex');
 });
 
 router.post('/sync', (request, response) => {

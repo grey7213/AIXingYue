@@ -1,4 +1,5 @@
 // Each principal community workflow has its own document URL and navigation history.
+import { clientId } from '/assets/js/client-id.js';
 import {socialPage} from './community-feed.js?v=20260917-r8';
 import {api,requireAuth,getCachedUser} from './app-core.js?v=20260917-r8';
 import {injectLayout} from './layout.js?v=20260917-r8';
@@ -7,11 +8,14 @@ import {localEnabled,routeLocally,storeLocalDraft,hydrateLocalDraft} from './com
 import {readPageCache,writePageCache} from './page-cache.js';
 import {confirmAction} from '/assets/js/dialogs.js?v=20260917-r8';
 import {screenHTML} from './community-templates.js?v=20260917-r8';
+import {recordInterest,observeReading,recommend,filterBlocked,watchPreferences} from './recommendations.js';
 
 const params=new URLSearchParams(location.search);
 const pages={'community.html':'home','community-search.html':'search','community-post.html':'post','community-compose.html':'compose','community-activity.html':'activity','community-profile.html':'profile','community-messages.html':'messages','favorites.html':'saved'};
+pages['community-relations.html']='relations';
 const page=pages[location.pathname.split('/').pop()]||'home';
 const titles={home:'社区',search:'搜索',post:'帖子详情',compose:'发布帖子',activity:'我的动态',profile:'作者主页',messages:'社区消息',saved:'我的收藏'};
+titles.relations='关注与粉丝';
 const draftKey=id=>(routeLocally()?'local-acceptance-':'')+'social-draft'+(id?'-edit-'+id:'');
 const stateKey=()=>`homer.community.navigation.${getCachedUser()?.id||''}.${localEnabled()?'local':'live'}.${location.pathname}${location.search}`;
 const postURL=id=>'/app/community-post.html?id='+encodeURIComponent(id);
@@ -19,25 +23,35 @@ const postURL=id=>'/app/community-post.html?id='+encodeURIComponent(id);
 window.communityScreen=()=>{
   const base=socialPage();let searchedVersion=0,saveTimer,position=0;
   return {...base,page,title:titles[page],profile:null,profileId:params.get('user')||'',activityTab:params.get('tab')||'posts',activityItems:[],profileTab:'posts',searched:false,recent:[],draftSaved:false,emojiOpen:false,attachmentsOpen:false,
-    postURL,settings:communitySettings,
+    postURL,settings:communitySettings,relationTab:params.get('tab')==='followers'?'followers':'following',relationQuery:params.get('q')||'',relationItems:[],relationCursor:'',relationMore:false,relationBusy:'',relationSerial:0,relationCounts:{},relationTotal:null,relationLoadedKey:'',
     async init(){
       if(!requireAuth())return;
       this.user=getCachedUser();if(page==='home')injectLayout('community');
+      watchPreferences(this.user,()=>{if(page==='home'&&this.scope==='public'&&!this.localMode){this.posts=this.sort==='recommended'?recommend(this.user,this.posts):filterBlocked(this.user,this.posts);if(this.ready)void this.load(true);}});
       window.addEventListener('pagehide',()=>{this.remember();this.saveDraft();});
       window.addEventListener('homer-account-cleared',()=>{location.replace('/app/login.html');});
       window.addEventListener('pageshow',e=>{if(e.persisted){this.enter(true);}});
+      window.addEventListener('homer:page-visible',()=>{
+        if(this.ready && this.localMode!==localEnabled()){
+          // A retained local screen must never become a live post editor.
+          this.ready=false;this.posts=[];this.detail=null;
+          location.replace('/app/community.html');
+        }
+      });
       // A small visualViewport correction keeps the reply bar above the soft keyboard.
       const viewport=()=>{const v=window.visualViewport;document.documentElement.style.setProperty('--community-keyboard',Math.max(0,innerHeight-(v?.height||innerHeight)-(v?.offsetTop||0))+'px');};
       window.visualViewport?.addEventListener('resize',viewport);viewport();
-      await this.enter();
       this.$watch('draft',()=>{if(page==='compose'){clearTimeout(saveTimer);this.draftSaved=false;saveTimer=setTimeout(()=>this.saveDraft(),200);}});
+      await this.enter();
     },
     async enter(refresh=false){
       this.gateLoading=true;this.gateError='';
       try{
         const access=await authorizeCommunity();if(!access){location.replace('/app/explore.html');return;}
         this.localMode=!!access.local;this.categories=access.categories;this.muted=access.sanctions?.some(s=>['mute','ban'].includes(s.kind));this.mediaAvailable=!!access.media;
-        this.ready=true;document.title=this.title+' · 惑梦';
+        // Do not expose an empty editor or save it on Back while a saved draft
+        // (including local media) is still being restored asynchronously.
+        this.ready=page!=='compose';document.title=this.title+' · 惑梦';
         if(!refresh){try{const state=JSON.parse(sessionStorage.getItem(stateKey())||'null');if(state){for(const key of ['scope','sort','topic','query','searchType','searched'])if(key in state)this[key]=state[key];position=state.scroll||0;}}catch{}}
         if(page==='home'){
           this.topics=(await social('topics')).list;this.announcements=(await social('announcements')).list;await this.load(true);
@@ -46,27 +60,54 @@ window.communityScreen=()=>{
           if(this.query)await this.searchAll();
         }else if(page==='post'){
           const id=params.get('id');if(!id)throw Error('缺少帖子编号，请返回社区重新选择');
-          this.detail=this.updatePost(await social('posts/'+encodeURIComponent(id)));this.commentClientId=crypto.randomUUID();await this.loadComments(true);
+          this.detail=this.updatePost(await social('posts/'+encodeURIComponent(id)));if(!this.localMode)observeReading(this.user,'post',this.detail);this.commentClientId=clientId();await this.loadComments(true);
         }else if(page==='compose'){
-          this.editingId=params.get('edit')||'';this.title=this.editingId?'编辑帖子':'发布帖子';this.topics=(await social('topics')).list;
+          this.editingId=params.get('edit')||'';this.title=this.editingId?'编辑帖子':'发布帖子';
           const saved=readPageCache(draftKey(this.editingId),this.user,{maxAgeMs:365*86400000})?.draft;
           if(saved)this.draft={...this.draft,...await hydrateLocalDraft(saved)};
-          else if(this.editingId){const p=await social('posts/'+encodeURIComponent(this.editingId));if(!p.is_owner)throw Error('只能编辑自己的帖子');Object.assign(this.draft,p.pending_edit||p,{client_id:crypto.randomUUID()});}
+          else if(this.editingId){const p=await social('posts/'+encodeURIComponent(this.editingId));if(!p.is_owner)throw Error('只能编辑自己的帖子');Object.assign(this.draft,p.pending_edit||p,{client_id:clientId()});}
+          this.ready=true;this.topics=(await social('topics')).list;
         }else if(page==='saved'){this.scope='saved';await this.load(true);}
         else if(page==='activity'){await this.loadActivity();}
         else if(page==='profile'){this.profile=await social('users/'+encodeURIComponent(this.profileId));await this.load(true);}
         else if(page==='messages'){await communityNotifications(this.$refs.messages);}
+        else if(page==='relations'){await this.loadRelations(this.relationTab);}
         if(position)requestAnimationFrame(()=>requestAnimationFrame(()=>window.scrollTo(0,position)));
       }catch(error){this.gateError=error.message||'暂时无法打开，请重试';this.ready=false;}finally{this.gateLoading=false;}
     },
-    retry(){return page==='search'?this.searchAll():page==='activity'?this.loadActivity():page==='profile'?this.profileView(this.profileTab):this.load(true);},
+    retry(){return page==='relations'?this.loadRelations(this.relationTab):page==='search'?this.searchAll():page==='activity'?this.loadActivity():page==='profile'?this.profileView(this.profileTab):this.load(true);},
+    async loadRelations(tab=this.relationTab,more=false){
+      if(more&&this.loading)return;
+      if(tab!==this.relationTab)this.relationQuery='';
+      const version=++this.relationSerial;this.relationTab=tab;this.loading=true;this.error='';
+      const query=this.relationQuery.trim(),key=tab+'|'+query;
+      if(!more){if(this.relationLoadedKey!==key)this.relationItems=[];this.relationCursor='';this.relationMore=false;}
+      const url=new URL(location.href);url.searchParams.set('tab',tab);if(query)url.searchParams.set('q',query);else url.searchParams.delete('q');history.replaceState(null,'',url);
+      try{
+        const data=await social('users/'+encodeURIComponent(this.user.id)+'/'+tab+'?'+new URLSearchParams({cursor:this.relationCursor,limit:40,q:query}));
+        if(version!==this.relationSerial)return;
+        this.relationItems=more?[...this.relationItems,...data.list]:data.list||[];this.relationCursor=data.next_cursor||'';this.relationMore=!!data.has_more;this.relationCounts=data.counts||{};this.relationTotal=data.total??null;this.relationLoadedKey=key;
+      }catch(e){if(version===this.relationSerial)this.error=e.message;}finally{if(version===this.relationSerial)this.loading=false;}
+    },
+    clearRelationSearch(){this.relationQuery='';this.loadRelations();},
+    relationAvatar(item){const value=item.avatar||'';try{const url=new URL(value,location.origin);if(value&&['http:','https:'].includes(url.protocol))return url.href;}catch{}return '/assets/img/apk/default_avatar.png';},
+    relationLabel(item){return this.relationBusy===item.user_id?'处理中':item.following?(item.followed_by?'互相关注':'已关注'):(item.followed_by?'回关':'关注');},
+    async toggleRelation(item){
+      if(this.relationBusy||this.muted)return;
+      this.relationBusy=item.user_id;
+      try{if(item.following&&!await confirmAction('不再关注 '+item.name+'？'))return;
+        const before=!!item.following;item.following=(await social('follow','PUT',{user_id:item.user_id,following:!before})).following;
+        if(typeof this.relationCounts.following==='number')this.relationCounts.following+=Number(item.following)-Number(before);
+        this.notify(item.following?'已关注':'已取消关注');
+      }catch(e){this.notify(e.message);}finally{this.relationBusy='';}
+    },
     remember(){try{sessionStorage.setItem(stateKey(),JSON.stringify({scope:this.scope,sort:this.sort,topic:this.topic,query:this.query,searchType:this.searchType,searched:this.searched,scroll:scrollY}));}catch{}},
     go(url){this.remember();this.saveDraft();location.href=url;},
-    back(){this.saveDraft();if(document.referrer.startsWith(location.origin+'/app/')&&history.length>1)history.back();else location.replace('/app/community.html');},
-    openPost(post){this.go(postURL(post.id));},
+    back(){this.saveDraft();if(document.referrer.startsWith(location.origin+'/app/')&&history.length>1)history.back();else location.replace(page==='relations'?'/app/me.html':'/app/community.html');},
+    openPost(post){if(!this.localMode)recordInterest(this.user,'post',post,'view');this.go(postURL(post.id));},
     openEditor(post=null){if(this.muted){this.notify('当前处于禁言状态，暂不能发布');return;}this.go('/app/community-compose.html'+(post?'?edit='+encodeURIComponent(post.id):''));},
     openUser(id){this.go(String(id)===String(this.user.id)?'/app/community-activity.html':'/app/community-profile.html?user='+encodeURIComponent(id));},
-    saveDraft(){if(page!=='compose'||!this.ready||this.publishing)return;const draft=localEnabled()?storeLocalDraft(this.draft):this.draft;this.draftSaved=writePageCache(draftKey(this.editingId),this.user,{draft});if(!this.draftSaved)this.editorError='草稿保存失败，请勿关闭页面';},
+    saveDraft(){if(page!=='compose'||!this.ready||this.publishing)return;const draft=this.localMode?storeLocalDraft(this.draft):this.draft;this.draftSaved=writePageCache(draftKey(this.editingId),this.user,{draft});if(!this.draftSaved)this.editorError='草稿保存失败，请勿关闭页面';},
     closeEditor(){this.saveDraft();this.back();},
     async publish(){
       if(this.publishing||this.uploading||this.muted||!this.draft.content.trim())return;

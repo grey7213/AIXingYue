@@ -1,0 +1,36 @@
+/* App-owned surfaces only; never style chat messages or card HTML documents. */
+@import url('./theme.css');
+html:not([data-homer-input=keyboard]) body :is(dialog,[role=dialog],.xy-modal) :focus-visible{outline:none!important}
+html body .homer-option-picker__option[aria-checked=true]{background:transparent!important;color:var(--app-text)!important;box-shadow:none!important;border:0!important;font-weight:600!important}
+html body .homer-option-picker__check{color:var(--app-accent)}
+html body:not(.homer-runtime){--fy-bg:var(--app-bg);--fy-card:var(--app-panel);--fy-text:var(--app-text);--fy-text-soft:var(--app-muted);--fy-border:var(--app-line);--fy-accent:var(--app-accent);--fy-accent-2:var(--app-accent);--fy-accent-soft:var(--app-tint)}
+/* Search/edit controls previously inherited white background with dark-mode text. */
+html[data-theme=dark] body:not(.homer-runtime) :is(.xy-input,.xy-textarea,.xy-select,input[type=search],.home-search-box input,.explore-search input):not(.c-relation-search input){background:var(--app-fill)!important;color:var(--app-text)!important;-webkit-text-fill-color:var(--app-text)!important;border-color:var(--app-line)!important}
+/* The icon, padding and editable area form one surface, at rest and on focus. */
+html[data-theme=dark] body:not(.homer-runtime) .home-search-box{background:var(--app-fill)!important}
+html[data-theme=dark] body:not(.homer-runtime) .home-search-box input{background:transparent!important;box-shadow:none!important}
+html[data-theme=dark] body:not(.homer-runtime) :is(.xy-input,.xy-textarea,input[type=search])::placeholder{color:var(--app-muted)!important;-webkit-text-fill-color:var(--app-muted)!important;opacity:1}
+html body.community-app {background:var(--app-bg);color:var(--app-text)}
+html body.community-app :is(.c-page,.c-header,.c-post,.c-detail,.c-editor,.c-reply-bar){background:var(--app-panel);color:var(--app-text)}
+html body.community-app :is(input,textarea,select):not(.c-relation-search input){color:var(--app-text)!important;-webkit-text-fill-color:var(--app-text)!important;background:var(--app-fill)!important;border-color:var(--app-line)!important}
+html body.community-app :is(.c-post-copy p,.c-detail-copy,.c-editor textarea){color:var(--app-text)!important}
+html body.community-app :is(input,textarea)::placeholder{color:var(--app-muted)!important;-webkit-text-fill-color:var(--app-muted)!important;opacity:1}
+html body.community-app :is(.c-channel-strip,.c-home-tabs,.c-sort-tabs) button{box-shadow:none!important;outline:none!important}
+html body.community-app .c-channel-strip>button[aria-pressed=true]{background:transparent!important}
+html body.community-app .c-channel-strip [aria-pressed=true] .c-channel-icon{border:0!important;background:var(--app-tint)!important;color:var(--app-accent)!important}
+html body.community-app button:focus-visible{outline:2px solid var(--app-accent)!important;outline-offset:3px!important}
+html body .homer-notice-center{width:min(520px,calc(100vw - 24px));max-height:calc(100dvh - 64px);padding:0!important;border:0;border-radius:24px;background:var(--app-panel)!important;color:var(--app-text)!important;overflow:hidden;box-shadow:0 24px 80px #0004}
+html body .homer-notice-center[open]{display:flex;flex-direction:column}
+html body .homer-notice-center>header{display:flex;align-items:center;justify-content:space-between;padding:18px 20px 10px;border:0;font-size:19px;font-weight:650}
+html body .homer-notice-center>header button{width:40px;min-height:40px;padding:0;border:0;border-radius:50%;background:var(--app-fill);color:var(--app-muted);font-size:24px}
+html body .homer-notice-center>nav{display:flex;gap:4px;padding:4px;margin:4px 20px 0;border-radius:12px;background:var(--app-fill)}
+html body .homer-notice-center>nav button{flex:1;min-width:0;padding:10px 4px;min-height:44px;border:0;border-radius:9px;background:transparent;color:var(--app-muted);font-size:13px;font-weight:600}
+html body .homer-notice-center>nav button[aria-pressed=true]{background:var(--app-panel);color:var(--app-text);box-shadow:0 1px 4px #0002}
+html body .homer-notice-center>section{padding:20px;overflow:auto;min-height:180px;font-size:14px;line-height:1.6;white-space:normal}
+html body .homer-notice-center>section.ui-state{display:grid;place-content:center;text-align:center;color:var(--app-muted);padding:40px 28px}
+html body .homer-notice-center article{padding:0 0 16px;margin-bottom:16px;border-bottom:1px solid var(--app-line)}
+html body .homer-notice-center h3{font-size:16px;margin:0 0 8px;color:var(--app-text)}
+html body .homer-notice-center p{white-space:pre-wrap;overflow-wrap:anywhere}
+html body .homer-notice-center>footer{padding:0 20px 20px;border:0}
+html body .homer-notice-center>footer[hidden]{display:none}
+html body .homer-notice-center>footer button{width:100%;min-height:44px;border:0;border-radius:12px;background:var(--app-tint);color:var(--app-accent)}

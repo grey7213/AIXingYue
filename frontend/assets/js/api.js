@@ -1,4 +1,5 @@
 // 惑梦（Homer） 共享 API 工具
+import { apiText } from './api-transport.js';
 // 同源请求，由 Nginx 反向代理到后端 Python 服务
 const API_BASE = '';
 // 方案A：登录凭证已迁移到后端下发的 HttpOnly Cookie，前端不再持久化敏感 token。
@@ -78,7 +79,7 @@ function handleUnauthorized() {
   }
 }
 
-async function request(path, { method = 'GET', body, headers = {}, auth = true } = {}) {
+async function request(path, { method = 'GET', body, headers = {}, auth = true, signal } = {}) {
   const finalHeaders = { 'Accept': 'application/json', ...headers };
   if (body !== undefined && body !== null && !(body instanceof FormData)) {
     finalHeaders['Content-Type'] = 'application/json';
@@ -87,19 +88,14 @@ async function request(path, { method = 'GET', body, headers = {}, auth = true }
     const token = getToken();
     if (token) finalHeaders['Authorization'] = `Bearer ${token}`;
   }
-  let response;
-  try {
-    response = await fetch(`${API_BASE}${path}`, {
+  const { response, text } = await apiText(`${API_BASE}${path}`, {
       method,
       headers: finalHeaders,
       // 携带 HttpOnly Cookie（登录凭证），同源下必需，配合后端 Access-Control-Allow-Credentials。
       credentials: 'include',
+      signal,
       body: body instanceof FormData ? body : (body !== undefined && body !== null ? JSON.stringify(body) : undefined),
     });
-  } catch (err) {
-    throw new ApiError('网络请求失败，请检查网络连接', 0, null);
-  }
-  const text = await response.text();
   let data = null;
   try {
     data = text ? JSON.parse(text) : null;
@@ -129,6 +125,8 @@ export class ApiError extends Error {
 }
 
 export const api = {
+  imageModels: () => request('/admin/api/image-models'),
+  saveImageModels: list => request('/admin/api/image-models', { method: 'POST', body: { list } }),
   // 公共接口
   socialReports: () => request('/console/api/web/social/reports'),
   deleteSocialPost: id => request('/console/api/web/social/posts/' + encodeURIComponent(id), { method: 'DELETE' }),
@@ -140,8 +138,8 @@ export const api = {
     request('/console/api/password-reset/email', { method: 'POST', body: { email, lang }, auth: false }),
   register: (email, password, code, name) =>
     request('/console/api/register', { method: 'POST', body: { email, password, code, name }, auth: false }),
-  login: (email, password) =>
-    request('/console/api/login', { method: 'POST', body: { email, password }, auth: false }),
+  login: (email, password, { signal } = {}) =>
+    request('/console/api/login', { method: 'POST', body: { email, password }, auth: false, signal }),
   resetPassword: (email, password, code) =>
     request('/console/api/password-reset', { method: 'POST', body: { email, password, code }, auth: false }),
   // 通知后端清除 HttpOnly 登录 Cookie
@@ -149,7 +147,7 @@ export const api = {
 
 
   // 用户接口
-  profile: () => request('/console/api/account/profile'),
+  profile: (options = {}) => request('/console/api/account/profile', options),
   points: () => request('/console/api/user/point'),
   credits: () => request('/console/api/user/credits'),
   redeemCode: (code) => request('/console/api/web/redeem-code', { method: 'POST', body: { code } }),
@@ -173,6 +171,8 @@ export const api = {
 
   // 管理员接口
   admin: {
+    creatorRevenue: () => request('/admin/api/creator-revenue'),
+    saveCreatorRevenue: (rate_bps) => request('/admin/api/creator-revenue', {method:'PUT',body:{rate_bps}}),
     notifications: () => request('/admin/api/notifications'),
     saveNotification: (item) => request('/admin/api/notifications' + (item.id ? '/' + encodeURIComponent(item.id) : ''),
       { method: item.id ? 'PUT' : 'POST', body: { title: item.title, content: item.content, enabled: !!item.enabled } }),

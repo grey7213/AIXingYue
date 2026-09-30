@@ -6,7 +6,7 @@
   <title>历史会话 · 惑梦（Homer）</title>
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png?v=20260901-persistent-pages">
   <link rel="icon" href="/favicon.ico?v=20260901-persistent-pages">
-  <script src="/assets/vendor/tailwindcss-browser.js?v=20260917-r8"></script>
+  <link rel="stylesheet" href="/assets/css/utilities.css?v=20260925-r25">
   <link rel="stylesheet" href="/app/assets/css/app.css?v=20260917-r8">
   <script type="module" src="/app/assets/js/hub-pages.js?v=20260917-r8"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
@@ -20,6 +20,8 @@
     <main class="app-main">
       <header class="app-topbar"><h1 x-text="appNavText('histories', '历史会话')">历史会话</h1></header>
       <section class="app-page-pad max-w-5xl mx-auto">
+        <label class="history-search">搜索会话<input type="search" class="xy-input" x-model="search" placeholder="搜索角色名或对话摘要"></label>
+        <p x-show="search && !filteredConversations.length" role="status">没有匹配的会话，试试其他关键词。</p>
         <div class="list-panel">
           <template x-if="!loading && conversations.length === 0">
             <div class="p-10 text-center text-violet-200/70">
@@ -27,13 +29,14 @@
               <a href="/app/explore.html" class="xy-link mt-2 inline-flex" x-text="emptyText('histories_empty_hint', '去探索选个角色吧')">去探索选个角色吧</a>
             </div>
           </template>
-          <template x-for="c in conversations" :key="c.id">
+          <template x-for="c in filteredConversations" :key="c.id">
             <div class="list-row history-row" x-data="{ open: false }" :class="{ 'is-menu-open': open }" @click.away="open = false">
               <a class="history-row__main flex items-center gap-4 min-w-0 text-inherit no-underline" :href="conversationHref(c)">
                 <img :src="c.app_icon || '/assets/img/apk/avatar.webp?v=20260901-persistent-pages'" alt="" onerror="this.src='/assets/img/apk/avatar.webp?v=20260901-persistent-pages'">
                 <div class="min-w-0">
                   <div class="title truncate" x-text="conversationTitle(c)"></div>
                   <div class="meta truncate" x-text="conversationPreview(c)"></div>
+                  <time class="meta" x-text="conversationDate(c)"></time>
                   <div class="history-row__tags" x-show="archiveLabel(c) || userTagList(c).length">
                     <span class="history-row__tag" x-show="archiveLabel(c)" x-text="archiveLabel(c)"></span>
                     <template x-for="tag in userTagList(c)" :key="tag">

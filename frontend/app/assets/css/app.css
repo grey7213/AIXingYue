@@ -514,7 +514,7 @@ html, body { font-size: 16px; line-height: 1.5; color: var(--xy-app-text); }
 }
 .chip.is-active {
   background: linear-gradient(135deg, #8b5cf6, #d946ef 60%, #fb7185);
-  color: #fff;
+  color: var(--app-on-accent, #fff);
   box-shadow: 0 4px 14px -4px rgba(217, 70, 239, .55);
 }
 .chip-static {
@@ -2604,7 +2604,7 @@ select.xy-input option,
 .home-search-box:focus-within {
   border-color: var(--fy-accent);
   box-shadow: 0 0 0 3px rgba(239, 154, 95, .14);
-  background: #fff;
+  background: var(--app-fill, var(--fy-panel));
 }
 
 .home-search-box__icon {
@@ -2660,13 +2660,13 @@ select.xy-input option,
 .home-search-action {
   background: var(--fy-accent-2);
   border-color: var(--fy-accent-2);
-  color: #fff;
+  color: var(--app-on-accent, #fff);
 }
 
 .home-search-action:hover {
   background: var(--fy-accent);
   border-color: var(--fy-accent);
-  color: #fff;
+  color: var(--app-on-accent, #fff);
 }
 
 .advanced-search-panel {
@@ -4639,3 +4639,11 @@ select.xy-input option,
   }
 }
 .ws-grid.ws-grid--creation{grid-template-columns:minmax(0,1fr)}
+.history-search{display:grid;gap:8px;margin-bottom:14px;color:var(--ui-muted,#666);font-size:13px}
+@media(max-width:760px){
+  .list-row.history-row{display:grid!important;grid-template-columns:minmax(0,1fr) 48px!important;align-items:center;gap:8px}
+  .history-row .row-actions{width:48px!important;grid-column:auto!important;align-self:start}
+  .history-row__main>div{min-width:0;flex:1}
+  .history-row__main{grid-column:auto!important}
+  .history-more-btn{min-width:48px;min-height:48px}
+}

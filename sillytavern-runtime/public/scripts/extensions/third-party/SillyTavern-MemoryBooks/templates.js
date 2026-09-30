@@ -8,6 +8,16 @@ import { Handlebars } from '../../../../lib.js';
  */
 export const settingsTemplate = Handlebars.compile(`
     <h2 data-i18n="STMemoryBooks_Settings">📕 Memory Books</h2>
+    <section id="homer-memory-auto-controls">
+        <label class="homer-memory-auto-toggle">
+            <span>自动总结<small>沿用当前账号的扩展设置，适用于所有对话</small></span>
+            <input type="checkbox" id="stmb-auto-summary-enabled" role="switch" aria-label="自动总结" {{#if autoSummaryEnabled}}checked{{/if}}>
+        </label>
+        <label class="homer-memory-frequency" for="stmb-auto-summary-interval">
+            <span>总结频率<small>每个对话先手动总结一次，再按此频率自动整理</small></span>
+            <span><input type="number" id="stmb-auto-summary-interval" aria-label="每隔多少条消息总结" value="{{autoSummaryInterval}}" min="10" max="200" step="1"> 条</span>
+        </label>
+    </section>
         {{#if hasScene}}
         <div id="stmb-scene" class="padding10 marginBot10">
             <div class="marginBot5" data-i18n="STMemoryBooks_CurrentScene">Current Scene:</div>

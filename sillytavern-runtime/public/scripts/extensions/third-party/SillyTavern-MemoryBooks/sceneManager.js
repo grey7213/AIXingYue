@@ -574,7 +574,7 @@ export function createSceneButtons(messageElement) {
 /**
  * Get scene data with message excerpts
  */
-export async function getSceneData() {
+export async function getSceneData({ estimateTokens = true } = {}) {
     const markers = getSceneMarkers();
     
     if (markers.sceneStart === null || markers.sceneEnd === null) {
@@ -595,9 +595,14 @@ export async function getSceneData() {
 
     // Build a temporary compiled scene for consistent token estimation
     try {
-        const tempRequest = createSceneRequest(markers.sceneStart, markers.sceneEnd);
-        const tempCompiled = compileScene(tempRequest);
-        const estimatedTokens = await estimateTokenCount(tempCompiled);
+        // Opening settings only needs boundaries. Generation/preview still
+        // compiles the scene and calculates tokens through the default path.
+        let estimatedTokens = '生成时计算';
+        if (estimateTokens) {
+            const tempRequest = createSceneRequest(markers.sceneStart, markers.sceneEnd);
+            const tempCompiled = compileScene(tempRequest);
+            estimatedTokens = await estimateTokenCount(tempCompiled);
+        }
         
         return {
             sceneStart: markers.sceneStart,

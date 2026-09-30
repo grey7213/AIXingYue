@@ -2585,7 +2585,8 @@ router.post('/generate', async function (request, response) {
             signal: controller.signal,
         };
 
-        console.debug('Chat Completion request:', requestBody);
+        // Conversation text and admin preset drafts are private, never log bodies.
+        console.debug('Chat Completion request:', { model: requestBody.model, stream: Boolean(requestBody.stream), message_count: requestBody.messages?.length });
 
         const fetchResponse = await fetch(endpointUrl, config);
 
@@ -2597,7 +2598,7 @@ router.post('/generate', async function (request, response) {
         if (fetchResponse.ok) {
             /** @type {any} */
             const json = await fetchResponse.json();
-            console.debug('Chat Completion response:', json);
+            console.debug('Chat Completion response:', { status: fetchResponse.status });
             return response.send(json);
         } else {
             const responseText = await fetchResponse.text();
@@ -2605,7 +2606,7 @@ router.post('/generate', async function (request, response) {
 
             const message = fetchResponse.statusText || 'Unknown error occurred';
             const quota_error = fetchResponse.status === 429 && errorData?.error?.type === 'insufficient_quota';
-            console.error('Chat completion request error: ', message, responseText);
+            console.error('Chat completion request error:', { status: fetchResponse.status });
 
             if (!response.headersSent) {
                 response.send({ error: { message }, quota_error: quota_error });

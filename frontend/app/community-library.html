@@ -6,7 +6,7 @@
   <title>作品库 · 惑梦（Homer）</title>
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png?v=20260901-persistent-pages">
   <link rel="icon" href="/favicon.ico?v=20260901-persistent-pages">
-  <script src="/assets/vendor/tailwindcss-browser.js?v=20260917-r8"></script>
+  <link rel="stylesheet" href="/assets/css/utilities.css?v=20260925-r25">
   <link rel="stylesheet" href="/app/assets/css/app.css?v=20260917-r8">
   <script type="module" src="/app/assets/js/community.js?v=20260917-r8"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
@@ -48,6 +48,8 @@
     .cm-field { margin-bottom: 14px; }
     .cm-field > label { display: block; margin-bottom: 6px; color: rgba(237,233,254,.68); font-size: 12px; font-weight: 750; }
     .cm-field textarea { min-height: 105px; resize: vertical; }
+    .cm-field input[type="file"] { display:block; width:100%; min-width:0; box-sizing:border-box; margin-top:6px; font-size:13px; }
+    .cm-field input[type="file"]::file-selector-button { min-height:40px; margin-right:8px; padding:6px 12px; border:0; border-radius:8px; background:#f8deea; color:#8f1743; font-weight:700; }
     .cm-checks { display: flex; flex-wrap: wrap; gap: 14px; margin: 12px 0 16px; }
     .cm-checks label { display: inline-flex; align-items: center; gap: 7px; color: rgba(237,233,254,.72); font-size: 12px; }
     .cm-checks input { accent-color: #fb7185; }
@@ -74,7 +76,7 @@
   <link rel="stylesheet" href="/assets/css/app-design.css?v=20260917-r8">
   <script defer src="/assets/js/option-picker.js?v=20260917-r8"></script>
 </head>
-<body class="min-h-screen">
+<body class="min-h-screen resource-library-page">
   <div class="xy-stars-bg"></div>
   <div class="xy-meteor"></div>
 
@@ -204,12 +206,12 @@
             <div class="cm-field"><label>作品类型</label><select class="xy-input" x-model="form.type" :disabled="!!editingWorkId"><option value="mod">Mod（世界书）</option><option value="ui_template">UI 模板</option><option value="preset">预设</option></select></div>
             <div class="cm-field"><label>作品名称 *</label><input class="xy-input" maxlength="120" x-model="form.name" placeholder="作品名称"></div>
             <div class="cm-field"><label>作品简介</label><textarea class="xy-input" maxlength="2000" x-model="form.summary" placeholder="公开展示的作品说明"></textarea></div>
-            <div class="cm-field"><label>封面 URL（可选）</label><input class="xy-input" x-model="form.cover_url" placeholder="/media-cache/... 或 HTTPS 图片"></div>
-            <div class="cm-field" x-show="form.type === 'ui_template'"><label>演示 HTML</label><textarea class="xy-input" x-model="form.demo_html" placeholder="演示将在无同源、无网络、无脚本权限的 iframe 中静态展示"></textarea></div>
-            <div class="cm-field"><label x-text="form.type === 'mod' ? '世界书 JSON / 内容' : (form.type === 'preset' ? '预设 JSON / 内容' : 'UI 模板源码 / 内容')"></label><textarea class="xy-input" x-model="form.content_text" placeholder='例如：{"entries":[{"name":"条目名称","content":"正文"}]}'></textarea></div>
+            <div class="cm-field"><label>封面图片（可选）<input type="file" accept="image/png,image/jpeg,image/webp" @change="chooseWorkCover" :disabled="uploadingCover"></label><p x-show="uploadingCover" role="status">正在上传封面…</p><img x-show="form.cover_url" :src="form.cover_url" alt="作品封面预览" style="max-width:160px;max-height:120px;object-fit:cover"><details><summary>使用图片链接</summary><input class="xy-input" x-model="form.cover_url" placeholder="HTTPS 图片链接"></details></div>
+            <div class="cm-field" x-show="form.type === 'ui_template'"><label>演示 HTML</label><textarea class="xy-input" x-model="form.demo_html" placeholder="隔离预览支持内联交互，不允许访问账号、存储或网络"></textarea></div>
+            <div class="cm-field"><label>从文件导入<input type="file" :accept="form.type === 'ui_template' ? '.json,.html,.txt' : '.json,application/json'" @change="importWorkFile" :disabled="importing"></label><p>先选择导出的作品文件，无需手动复制源码。导入不会自动发布。</p><details><summary>查看或编辑导入内容</summary><textarea class="xy-input" x-model="form.content_text" placeholder='例如：{"entries":[{"name":"条目名称","content":"正文"}]}'></textarea></details></div>
             <template x-if="editingWorkId"><div><div class="cm-field"><label>新版本名称 *</label><input class="xy-input" maxlength="80" x-model="form.version_name" placeholder="例如：v2 · 夏日扩展"></div><div class="cm-field"><label>本版作者介绍 *</label><textarea class="xy-input" maxlength="4000" x-model="form.version_description" placeholder="必填：说明这一版修改了什么、适合怎样使用"></textarea></div></div></template>
             <div class="cm-checks"><label><input type="checkbox" x-model="form.is_public"> 公开发布</label><label><input type="checkbox" x-model="form.is_open_source"> 开源（详情页只读展示实际内容）</label></div>
-            <div class="cm-actions"><button type="button" class="xy-btn xy-btn-primary text-sm" :disabled="saving || !form.name.trim()" @click="submitWork()" x-text="saving ? '发布中…' : (editingWorkId ? '发布新版本' : '发布')"></button><button type="button" class="xy-btn xy-btn-ghost text-sm" @click="createOpen = false">取消</button></div>
+            <div class="cm-actions"><button type="button" class="xy-btn xy-btn-primary text-sm" :disabled="saving || importing || uploadingCover || !form.name.trim()" @click="submitWork()" x-text="saving ? '发布中…' : (editingWorkId ? '发布新版本' : '发布')"></button><button type="button" class="xy-btn xy-btn-ghost text-sm" @click="createOpen = false">取消</button></div>
           </div>
         </section>
       </div>

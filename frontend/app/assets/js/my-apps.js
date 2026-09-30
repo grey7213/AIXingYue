@@ -8,13 +8,28 @@ function myAppsPage() {
     user: null,
     points: 0,
     sidebarOpen: false,
-    loading: false,
+    loading: true,
     saving: false,
     apps: [],
+    query: '',
+    visibility: 'all',
+    loadError: '',
+    actionApp: null,
     toast: null,
     toastTimer: null,
     editing: null,
     siteSettings: null,
+
+    get filteredApps() {
+      const query=this.query.trim().toLocaleLowerCase();
+      return this.apps.filter(app => (this.visibility==='all' || (app.is_public===false ? 'private':'public')===this.visibility)
+        && (!query || [app.name,app.summary,app.id,...(Array.isArray(app.tags)?app.tags:[])].join(' ').toLocaleLowerCase().includes(query)));
+    },
+
+    openActions(app) {
+      this.actionApp=app;
+      this.$refs.actions.showModal();
+    },
 
     async init() {
       injectLayout('workshop');
@@ -40,6 +55,9 @@ function myAppsPage() {
           location.replace('/app/login.html?next=' + encodeURIComponent(location.pathname));
           return;
         }
+        this.loadError = '暂时无法验证账号，请重试。已有角色仍保留在本机。';
+      } finally {
+        this.loading = false;
       }
     },
 
@@ -64,6 +82,7 @@ function myAppsPage() {
     async loadApps() {
       const owner = getCachedUser();
       this.loading = true;
+      this.loadError = '';
       try {
         const r = await api.myApps({ page: 1, page_size: 100 });
         if (String(owner?.id || owner?.user_id || '') !== String(getCachedUser()?.id || getCachedUser()?.user_id || '')) return;
@@ -71,7 +90,7 @@ function myAppsPage() {
         this.apps = data.list || data.apps || [];
         writePageCache('my-apps', owner, { list: this.apps });
       } catch (err) {
-        this.showToast(err.message || this.myText('load_failed_text', '获取角色失败'), 'error');
+        this.loadError=err.message || this.myText('load_failed_text', '获取角色失败');
       } finally {
         this.loading = false;
       }

@@ -1,16 +1,18 @@
+import { clientId } from '/assets/js/client-id.js';
 import { api, requireAuth, getCachedUser } from './app-core.js?v=20260917-r8';
 import { injectLayout } from './layout.js?v=20260917-r8';
 import { readPageCache, writePageCache } from './page-cache.js';
 import { confirmAction } from '/assets/js/dialogs.js?v=20260917-r8';
 import { social, authorizeCommunity, renderCommunityText, openCommunityUser, sheet, element, button, styles } from './community-controls.js?v=20260917-r8';
 import {localEnabled,routeLocally,addLocalMedia,hydrateLocalDraft,storeLocalDraft} from './community-local.js?v=20260917-r8';
+import { recommend,recordInterest,filterBlocked } from './recommendations.js';
 
 const cacheKey=name=>routeLocally()?'local-acceptance-'+name:name;
 const readSocialCache=(name,user,options)=>readPageCache(cacheKey(name),user,options);
 const writeSocialCache=(name,user,value)=>writePageCache(cacheKey(name),user,localEnabled()&&value.draft?{draft:storeLocalDraft(value.draft)}:value);
 
 const unwrap = result => result?.data ?? result ?? {};
-const uuid = () => crypto.randomUUID();
+const uuid = clientId;
 const initialDraft = () => ({ title: '', content: '', topic: '交流闲聊', images: [], video:'', tags:[], client_id: uuid() });
 function safeImage(value) {
   if(localEnabled()&&String(value).startsWith('blob:'))return value;
@@ -29,7 +31,7 @@ export function socialPage() {
   let toastTimer;
   return {
     user: null, points: 0, posts: [], topics: ['交流闲聊','角色故事','创作交流','攻略分享','意见反馈'],
-    scope:'public',sort:'latest',topic:'',query:'',searchOpen:false,loading:false,error:'',cursor:'',hasMore:false,
+    scope:'public',sort:'recommended',topic:'',query:'',searchOpen:false,loading:false,error:'',cursor:'',hasMore:false,
     busy:'',detail:null,comments:[],commentsLoading:false,commentsMore:false,commentsCursor:'',commentDraft:'',commentSending:false,commentError:'',commentClientId:'',
     draft:initialDraft(),editingId:'',publishing:false,uploading:false,editorError:'',actionPost:null,
     reportReason:'',reportError:'',reporting:false,toast:'',
@@ -73,12 +75,23 @@ export function socialPage() {
       const version=++requestVersion;this.loading=true;this.error='';
       if(reset){this.cursor='';this.hasMore=false;if(this.topic || this.query || this.scope!=='public')this.posts=[];}
       try {
-        const query=new URLSearchParams({scope:this.scope,sort:this.sort,topic:this.topic,q:this.query,cursor:this.cursor,...(this.profileId?{author:this.profileId}:{})});
+        const query=new URLSearchParams({scope:this.scope,sort:this.sort==='recommended'?'hot':this.sort,topic:this.topic,q:this.query,cursor:this.cursor,...(this.profileId?{author:this.profileId}:{})});
         const data=unwrap(await api.social('posts?'+query));
         if(version!==requestVersion)return;
-        const items=(data.list || []).map(normalizePost);
+        const rawItems=(data.list || []).map(normalizePost);
+        const items=this.sort==='recommended'&&this.scope==='public'&&!this.query&&!this.profileId&&!this.localMode?recommend(this.user,rawItems):this.scope==='public'&&!this.profileId&&!this.localMode?filterBlocked(this.user,rawItems):rawItems;
         this.posts=reset?items:[...new Map([...this.posts,...items].map(post=>[post.id,post])).values()];
         this.cursor=String(data.next_cursor || '');this.hasMore=!!data.has_more;
+        // Fresh content is a second authorized candidate source, independent of
+        // the popular-feed cursor. Never delay the first usable list for it.
+        if(reset&&this.sort==='recommended'&&this.scope==='public'&&!this.query&&!this.profileId&&!this.localMode){
+          const fresh=new URLSearchParams({scope:'public',sort:'latest',topic:this.topic});
+          void api.social('posts?'+fresh).then(result=>{
+            if(version!==requestVersion||this.sort!=='recommended')return;
+            const extra=(unwrap(result).list||[]).map(normalizePost);
+            this.posts=recommend(this.user,[...new Map([...this.posts,...extra].map(post=>[post.id,post])).values()]);
+          }).catch(()=>{}); // Primary feed remains usable when the second source is offline.
+        }
         if(this.scope==='public' && !this.topic && !this.query)writeSocialCache('social-feed',this.user,{posts:this.posts.slice(0,40)});
       } catch(err) {
         if(err.status===403){this.posts=[];this.$refs.detailDialog?.close();}
@@ -94,6 +107,7 @@ export function socialPage() {
       return value;
     },
     async openPost(post) {
+      if(!this.localMode)recordInterest(this.user,'post',post,'view');
       this.detail=normalizePost(post);this.comments=[];this.commentDraft='';this.commentClientId=uuid();this.commentError='';this.replyTarget=null;this.commentImages=[];this.commentPage=1;this.commentSnapshot=0;
       this.$refs.detailDialog.showModal();this.loadComments(true);
       const id=post.id;
@@ -124,7 +138,7 @@ export function socialPage() {
     },
     async like(post) {
       if(this.busy)return;this.busy=post.id;
-      try{this.updatePost(unwrap(await api.social('posts/'+post.id+'/like',{method:'PUT',body:{liked:!post.liked}})));}
+      try{const value=this.updatePost(unwrap(await api.social('posts/'+post.id+'/like',{method:'PUT',body:{liked:!post.liked}})));if(!this.localMode)recordInterest(this.user,'post',value,value.liked?'like':'unlike');}
       catch(err){this.notify(err.message || '点赞失败');}finally{this.busy='';}
     },
     async save(post) {
@@ -132,6 +146,7 @@ export function socialPage() {
       try {
         const value=unwrap(await api.social('posts/'+post.id+'/save',{method:'PUT',body:{saved:!post.saved}}));
         this.updatePost(value);this.notify(value.saved?'已收藏帖子':'已取消收藏');
+        if(!this.localMode)recordInterest(this.user,'post',value,value.saved?'save':'unsave');
         if(this.scope==='saved' && !value.saved)this.posts=this.posts.filter(item=>item.id!==value.id);
       } catch(err){this.notify(err.message || '收藏失败');} finally {this.busy='';}
     },

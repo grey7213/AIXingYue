@@ -1,0 +1,2 @@
+.mes[is_user="false"] .mes_text [data-message-tone="speech"],.preview-message:not(.is-user) [data-message-tone="speech"]{color:var(--homer-speech-color,#b4e8ff)}
+.mes[is_user="false"] .mes_text [data-message-tone="thought"],.preview-message:not(.is-user) [data-message-tone="thought"]{color:var(--homer-thought-color,#f6c6eb);font-style:italic}

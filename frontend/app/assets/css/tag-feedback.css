@@ -1,0 +1,12 @@
+@import url('/assets/css/theme.css');
+.character-category-tags button.chip{min-height:48px!important;scroll-margin-block:100px;cursor:pointer;touch-action:pan-y;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+.character-category-tags button.chip:focus-visible{outline:2px solid var(--app-accent);outline-offset:3px}
+dialog.tag-feedback-menu{position:fixed;inset:auto;margin:0;width:280px;max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);padding:6px;border:1px solid var(--app-line);border-radius:18px;background:var(--app-panel);color:var(--app-text);box-shadow:0 12px 40px #0003;overflow:auto;font:14px/1.4 system-ui}
+.tag-feedback-menu::backdrop{background:#0002}
+.tag-feedback-menu header{display:flex;align-items:center;padding:0 6px 4px 10px;border-bottom:1px solid var(--app-line)}
+.tag-feedback-menu header strong{flex:1;overflow-wrap:anywhere;font-size:14px}
+.tag-feedback-menu header button{background:none;border:0;color:var(--app-muted);width:44px;height:44px;font-size:23px}
+.tag-feedback-menu>button{display:grid;grid-template-columns:28px 1fr 16px;gap:10px;align-items:center;width:100%;min-height:62px;padding:10px;border:0;border-radius:10px;color:var(--app-text);background:none;text-align:left;cursor:pointer}
+.tag-feedback-menu>button strong{font-size:15px;font-weight:600;display:block}.tag-feedback-menu small{display:block;color:var(--app-muted);font-size:12px;margin-top:3px}.tag-feedback-icon{font-size:24px;color:var(--app-muted)}
+.tag-feedback-menu>button[aria-pressed=true]{background:var(--app-fill);color:var(--app-accent)}.tag-feedback-menu button:focus-visible{outline:2px solid var(--app-accent);outline-offset:-2px}
+.tag-feedback-toast{position:fixed;z-index:10000;bottom:max(24px,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);width:max-content;max-width:calc(100vw - 24px);display:flex;align-items:center;gap:8px;padding:8px 10px 8px 16px;background:var(--app-panel);color:var(--app-text);border:1px solid var(--app-line);box-shadow:0 8px 24px #0003;border-radius:14px;font:13px/1.5 system-ui}.tag-feedback-toast button{flex:none;min-height:44px;min-width:44px;background:none;border:0;color:var(--app-accent);font:inherit}

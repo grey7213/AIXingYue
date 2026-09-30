@@ -1,11 +1,12 @@
 // Explicit debug-only acceptance data. No request in this module writes to a server.
+import { clientId } from '/assets/js/client-id.js';
 import {api as accountApi,getCachedUser} from '/assets/js/api.js?v=20260917-r8';
 const PREFIX='homer.community.acceptance.v1.';
 const categories={politics:'政治敏感',conflict:'引战／带节奏',attack:'人身攻击',spam:'广告 spam',rumour:'造谣传谣',privacy:'侵犯隐私',illegal:'违法违规',noise:'恶意灌水',flood:'刷屏',diversion:'恶意引流',impersonation:'冒充官方',phishing:'钓鱼链接'};
 const topics=['交流闲聊','角色故事','创作交流','攻略分享','意见反馈'];
 const policy={version:'local-2026-09-16',agreement:'本机交互验收模式\n这里的帖子、评论、举报和管理操作只存储在本机，不会上传，不会处罚真实账号。退出模式后返回真实服务。\n社区用户协议\n请确保有权发布内容，不冒充他人、不泄露隐私。禁止政治敏感、引战／带节奏、人身攻击、广告 spam、造谣传谣、侵犯隐私、违法违规、恶意灌水、刷屏、恶意引流、冒充官方和钓鱼链接。可对处理结果申诉。',guidelines:'社区行为规范\n讨论作品，尊重不同意见；不以举报人数直接处罚。审核结合上下文，区分虚构创作和现实攻击。限制应说明原因及期限；禁言仅影响社区互动，不影响其他功能。',categories};
 let accessOwner='',accessPromise,dbPromise,queue=Promise.resolve(),localSession=false;const urls=new Map();
-window.addEventListener('homer-account-cleared',()=>{accessOwner='';accessPromise=null;for(const url of urls.values())URL.revokeObjectURL(url);urls.clear();});
+window.addEventListener('homer-account-cleared',()=>{accessOwner='';accessPromise=null;localSession=false;for(const url of urls.values())URL.revokeObjectURL(url);urls.clear();});
 const owner=()=>String(getCachedUser()?.id||'');
 export function debugBuild(){try{return window.HomerNative?.isDebugBuild()===true;}catch{return false;}}
 export function localEnabled(){try{return debugBuild()&&!!owner()&&localStorage.getItem(PREFIX+owner())==='on';}catch{return false;}}
@@ -20,8 +21,8 @@ export async function canUseLocal(){
   }).catch(()=>false);
   return accessPromise;
 }
-export async function enableLocal(){if(!await canUseLocal())throw Error('本机验收仅供 debug 包中的管理员使用');localStorage.setItem(PREFIX+owner(),'on');}
-export function disableLocal(){localStorage.removeItem(PREFIX+owner());}
+export async function enableLocal(){if(!await canUseLocal())throw Error('本机验收仅供 debug 包中的管理员使用');localStorage.setItem(PREFIX+owner(),'on');window.dispatchEvent(new Event('homer:community-mode'));}
+export function disableLocal(){localStorage.removeItem(PREFIX+owner());window.dispatchEvent(new Event('homer:community-mode'));}
 function database(){return dbPromise ||= new Promise((resolve,reject)=>{const req=indexedDB.open('homer-community-acceptance',1);req.onupgradeneeded=()=>req.result.createObjectStore('accounts');req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(Error('本机验收存储不可用'));});}
 async function read(id){const db=await database();return new Promise((resolve,reject)=>{const tx=db.transaction('accounts'),request=tx.objectStore('accounts').get(id);request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(Error('读取本机验收数据失败'));});}
 async function write(id,value){const db=await database();return new Promise((resolve,reject)=>{const tx=db.transaction('accounts','readwrite');tx.objectStore('accounts').put(value,id);tx.oncomplete=resolve;tx.onerror=()=>reject(Error('本机空间不足，操作未保存'));tx.onabort=()=>reject(Error('本机保存被中断'));});}
@@ -36,7 +37,7 @@ export async function addLocalMedia(file){
   if(!localEnabled()||!await canUseLocal())throw Error('未进入本机验收');
   const limit=file.type==='video/mp4'?100*1024*1024:8*1024*1024;
   if(!['image/png','image/jpeg','image/webp','video/mp4'].includes(file.type)||file.size>limit)throw Error('媒体类型或大小不符合要求');
-  return serialized(async()=>{const uid=owner(),s=await read(uid)||seed(uid),id=crypto.randomUUID();s.media.push({id,blob:file});await write(uid,s);return mediaURL(s,'acceptance-media:'+id);});
+  return serialized(async()=>{const uid=owner(),s=await read(uid)||seed(uid),id=clientId();s.media.push({id,blob:file});await write(uid,s);return mediaURL(s,'acceptance-media:'+id);});
 }
 function mediaURL(s,value){if(!value?.startsWith('acceptance-media:'))return value;const id=value.slice(17),file=s.media.find(m=>m.id===id);if(!file)return '';if(!urls.has(id))urls.set(id,URL.createObjectURL(file.blob));return urls.get(id);}
 function storedMedia(value){for(const [id,url] of urls)if(url===value)return 'acceptance-media:'+id;return value;}
@@ -98,7 +99,14 @@ export function handleLocal(path,options={}){
     else if(route==='search'){const term=q.get('q')||'';result={list:q.get('type')==='topics'?s.topics.filter(t=>t.name.includes(term)):members.filter(m=>!s.blocks.includes(m.user_id)&&m.name.includes(term))};}
     else if((match=route.match(/^users\/([^/]+)(?:\/(comments|following|followers))?$/))){
       const member=members.find(m=>m.user_id===match[1]);if(!member||s.blocks.includes(match[1]))reject('用户暂不可查看',404);
-      result=match[2]?{list:match[2]==='comments'?s.comments.filter(c=>c.user_id===member.user_id&&!c.deleted).map(commentPayload):members.filter(m=>s.follows.includes(m.user_id))}:{...member,bio:'本机验收资料',badge:'验收示例',posts:s.posts.filter(p=>p.user_id===member.user_id&&!p.deleted).length,likes:0,following_count:s.follows.length,followers_count:0,following:s.follows.includes(member.user_id)};
+      if(match[2]==='following'||match[2]==='followers'){
+        const edges=s.follows.map(id=>({from:uid,to:id}));
+        const visibleMembers=members.filter(m=>!s.blocks.includes(m.user_id));
+        const counts={following:edges.filter(e=>e.from===member.user_id&&visibleMembers.some(m=>m.user_id===e.to)).length,followers:edges.filter(e=>e.to===member.user_id&&visibleMembers.some(m=>m.user_id===e.from)).length};
+        const query=(q.get('q')||'').trim().toLowerCase();
+        const list=visibleMembers.filter(m=>edges.some(e=>match[2]==='following'?e.from===member.user_id&&e.to===m.user_id:e.to===member.user_id&&e.from===m.user_id)).filter(m=>(m.name+' '+m.user_id).toLowerCase().includes(query)).map(m=>({...m,following:edges.some(e=>e.from===uid&&e.to===m.user_id),followed_by:edges.some(e=>e.from===m.user_id&&e.to===uid)}));
+        result={list,counts,total:list.length,has_more:false,next_cursor:''};
+      }else result=match[2]?{list:s.comments.filter(c=>c.user_id===member.user_id&&!c.deleted).map(commentPayload)}:{...member,bio:'本机验收资料',badge:'验收示例',posts:s.posts.filter(p=>p.user_id===member.user_id&&!p.deleted).length,likes:0,following_count:member.user_id===uid?s.follows.length:0,followers_count:s.follows.includes(member.user_id)?1:0,following:s.follows.includes(member.user_id)};
     }else if(route.startsWith('admin/'))result=admin(route.slice(6));
     else reject('本机验收暂不支持该操作：'+route,404);
     if(owner()!==uid||!localEnabled())reject('账号已切换，本次操作未保存',409);

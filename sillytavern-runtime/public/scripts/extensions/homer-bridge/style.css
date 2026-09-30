@@ -3352,11 +3352,7 @@ body.homer-runtime #send_but {
     }
 
     .homer-message-menu-dialog {
-        right: max(8px, env(safe-area-inset-right));
-        bottom: max(8px, env(safe-area-inset-bottom));
-        left: max(8px, env(safe-area-inset-left));
-        top: auto !important;
-        width: auto;
+        /* Position comes from the message anchor, including on phones. */
         max-height: calc(
             100dvh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom)
         );
@@ -3438,7 +3434,7 @@ body.homer-runtime:not(.homer-card-stage-active) #chat {
 
 body.homer-runtime:not(.homer-card-stage-active) #chat .mes {
     width: fit-content;
-    max-width: min(78%, 760px);
+    max-width: min(96%, 920px);
     margin: 8px auto 8px 0;
     padding: 12px 16px;
     border: 0;
@@ -3970,12 +3966,12 @@ body.homer-left-drawer-open .homer-chat-header {
             calc(64px + env(safe-area-inset-top))
             calc(10px + env(safe-area-inset-right))
             86px
-            calc(42px + env(safe-area-inset-left));
+            calc(8px + env(safe-area-inset-left));
         scroll-padding-bottom: 86px;
     }
 
     body.homer-runtime:not(.homer-card-stage-active) #chat .mes {
-        max-width: 88%;
+        max-width: 96%;
         padding: 10px 13px;
     }
 
@@ -4036,6 +4032,13 @@ body.homer-left-drawer-open .homer-chat-header {
     display: none !important;
 }
 
+/* Only cards which actually expose the keyword rail need its left clearance. */
+@media (max-width: 760px), (pointer: coarse) {
+    body.homer-runtime:has(.homer-keyword-injector:not(.is-card-disabled)):not(.homer-card-stage-active) #chat {
+        padding-left: max(42px, var(--homer-safe-left, 0px)) !important;
+    }
+}
+
 @media (max-width: 760px), (pointer: coarse) {
     body.homer-runtime {
         --homer-safe-top: max(env(safe-area-inset-top), var(--homer-native-safe-top));
@@ -4056,7 +4059,7 @@ body.homer-left-drawer-open .homer-chat-header {
         padding-top: calc(64px + var(--homer-safe-top));
         padding-right: max(10px, var(--homer-safe-right));
         padding-bottom: calc(86px + var(--homer-safe-bottom));
-        padding-left: max(42px, var(--homer-safe-left));
+        padding-left: max(8px, var(--homer-safe-left));
         scroll-padding-top: calc(64px + var(--homer-safe-top));
         scroll-padding-bottom: calc(86px + var(--homer-safe-bottom));
     }
@@ -4433,3 +4436,23 @@ body:has(.homer-preset-dialog[open]) .homer-keyword-injector {
     .homer-site-dialog { max-width: calc(100vw - 16px); }
     .homer-site-dialog__surface { width: min(460px, calc(100vw - 16px)); }
 }
+/* TavernHelper marks source only after taking ownership. Keep that contract
+   even when its utility stylesheet is late/unsupported; never hide normal code. */
+body.homer-runtime #chat .mes_text pre[class~="hidden!"] { display: none !important; }
+body.homer-runtime #chat .homer-opening-nav { display:flex;align-items:center;justify-content:center;gap:8px;width:max-content;max-width:100%;margin:8px 0 0;color:var(--homer-assistant-text,#fff);font:13px/1.5 system-ui; }
+body.homer-runtime #chat .homer-opening-nav button { min-width:48px;min-height:48px;margin:0;padding:4px 12px;border:0;border-radius:12px;background:var(--tavo-assistant-bubble,#29485f);color:inherit;font:26px/1 system-ui;cursor:pointer; }
+body.homer-runtime #chat .homer-opening-nav button:disabled { opacity:.35;cursor:default; }
+body.homer-runtime #chat .homer-opening-nav button:focus-visible { outline:2px solid currentColor;outline-offset:2px; }
+.homer-copy-diagnostic{display:block;min-height:36px;margin:8px 0;padding:6px 10px;border:1px solid #8885;border-radius:8px;background:transparent;color:inherit;font:inherit;font-size:12px;cursor:pointer}
+.homer-admin-preview #homer-left-drawer,.homer-admin-preview [aria-label="打开导航与历史会话"]{display:none!important}
+.homer-admin-preview #homer-conversation-title{display:block!important;visibility:visible!important;grid-column:2;grid-row:1}
+.homer-admin-preview .homer-chat-header .homer-header-button:last-child{grid-column:3;grid-row:1}
+.homer-admin-preview #homer-failed-diagnostic{align-self:flex-start;background:var(--SmartThemeBlurTintColor,#202020);color:var(--SmartThemeBodyColor,#ddd);flex-shrink:0}
+/* Model failure feedback stays above the composer without a blocking dialog. */
+body.homer-runtime #homer-model-pause-notice:not([hidden]) {
+    display: block; flex: 0 0 auto; padding: 7px 16px 3px;
+    color: var(--SmartThemeBodyColor, #e5e5e5); opacity: .85;
+    font-size: 12px; line-height: 1.5; text-align: left; overflow-wrap: anywhere;
+}
+body.homer-runtime #homer-model-pause-notice[hidden] { display: none; }
+body.homer-model-paused #send_but { opacity: .35 !important; cursor: not-allowed !important; }

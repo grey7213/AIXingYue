@@ -1,0 +1,45 @@
+/* Original components. Dimensions traced to the supplied native layout resources;
+   larger touch targets are retained independently of the native icon size. */
+html body.community-app{--c-text:var(--app-text);--c-muted:var(--app-muted);--c-line:var(--app-line);--c-soft:var(--app-bg);--c-accent:var(--app-accent);color:var(--c-text);background:var(--app-bg)}
+html body.community-app .c-header{background:var(--app-panel);border:0;backdrop-filter:none;padding:0 12px;min-height:52px}
+html body.community-app .c-home-tabs{gap:14px}.community-app .c-home-tabs button{position:relative}
+html body.community-app .c-home-tabs button{font-size:18px;padding:10px 4px;min-height:52px;font-weight:500}
+html body.community-app .c-home-tabs .is-active{font-size:20px;font-weight:700}
+.community-app .c-home-tabs .is-active::after{content:'';position:absolute;bottom:4px;left:calc(50% - 9px);width:18px;height:3px;border-radius:3px;background:var(--app-text)}
+html body.community-app .c-channel-strip{padding:14px 12px 10px;gap:0;border:0}
+html body.community-app .c-channel-strip>button,html body.community-app .c-channel-strip>template+button{display:flex;flex-direction:column;align-items:center;gap:7px;width:70px;min-width:70px;min-height:76px;padding:0 3px;background:transparent;border-radius:0;font-size:11px;color:var(--c-text);font-weight:400}
+.c-channel-icon{display:grid;place-items:center;width:46px;height:46px;background:var(--app-fill);border-radius:12px;color:var(--app-muted);border:1px solid transparent}
+.c-channel-icon svg{width:22px;height:22px}
+.c-channel-strip [aria-pressed=true] .c-channel-icon{border-color:var(--app-accent);background:var(--app-tint);color:var(--app-accent)}
+html body.community-app .c-channel-strip>button[aria-pressed=true]{background:transparent;color:var(--app-accent);font-weight:600}
+html[data-theme=dark] body.community-app .c-channel-strip>button[aria-pressed=true]{color:var(--app-accent)}
+html[data-theme=dark] body.community-app .c-channel-strip [aria-pressed=true] .c-channel-icon{background:var(--app-tint);color:var(--app-accent);border-color:var(--app-accent)}
+html body.community-app .c-home-tools{border-bottom:4px solid var(--c-soft);min-height:44px;padding-inline:12px}
+html body.community-app .c-post{padding:14px 12px 12px;border-bottom:4px solid var(--c-soft);border-radius:0;box-shadow:none}
+html body.community-app .c-author{gap:8px}.community-app .c-post .c-avatar{width:28px;height:28px;background:var(--app-fill);color:var(--app-muted);font-size:12px}
+html body.community-app .c-post .c-author strong{font-size:12px;font-weight:500}.community-app .c-post .c-author small{font-size:10px}
+html body.community-app .c-post h2{font-size:17px;font-weight:650;line-height:1.5;margin:8px 0 4px}
+html body.community-app .c-post-copy p{font-size:14px;line-height:1.65;color:#333b43;-webkit-line-clamp:3}
+html body.community-app .c-post footer{gap:8px;min-height:44px;margin-top:4px}.community-app .c-post footer .c-actions{gap:0}.community-app .c-post footer .c-actions button{min-width:44px;padding:8px 6px;font-size:12px}.community-app .c-post footer svg{width:17px;height:17px}
+html body.community-app .c-media-grid{gap:4px;margin-top:10px}.community-app .c-media-grid img{border-radius:3px}
+html body.community-app .c-compose-fab{width:54px;height:54px;min-height:54px;padding:15px;border-radius:50%;justify-content:center;background:#22282e;color:var(--app-on-accent);box-shadow:0 3px 12px #17202a25}.community-app .c-compose-fab span{display:none}.community-app .c-compose-fab svg{width:24px;height:24px}
+html body.community-app .c-search-header{gap:0;padding:0 8px 0 4px}.community-app .c-search-header .c-search-form{flex:1;min-width:0;padding:6px 0;gap:4px}.community-app .c-search-header input{border:0;border-radius:6px;height:36px;font-size:13px}.community-app .c-search-header .c-search-form button{font-size:13px;padding:8px;min-width:44px}
+html body.community-app .c-tabs{gap:26px;border-color:var(--c-line)}.community-app .c-tabs [aria-pressed=true],.community-app .c-tabs [aria-current=page]{border-bottom-color:var(--app-text)}
+html body.community-app .c-detail{padding:16px 16px 20px}.community-app .c-detail h2{font-size:23px;line-height:1.5;margin:18px 0}.community-app .c-detail-text{font-size:16px;line-height:1.8}.community-app .c-detail .c-follow{border:1px solid #dce2e8;border-radius:4px;background:white;color:#306798;min-height:36px}
+html body.community-app .c-comments{border-top:6px solid var(--c-soft)}.community-app .c-comments>header{border-bottom:1px solid var(--c-line);margin-bottom:8px}.community-app .c-comments>header h2{font-size:17px}
+html body.community-app .c-reply-dock{box-shadow:none;padding-top:8px}html body.community-app .c-reply-dock textarea{border-radius:6px;background:var(--c-soft)}
+html body.community-app :is(.c-reply-dock textarea,.c-title-input,.c-body-input,.c-search-form input):focus-visible{outline:none;box-shadow:inset 0 -1px var(--c-accent)}
+html body.community-app .c-detail-actions{border-block:1px solid var(--c-line);margin-top:20px}html body.community-app .c-detail-actions button{background:transparent;border-radius:0;min-height:48px}
+html body.community-screen-compose .c-editor{padding-bottom:calc(100px + env(safe-area-inset-bottom))}
+html body.community-screen-compose .c-editor-tools{position:fixed;bottom:var(--community-keyboard,0px);left:50%;transform:translateX(-50%);width:min(100%,720px);margin:0;padding:8px 16px max(8px,env(safe-area-inset-bottom));background:white;z-index:30;justify-content:space-around;gap:4px;border-top:1px solid var(--c-line)}
+html body.community-screen-compose .c-body-input{min-height:300px}.community-app .c-editor-tools button{white-space:nowrap}
+html body.community-screen-compose .c-emoji{position:fixed;bottom:calc(64px + var(--community-keyboard,0px));left:50%;transform:translateX(-50%);width:min(100%,720px);padding:12px;background:var(--app-bg);z-index:31;border-top:1px solid var(--c-line)}
+html body.community-app .c-sheet{border-radius:12px 12px 0 0;width:min(100%,540px);margin:auto auto 0;border:0}.community-app .c-sheet>div>button{min-height:52px;font-size:15px}.community-app .c-sheet>div>button:last-child{border-top:6px solid var(--c-soft);margin-top:8px}
+html body.community-app .c-primary{border-radius:6px;background:#272e35;color:var(--app-on-accent)}
+html[data-theme=dark] body.community-app{--c-text:var(--app-text);--c-muted:var(--app-muted);--c-line:var(--app-line);--c-soft:var(--app-fill);--c-accent:var(--app-accent);--ui-bg:var(--app-bg);color-scheme:dark}
+html[data-theme=dark] body.community-app :is(.c-page,.c-header,.c-post,.c-reply-dock,.c-title-input,.c-body-input,.c-form-row input,.c-form-row select,.c-sheet,.c-editor-tools,.c-report textarea,.c-report select){background:var(--app-panel);color:var(--c-text)}
+html[data-theme=dark] body.community-app :is(.c-author strong,.c-post-copy p,.c-home-tabs button,.c-tabs button){color:var(--c-text)}
+html[data-theme=dark] body.community-app :is(.c-search-form input,.c-reply-dock textarea,.c-channel-icon,.c-avatar,.c-emoji){background:var(--c-soft);color:var(--c-text)}
+html[data-theme=dark] body.community-app .c-detail .c-follow{background:var(--c-soft);border-color:var(--c-line);color:var(--c-accent)}
+html[data-theme=dark] body.community-app .c-home-tabs .is-active::after{background:var(--c-text)}
+html[data-theme=dark] body.community-app .community-local-banner{background:#3b3220;color:#e5c886}

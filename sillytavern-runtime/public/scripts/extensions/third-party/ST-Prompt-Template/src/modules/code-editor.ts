@@ -1,4 +1,7 @@
-import * as monaco from 'monaco-editor';
+// Chat generation only needs the template evaluator, not the code editor.
+// Keep Monaco in a separate chunk, loaded on the actual editor action.
+let monaco: typeof import('monaco-editor');
+let editorReady: Promise<void> | undefined;
 import { eventSource, event_types } from '../../../../../events.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../../../popup.js';
 import { settings } from './ui';
@@ -645,7 +648,8 @@ const autoComplete = [
     }
 ];
 
-export async function init() {
+async function prepareEditor() {
+    monaco = await import(/* webpackChunkName: "prompt-code-editor" */ 'monaco-editor');
     // 1. Registered Language
     monaco.languages.register({ id: 'ejs' });
 
@@ -733,14 +737,17 @@ export async function init() {
         }
     });
 
-    eventSource.on(event_types.APP_READY, () => {
-        $('#world_popup_entries_list').on('click', '.fa-circle-chevron-down', reloadWorldInfoPage);
-    });
-
     console.log(`monaco-editor loaded. `, monaco);
 }
 
+export async function init() {
+    // Delegation works both before and after APP_READY and binds only once.
+    $(document).off('click.promptTemplateEditor', '#world_popup_entries_list .fa-circle-chevron-down')
+        .on('click.promptTemplateEditor', '#world_popup_entries_list .fa-circle-chevron-down', reloadWorldInfoPage);
+}
+
 export async function exit() {
+    $(document).off('click.promptTemplateEditor');
 }
 
 /**
@@ -890,6 +897,13 @@ function saveEditorSettings(editor: any) {
 }
 
 async function showEditor(ref: string) {
+    try {
+        editorReady ??= prepareEditor().catch(error => { editorReady = undefined; throw error; });
+        await editorReady;
+    } catch {
+        toastr.error('编辑器加载失败，请重试；原内容未修改。');
+        return;
+    }
     let editor: any = null;
     const inputStyle = `padding:2px 6px;border-radius:4px;border:1px solid var(--SmartThemeBorderColor,#555);background:var(--SmartThemeInputColor,#1e1e1e);color:var(--SmartThemeBodyColor,#ccc);font-size:12px;`;
     const labelStyle = `display:flex;align-items:center;gap:4px;color:var(--SmartThemeBodyColor,#ccc);`;

@@ -1,0 +1,6 @@
+/* Shared semantic colors. Message content and card documents do not consume these. */
+:root{color-scheme:light;
+ --app-bg:#f2f2f7;--app-panel:#fff;--app-fill:#eeeef0;--app-text:#1c1c1e;--app-muted:#626268;--app-line:#e2e2e8;--app-accent:#0066d6;--app-tint:#e8f1ff;--app-on-accent:#fff;--app-danger:#bb2925;
+}
+:root[data-theme=dark]{--app-bg:#1d2229;--app-panel:#1d2229;--app-fill:#292e35;--app-text:#edf0f4;--app-muted:#b0b6c0;--app-line:#363b43;--app-accent:#b6d7e8;--app-tint:#2b353b;--app-on-accent:#15242c;--app-danger:#ffaaa6;color-scheme:dark}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]):not([data-theme=dark]){--app-bg:#1d2229;--app-panel:#1d2229;--app-fill:#292e35;--app-text:#edf0f4;--app-muted:#b0b6c0;--app-line:#363b43;--app-accent:#b6d7e8;--app-tint:#2b353b;--app-on-accent:#15242c;--app-danger:#ffaaa6;color-scheme:dark}}

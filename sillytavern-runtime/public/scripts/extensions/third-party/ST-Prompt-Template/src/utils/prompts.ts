@@ -39,7 +39,11 @@ function escapeForTemplateLiteral(str: string) {
     return str
         .replace(/\\/g, '\\\\')
         .replace(/`/g, '\\`')
-        .replace(/\$\{/g, '\\${');
+        .replace(/\$\{/g, '\\${')
+        // The EJS scanner recognizes delimiters even inside JS strings. Keep
+        // literal closing markers in bundled code/reasoning opaque to it;
+        // evaluating the template literal restores every percent unchanged.
+        .replace(/%/g, '\\x25');
 }
 
 /**

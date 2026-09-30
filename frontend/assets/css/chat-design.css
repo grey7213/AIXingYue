@@ -1,7 +1,8 @@
+@import url('/assets/css/chat-settings-page.css?v=20260919-r15');
 /* Matching local preview and runtime chrome; card-owned documents remain untouched. */
 body.has-preview,body.homer-runtime {
   --chat-bg:#212121;--chat-panel:#fff;--chat-text:#292432;--chat-muted:#756c81;
-  --chat-line:#e4dfe9;--chat-accent:#7c49ef;--chat-soft:#eee7fc;
+  --chat-line:#dce2e7;--chat-accent:#29485f;--chat-soft:#edf2f5;
   --tavo-assistant-bubble:#29485f;--tavo-user-bubble:#4c4c4c;
   --tavo-composer-bg:#656668;--tavo-sidebar-bg:#fff;--tavo-sidebar-rule:#e4dfe9;
   font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
@@ -11,45 +12,48 @@ body.has-preview .launcher,body.has-preview .preview-stage,body.homer-runtime:no
 body.has-preview .launcher::before,body.has-preview .preview-stage::before,body.homer-runtime:not(.homer-card-stage-active)::before{background:none!important}
 body.has-preview button,body.homer-runtime #homer-runtime-root button,body.homer-runtime #form_sheld button,body.homer-runtime #form_sheld [role="button"],body.homer-runtime :is(.homer-sheet-dialog,.homer-site-dialog,.homer-preset-dialog,.homer-message-menu-dialog) button{-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:manipulation;text-shadow:none!important;cursor:pointer}
 body.has-preview button:focus-visible,body.homer-runtime #homer-runtime-root button:focus-visible,body.homer-runtime :is(.homer-sheet-dialog,.homer-site-dialog,.homer-preset-dialog,.homer-message-menu-dialog) button:focus-visible{outline:2px solid var(--chat-accent)!important;outline-offset:3px}
-body.has-preview .preview-header,body.homer-runtime .homer-chat-header,body.homer-runtime.homer-left-drawer-open .homer-chat-header{height:calc(48px + env(safe-area-inset-top))!important;min-height:48px;padding:env(safe-area-inset-top) 0 0!important;background:linear-gradient(#141414,#212121)!important;border-bottom:0!important;box-shadow:none!important;backdrop-filter:none!important;grid-template-columns:48px minmax(0,1fr) 48px!important}
+body.has-preview .preview-header,body.homer-runtime .homer-chat-header,body.homer-runtime.homer-left-drawer-open .homer-chat-header{height:calc(48px + env(safe-area-inset-top))!important;min-height:48px;padding:env(safe-area-inset-top) 0 0!important;background:transparent!important;border-bottom:0!important;box-shadow:none!important;backdrop-filter:none!important;grid-template-columns:48px minmax(0,1fr) 48px!important}
 body.has-preview .preview-menu-button,body.has-preview .preview-settings-button,body.homer-runtime .homer-header-button{display:grid;place-content:center;width:48px!important;height:48px!important;min-height:48px!important;border:0!important;border-radius:0!important;background:transparent!important;color:#fff!important;font-size:22px;text-shadow:none!important}
 .preview-settings-button svg,.homer-header-button svg{width:21px;height:21px;display:block}
 body.has-preview .preview-heading{display:block!important;text-align:center;padding:0 12px}
-body.has-preview .preview-heading h2,body.homer-runtime .homer-chat-header__title{display:block!important;margin:0;color:#fff!important;font-size:16px!important;font-weight:650;line-height:1.5;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;text-align:center}
+body.has-preview .preview-heading h2,body.homer-runtime .homer-chat-header__title{display:block!important;visibility:hidden!important;margin:0;color:#fff!important;font-size:16px!important;font-weight:650;line-height:1.5;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;text-align:center}
 body.has-preview .preview-heading p,body.has-preview .preview-avatar{display:none!important}
 body.has-preview .preview-messages{padding:16px 10px!important;scroll-padding-bottom:20px;gap:0}
 body.has-preview .preview-message,body.homer-runtime:not(.homer-card-stage-active) #chat .mes:not(:has(.homer-card-component,.homer-roleplayhub-documents,iframe)) {
-  border:0!important;border-radius:14px!important;
+  border:0!important;border-radius:16px!important;
   background:var(--tavo-assistant-bubble)!important;color:#fff!important;
-  padding:10px 12px!important;margin:0 auto 14px 0!important;max-width:min(92%,760px)!important;
-  font-size:14px!important;line-height:1.6!important;text-shadow:none!important;box-shadow:0 3px 10px #30223504!important;
+  padding:8px 12px!important;margin:0 auto 10px 0!important;max-width:min(calc(100% - 12px),920px)!important;
+  font-size:15px!important;line-height:1.45!important;text-shadow:none!important;box-shadow:none!important;
 }
-body.has-preview .preview-message.is-user,body.homer-runtime:not(.homer-card-stage-active) #chat .mes[is_user="true"]{margin:0 0 14px auto!important;background:var(--tavo-user-bubble)!important;color:#fff!important;border-color:transparent!important;border-radius:14px!important}
-body.homer-runtime:not(.homer-card-stage-active) #chat .mes_text{font-size:14px!important;line-height:1.6!important;color:inherit!important;text-shadow:none!important}
+body.has-preview .preview-message.is-user,body.homer-runtime:not(.homer-card-stage-active) #chat .mes[is_user="true"]{margin:0 0 10px auto!important;background:var(--tavo-user-bubble)!important;color:#fff!important;border-color:transparent!important;border-radius:16px!important}
+body.homer-runtime:not(.homer-card-stage-active) #chat .mes:not(:has(.homer-card-component,.homer-roleplayhub-documents,iframe)) .mes_text{font-size:15px!important;line-height:1.45!important;color:inherit!important;text-shadow:none!important}
 body.has-preview .preview-empty{align-self:center;color:var(--chat-muted)!important;font-size:14px;line-height:1.8}
 body.homer-runtime:not(.homer-card-stage-active) #chat{padding:calc(62px + env(safe-area-inset-top)) 10px 80px!important;scroll-padding-top:62px;scrollbar-color:var(--chat-line) transparent}
 body.homer-runtime.homer-left-drawer-open:not(.homer-card-stage-active) #sheld{left:0!important;width:100vw!important}
-body.has-preview .preview-composer{grid-template-columns:30px minmax(0,1fr) 38px!important;align-items:center;margin:8px 10px max(12px,env(safe-area-inset-bottom))!important;border:0!important;border-radius:28px!important;background:var(--tavo-composer-bg)!important;padding:4px 7px 4px 10px!important;box-shadow:none!important;gap:6px!important;min-height:54px}
+body.has-preview .preview-composer{grid-template-columns:30px minmax(0,1fr) 38px!important;align-items:center;margin:8px 10px max(12px,env(safe-area-inset-bottom))!important;border:0!important;border-radius:14px!important;background:var(--tavo-composer-bg)!important;padding:4px 7px 4px 10px!important;box-shadow:none!important;gap:6px!important;min-height:54px}
 body.has-preview .preview-composer::before{display:none!important}
-body.has-preview .preview-composer textarea{width:100%;min-width:0;font-size:16px!important;line-height:1.6!important;padding:10px 0!important;color:#fff!important;background:transparent!important;border:0!important;caret-color:var(--chat-accent);min-height:44px;max-height:150px}
+body.has-preview .preview-composer textarea{width:100%;min-width:0;font-size:16px!important;line-height:1.3!important;letter-spacing:.15px;padding:10px 0!important;color:#fff!important;background:transparent!important;border:0!important;caret-color:#fff;min-height:44px;max-height:150px}
 body.has-preview .preview-composer textarea::placeholder,body.homer-runtime #send_textarea::placeholder{color:#c4c4c4!important}
 body.has-preview .preview-composer button{width:32px!important;min-width:32px!important;height:32px!important;border-radius:50%!important;background:#fff!important;color:#656668!important;border:0!important;font-size:0!important}
 body.has-preview .preview-composer button::before{content:'↑';font-size:25px;line-height:1}
 body.homer-runtime:not(.homer-card-stage-active) #form_sheld{padding:8px 10px max(12px,env(safe-area-inset-bottom))!important;background:var(--chat-bg)!important}
-body.homer-runtime:not(.homer-card-stage-active) #send_form{min-height:54px!important;border:0!important;border-radius:28px!important;background:var(--tavo-composer-bg)!important;color:#fff!important;box-shadow:none!important;padding:5px 7px!important}
-body.homer-runtime:not(.homer-card-stage-active) #send_textarea{min-height:44px!important;padding:10px!important;font-size:14px!important;color:#fff!important;caret-color:#fff!important;background:transparent!important;text-shadow:none!important}
+body.homer-runtime:not(.homer-card-stage-active) #send_form{min-height:54px!important;border:0!important;border-radius:14px!important;background:var(--tavo-composer-bg)!important;color:#fff!important;box-shadow:none!important;padding:5px 7px!important}
+body.homer-runtime:not(.homer-card-stage-active) #send_textarea{min-height:44px!important;padding:10px!important;font-size:16px!important;line-height:1.3!important;letter-spacing:.15px;color:#fff!important;caret-color:#fff!important;background:transparent!important;text-shadow:none!important}
 body.homer-runtime #send_but,body.homer-runtime #mes_stop{width:32px!important;height:32px!important;min-height:32px;border-radius:50%!important;background:#fff!important;color:#656668!important;text-shadow:none!important;-webkit-tap-highlight-color:transparent}
 body.homer-runtime #options_button,body.homer-runtime #leftSendForm,body.homer-runtime .homer-composer-button{color:var(--chat-muted)!important;text-shadow:none!important;-webkit-tap-highlight-color:transparent;user-select:none}
 body.has-preview .preview-sidebar,body.has-preview .preview-settings-drawer,body.homer-runtime .homer-drawer{width:min(304px,90vw)!important;background:var(--chat-panel)!important;color:var(--chat-text)!important;border-color:var(--chat-line)!important;box-shadow:0 0 40px #1e14251a!important;padding-top:max(12px,env(safe-area-inset-top))!important;overflow-y:auto}
 body.has-preview .preview-drawer-head,body.homer-runtime .homer-drawer__head{min-height:62px;border-bottom:1px solid var(--chat-line);padding:12px 18px!important;margin:0!important;align-items:center}
 body.has-preview .preview-drawer-head strong,body.homer-runtime .homer-drawer__title{font-size:20px!important;color:var(--chat-text)!important;letter-spacing:-.02em}
 body.has-preview .preview-drawer-close,body.homer-runtime .homer-icon-button{width:44px!important;height:44px!important;min-height:44px!important;border:0!important;border-radius:12px!important;background:#f4f3f5!important;color:var(--chat-muted)!important;font-size:23px!important;text-shadow:none!important}
-body.has-preview .preview-site-nav,body.homer-runtime .homer-main-navigation{padding:16px!important;margin:0!important;display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px!important}
-body.has-preview .preview-site-nav a,body.homer-runtime .homer-main-navigation__item{min-height:56px!important;background:#f3f2f5!important;border:1px solid var(--chat-line)!important;border-radius:14px!important;color:var(--chat-text)!important;font-size:14px!important;box-shadow:none!important}
-body.has-preview .preview-site-nav i,body.homer-runtime .homer-main-navigation__icon{color:var(--chat-accent)!important;background:var(--chat-soft)!important}
+body.has-preview .preview-site-nav,body.homer-runtime .homer-main-navigation{padding:10px 12px!important;margin:0!important;display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px!important}
+body.has-preview .preview-site-nav a,body.homer-runtime .homer-main-navigation__item{min-height:48px!important;padding:8px!important;gap:6px!important;white-space:nowrap!important;background:var(--chat-soft)!important;border:0!important;border-radius:10px!important;color:var(--chat-text)!important;font-size:14px!important;box-shadow:none!important}
+body.has-preview .preview-site-nav i,body.homer-runtime .homer-main-navigation__icon{color:var(--chat-accent)!important;background:transparent!important}
 body.has-preview .preview-history-title,body.homer-runtime .homer-history__head{padding:16px 18px!important;color:var(--chat-muted)!important;font-size:13px!important}
 body.has-preview .preview-history-button,body.homer-runtime .homer-history__item{border-radius:12px!important;margin:4px 10px!important;width:calc(100% - 20px)!important;min-height:66px!important;background:transparent!important;color:var(--chat-text)!important}
 body.has-preview .preview-history-button.is-active,body.homer-runtime .homer-history__item.is-active{background:var(--chat-soft)!important}
+body.homer-runtime .homer-history-item.is-active{background:var(--chat-soft)!important}
+body.homer-runtime .homer-history-item.is-active .homer-history-item__head strong{color:#30263e!important}
+body.has-preview #preview-left-drawer *,body.homer-runtime #homer-left-drawer *{font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif!important}
 body.has-preview .preview-history-button strong,body.homer-runtime .homer-history__item strong{color:var(--chat-text)!important;font-size:14px!important}body.has-preview .preview-history-button small,body.homer-runtime .homer-history__item small{color:var(--chat-muted)!important;font-size:12px!important}
 body.has-preview .preview-setting-list,body.homer-runtime .homer-setting-list{display:grid;padding:16px!important;gap:10px!important}
 body.has-preview .preview-setting-row,body.homer-runtime .homer-setting-row{min-height:58px!important;padding:10px 4px!important;border:0!important;border-bottom:1px solid #eee!important;border-radius:0!important;background:var(--chat-panel)!important;color:var(--chat-text)!important;box-shadow:none!important;text-shadow:none!important}
@@ -61,7 +65,7 @@ body.has-preview .preview-model-dialog,body.homer-runtime :is(.homer-sheet-dialo
 body.has-preview .preview-model-form,body.homer-runtime .homer-dialog__body{padding:22px!important;gap:18px}
 body.has-preview .preview-model-form h2,body.homer-runtime :is(.homer-sheet-dialog,.homer-site-dialog,.homer-preset-dialog,.homer-message-menu-dialog) h2,body.homer-runtime :is(.homer-sheet-dialog,.homer-site-dialog,.homer-preset-dialog,.homer-message-menu-dialog) h3{color:var(--chat-text)!important;font-size:20px!important}
 body.has-preview .preview-model-form label,body.homer-runtime :is(.homer-sheet-dialog,.homer-site-dialog,.homer-preset-dialog,.homer-message-menu-dialog) label{font-size:14px!important;color:var(--chat-muted)!important}
-body.has-preview .preview-model-form select,body.has-preview .preview-model-form input[type="number"],body.homer-runtime :is(.homer-sheet-dialog,.homer-site-dialog,.homer-preset-dialog,.homer-message-menu-dialog) input:not([type="checkbox"]):not([type="range"]),body.homer-runtime :is(.homer-sheet-dialog,.homer-site-dialog,.homer-preset-dialog,.homer-message-menu-dialog) select,body.homer-runtime :is(.homer-sheet-dialog,.homer-site-dialog,.homer-preset-dialog,.homer-message-menu-dialog) textarea{min-height:44px!important;border:1px solid var(--chat-line)!important;border-radius:12px!important;background:#f3f2f5!important;color:var(--chat-text)!important;font-size:15px!important;padding:10px!important}
+body.has-preview .preview-model-form select,body.has-preview .preview-model-form input[type="number"],body.homer-runtime :is(.homer-sheet-dialog,.homer-site-dialog,.homer-preset-dialog,.homer-message-menu-dialog) input:not([type="checkbox"]):not([type="range"]),body.homer-runtime :is(.homer-sheet-dialog,.homer-site-dialog,.homer-preset-dialog,.homer-message-menu-dialog) select,body.homer-runtime :is(.homer-sheet-dialog,.homer-site-dialog,.homer-preset-dialog,.homer-message-menu-dialog) textarea{min-height:44px!important;border:1px solid var(--chat-line)!important;border-radius:12px!important;background:var(--app-fill)!important;color:var(--chat-text)!important;font-size:15px!important;padding:10px!important}
 body.has-preview .preview-model-form input[type="range"],body.homer-runtime :is(.homer-sheet-dialog,.homer-site-dialog,.homer-preset-dialog,.homer-message-menu-dialog) input[type="range"]{accent-color:var(--chat-accent);min-height:28px}
 body.has-preview .preview-model-actions button,body.homer-runtime .homer-button{min-height:44px;border:1px solid var(--chat-line)!important;border-radius:12px!important;background:#f3f2f5!important;color:var(--chat-text)!important;padding:10px 15px!important;text-shadow:none!important;font-size:14px}
 body.has-preview #preview-model-save,body.homer-runtime .homer-button--primary{background:var(--chat-accent)!important;color:#fff!important;border-color:transparent!important}
@@ -71,12 +75,12 @@ body.has-preview button:disabled,body.homer-runtime #homer-runtime-root button:d
 /* Dialog surfaces are rendered by the internal runtime, not the preview page. */
 body.homer-runtime{--site-panel:var(--chat-panel);--site-panel-soft:#f3f2f5;--site-text:var(--chat-text);--site-text-soft:var(--chat-muted);--site-border:var(--chat-line);--site-accent:var(--chat-accent);--site-accent-strong:var(--chat-accent);--site-accent-soft:var(--chat-soft)}
 body.homer-runtime :is(.homer-sheet-dialog__shell,.homer-preset-dialog__shell,.homer-site-dialog__surface,.homer-message-menu__shell,.homer-preset-panel){background:var(--chat-panel)!important;color:var(--chat-text)!important;border-color:var(--chat-line)!important;border-radius:22px!important;box-shadow:none!important;max-width:100%;box-sizing:border-box}
-body.homer-runtime :is(.homer-sheet-dialog__shell,.homer-preset-dialog__shell,.homer-site-dialog__surface){padding:20px!important}
+body.homer-runtime :is(.homer-sheet-dialog__shell,.homer-preset-dialog__shell,.homer-site-dialog__surface){padding:14px!important}
 body.homer-runtime :is(.homer-model-field,.homer-preset-row,.homer-mod-row){background:#f3f2f5!important;color:var(--chat-text)!important;border:1px solid var(--chat-line)!important;border-radius:14px!important}
 body.homer-runtime :is(.homer-sheet-dialog__title,.homer-preset-dialog__title,.homer-model-field__label,.homer-preset-row__name){color:var(--chat-text)!important}
 body.homer-runtime :is(.homer-sheet-dialog__notice,.homer-model-field__hint,.homer-preset-row__meta){color:var(--chat-muted)!important;font-size:13px!important;line-height:1.6}
 body.homer-runtime :is(.homer-primary-button,.homer-secondary-button){min-height:44px!important;border:1px solid var(--chat-line)!important;border-radius:12px!important;padding:10px 14px!important;text-shadow:none!important}
-body.homer-runtime .homer-primary-button{background:var(--chat-accent)!important;color:white!important}
+body.homer-runtime .homer-primary-button{background:var(--chat-accent)!important;color:#fff!important}
 body.homer-runtime .homer-secondary-button{background:#f3f2f5!important;color:var(--chat-text)!important}
 body.homer-runtime :is(.homer-sheet-dialog,.homer-site-dialog,.homer-preset-dialog,.homer-message-menu-dialog)::backdrop{background:#1c142660;backdrop-filter:blur(3px)}
 body.homer-runtime .homer-sheet-dialog__notice{background:var(--chat-soft)!important;border-color:var(--chat-accent)!important}
@@ -101,11 +105,11 @@ body.homer-runtime #chat .mes.homer-message-collapsed:not(.homer-message-editing
 body.homer-runtime #homer-message-menu-dialog{position:fixed!important;inset:auto;bottom:auto!important;margin:0!important;padding:0!important;width:224px!important;max-width:calc(100vw - 20px)!important;border:0!important;border-radius:11px!important;background:#fff!important;box-shadow:0 4px 22px #0002!important;overflow:hidden!important}
 body.homer-runtime #homer-message-menu-dialog::backdrop{background:transparent!important;backdrop-filter:none!important}
 body.homer-runtime #homer-message-menu-dialog .homer-message-menu__shell{padding:8px 12px!important;border:0!important;border-radius:11px!important;background:#fff!important}
-body.homer-runtime .homer-message-menu__actions{display:grid!important;grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:0!important}
-body.homer-runtime .homer-message-menu__action{display:flex!important;flex-direction:column!important;justify-content:center;align-items:center;gap:8px!important;padding:10px 0!important;min-height:70px!important;background:#fff!important;color:#505050!important;border:0!important;border-radius:0!important;font-size:11px!important}
-body.homer-runtime .homer-message-menu__action:nth-child(n+5){border-top:1px solid #eee!important}
-body.homer-runtime .homer-message-menu__icon{font-size:20px!important;color:inherit!important;background:none!important;width:auto!important;height:auto!important}
-body.homer-runtime .homer-message-menu__label{font-size:11px!important;color:inherit!important}
+body.homer-runtime .homer-message-menu__actions{display:grid!important;grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:11px 8px!important;position:relative}
+body.homer-runtime .homer-message-menu__actions::after{content:'';position:absolute;top:calc(50% - .5px);left:7px;right:7px;height:1px;background:#eee;pointer-events:none}
+body.homer-runtime .homer-message-menu__action{display:flex!important;flex-direction:column!important;justify-content:center;align-items:center;gap:3px!important;padding:8px 2px!important;height:auto!important;min-height:61px!important;background:#fff!important;color:#606060!important;border:0!important;border-radius:5px!important;font-size:11.3px!important}
+body.homer-runtime .homer-message-menu__icon{display:block;font-size:28px!important;color:inherit!important;background:none!important;width:28px!important;height:28px!important;flex:none}
+body.homer-runtime .homer-message-menu__label{font-size:11.3px!important;font-weight:500;line-height:1.2;color:inherit!important;overflow-wrap:anywhere}
 .homer-message-selection{position:fixed;inset:0;height:100dvh;z-index:2147482990;pointer-events:none}
 .homer-selection-head,.homer-selection-footer{position:absolute;left:0;right:0;pointer-events:auto;display:flex;align-items:center;justify-content:space-between;background:#eee;color:#444}
 .homer-selection-head{top:0;min-height:56px;padding:env(safe-area-inset-top) 12px 0;font-size:16px}
@@ -135,10 +139,11 @@ body.homer-runtime .homer-attachment-grid{display:grid;grid-template-columns:rep
 body.homer-runtime .homer-attachment-grid button{border:0!important;background:transparent!important;min-height:84px!important;color:#444!important}
 body.homer-runtime .homer-ai-help{width:100%;min-height:44px;border:0!important;border-radius:24px!important;background:#eee!important;color:#444!important;margin-top:18px}
 .preview-message-actions{position:fixed;inset:auto;margin:0;padding:8px 12px;width:224px;border:0;border-radius:11px;background:#fff;color:#505050;box-sizing:border-box;box-shadow:0 4px 22px #0002}
-.preview-message-actions[open]{display:grid;grid-template-columns:repeat(4,1fr)}
+.preview-message-actions[open]{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:11px 8px;overflow-y:auto}
+.preview-message-actions::after{content:'';position:absolute;top:calc(50% - .5px);left:19px;right:19px;height:1px;background:#eee;pointer-events:none}
 .preview-message-actions::backdrop{background:transparent}
-.preview-message-actions button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;min-height:70px;border:0;border-radius:0;background:white;color:#505050;font-size:11px;padding:10px 0}
-.preview-message-actions button>svg{width:20px;height:20px;flex:none}.preview-message-actions button:nth-child(n+5){border-top:1px solid #eee}
+.preview-message-actions button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;min-height:61px;border:0;border-radius:5px;background:white;color:#606060;font:500 11.3px/1.2 system-ui;padding:8px 2px;overflow-wrap:anywhere}
+.preview-message-actions button>svg{width:28px;height:28px;flex:none}
 /* Range controls must not inherit the runtime's full-size text-input skin. */
 body.homer-runtime :is(.homer-sheet-dialog,.homer-site-dialog,.homer-preset-dialog) :is(h2,h3,label,button,input,select,textarea,p,small){font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif!important;text-shadow:none!important}
 body.homer-runtime .homer-sheet-dialog input[type=range],body.has-preview .preview-model-form input[type=range]{appearance:none!important;-webkit-appearance:none!important;width:100%;height:28px!important;min-height:28px!important;margin:4px 0!important;padding:0!important;border:0!important;box-shadow:none!important;background:transparent!important;cursor:pointer}
@@ -147,26 +152,26 @@ body.homer-runtime .homer-sheet-dialog input[type=range]::-webkit-slider-thumb,b
 body.homer-runtime .homer-sheet-dialog input[type=range]::-moz-range-track,body.has-preview .preview-model-form input[type=range]::-moz-range-track{height:4px;border:0;border-radius:4px;background:#d9cceb}
 body.homer-runtime .homer-sheet-dialog input[type=range]::-moz-range-thumb,body.has-preview .preview-model-form input[type=range]::-moz-range-thumb{width:16px;height:16px;border:3px solid #fff;border-radius:50%;background:#7c49ef}
 /* Reference drawer: identity header, quiet full-width rows, bottom shortcuts. */
-body.has-preview #preview-settings-drawer,body.homer-runtime #homer-right-drawer{display:flex!important;flex-direction:column;padding-top:12px!important}
-body.has-preview #preview-settings-drawer *,body.homer-runtime #homer-right-drawer *{font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif!important;text-shadow:none!important}
+body.has-preview #preview-settings-drawer:not(.homer-control-center),body.homer-runtime #homer-right-drawer:not(.homer-control-center){display:flex!important;flex-direction:column;padding-top:12px!important}
+body.has-preview #preview-settings-drawer:not(.homer-control-center) *,body.homer-runtime #homer-right-drawer:not(.homer-control-center) *{font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif!important;text-shadow:none!important}
 body.homer-runtime #homer-right-drawer .homer-chat-shortcuts i{font-family:"Font Awesome 6 Free"!important}
-body.has-preview #preview-settings-drawer .preview-drawer-head,body.homer-runtime #homer-right-drawer .homer-drawer__head{min-height:92px;padding:18px 20px!important;border-bottom:1px solid #eee;flex-shrink:0;gap:4px}
+body.has-preview #preview-settings-drawer:not(.homer-control-center) .preview-drawer-head,body.homer-runtime #homer-right-drawer:not(.homer-control-center) .homer-drawer__head{min-height:64px;padding:10px 16px!important;border-bottom:1px solid #eee;flex-shrink:0;gap:4px}
 .homer-chat-identity{display:flex;align-items:center;gap:9px;min-width:0;flex:1}
 .homer-chat-identity__avatar{width:40px;height:40px;min-width:40px;border-radius:50%;object-fit:cover}
 body.has-preview .homer-chat-identity strong,body.homer-runtime .homer-chat-identity .homer-drawer__title{font-size:15px!important;line-height:1.4;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;margin:0!important;color:#444!important}
-body.has-preview #preview-settings-close,body.homer-runtime #homer-right-drawer .homer-icon-button{width:32px!important;min-width:32px!important;background:transparent!important;color:#888!important}
-body.has-preview #preview-settings-drawer .preview-setting-list,body.homer-runtime #homer-right-drawer .homer-setting-list{padding:8px 28px!important;gap:0!important;flex-shrink:0}
-body.has-preview #preview-settings-drawer .preview-setting-row,body.homer-runtime #homer-right-drawer .homer-setting-row{display:flex!important;align-items:center;gap:8px!important;min-height:58px!important;padding:8px 4px!important;border:0!important}
-body.has-preview #preview-settings-drawer .preview-setting-row__icon,body.homer-runtime #homer-right-drawer .homer-setting-row__icon{display:none!important}
-body.has-preview #preview-settings-drawer .preview-setting-row__copy,body.homer-runtime #homer-right-drawer .homer-setting-row__copy{display:flex!important;align-items:center;justify-content:space-between;gap:8px;min-width:0;flex:1}
-body.has-preview #preview-settings-drawer .preview-setting-row strong,body.homer-runtime #homer-right-drawer .homer-setting-row__label{flex-shrink:0;font-size:16px!important;font-weight:400!important;color:#505050!important}
-body.has-preview #preview-settings-drawer .preview-setting-row small,body.homer-runtime #homer-right-drawer .homer-setting-row__description{max-width:112px;min-width:0;font-size:13px!important;color:#929292!important;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:0!important}
-body.has-preview #preview-settings-drawer .preview-setting-row>span:last-child,body.homer-runtime #homer-right-drawer .homer-setting-row__chevron{color:#aaa!important;font-size:26px!important;flex-shrink:0}
-body.has-preview #preview-settings-drawer .preview-privacy-note,body.homer-runtime #homer-right-drawer .homer-privacy-note{margin:8px 28px 18px!important;padding:0!important;background:none!important;border:0!important;font-size:11px!important;color:#888!important;flex:0 0 auto}
+body.has-preview #preview-settings-drawer:not(.homer-control-center) #preview-settings-close,body.homer-runtime #homer-right-drawer:not(.homer-control-center) .homer-icon-button{width:32px!important;min-width:32px!important;background:transparent!important;color:#888!important}
+body.has-preview #preview-settings-drawer:not(.homer-control-center) .preview-setting-list,body.homer-runtime #homer-right-drawer:not(.homer-control-center) .homer-setting-list{padding:8px 28px!important;gap:0!important;flex-shrink:0}
+body.has-preview #preview-settings-drawer:not(.homer-control-center) .preview-setting-row,body.homer-runtime #homer-right-drawer:not(.homer-control-center) .homer-setting-row{display:flex!important;align-items:center;gap:8px!important;min-height:52px!important;padding:8px 4px!important;border:0!important}
+body.has-preview #preview-settings-drawer:not(.homer-control-center) .preview-setting-row__icon,body.homer-runtime #homer-right-drawer:not(.homer-control-center) .homer-setting-row__icon{display:none!important}
+body.has-preview #preview-settings-drawer:not(.homer-control-center) .preview-setting-row__copy,body.homer-runtime #homer-right-drawer:not(.homer-control-center) .homer-setting-row__copy{display:flex!important;align-items:center;justify-content:space-between;gap:8px;min-width:0;flex:1}
+body.has-preview #preview-settings-drawer:not(.homer-control-center) .preview-setting-row strong,body.homer-runtime #homer-right-drawer:not(.homer-control-center) .homer-setting-row__label{flex-shrink:0;font-size:15px!important;font-weight:500!important;color:#505050!important}
+body.has-preview #preview-settings-drawer:not(.homer-control-center) .preview-setting-row small,body.homer-runtime #homer-right-drawer:not(.homer-control-center) .homer-setting-row__description{max-width:112px;min-width:0;font-size:13px!important;color:#68616f!important;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:0!important}
+body.has-preview #preview-settings-drawer:not(.homer-control-center) .preview-setting-row>span:last-child,body.homer-runtime #homer-right-drawer:not(.homer-control-center) .homer-setting-row__chevron{color:#aaa!important;font-size:26px!important;flex-shrink:0}
+body.has-preview #preview-settings-drawer:not(.homer-control-center) .preview-privacy-note,body.homer-runtime #homer-right-drawer:not(.homer-control-center) .homer-privacy-note{margin:8px 28px 18px!important;padding:0!important;background:none!important;border:0!important;font-size:11px!important;color:#888!important;flex:0 0 auto}
 .homer-chat-shortcuts{margin-top:auto;display:flex;justify-content:space-around;padding:16px 18px max(20px,env(safe-area-inset-bottom));gap:12px;flex-shrink:0}
 .homer-chat-shortcuts button{display:flex;flex-direction:column;align-items:center;gap:11px;min-width:60px;min-height:78px;padding:0!important;background:transparent!important;border:0!important;box-shadow:none!important;color:#505050!important;font:600 15px/1.4 system-ui!important;text-shadow:none!important;-webkit-tap-highlight-color:transparent}
 .homer-chat-shortcuts :is(svg,i){display:grid;place-items:center;box-sizing:content-box;width:20px;height:20px;padding:11px;border-radius:50%;background:#f2f2f2;font-size:20px}
-dialog.homer-chat-tool{box-sizing:border-box;width:min(460px,calc(100vw - 24px));max-height:calc(100dvh - 32px);padding:20px;border:1px solid #e4dfe9;border-radius:22px;background:#fff;color:#292432;box-shadow:0 20px 70px #27193330;overflow:auto;text-shadow:none!important;font:14px/1.6 system-ui}
+dialog.homer-chat-tool{box-sizing:border-box;width:min(460px,calc(100vw - 24px));max-height:calc(100dvh - 32px);padding:20px;border:1px solid var(--app-line);border-radius:22px;background:#fff;color:var(--app-text);box-shadow:0 20px 70px #27193330;overflow:auto;text-shadow:none!important;font:14px/1.6 system-ui}
 .homer-chat-tool::backdrop{background:#1c142660;backdrop-filter:blur(3px)}
 .homer-chat-tool header{display:flex;align-items:center;justify-content:space-between;gap:12px}.homer-chat-tool h2{font:600 20px/1.4 system-ui;margin:0;color:#292432!important}
 .homer-chat-tool header button{width:44px;height:44px;background:#f3f2f5;color:#756c81;border:0;border-radius:12px;font:24px system-ui}
@@ -184,12 +189,10 @@ body.homer-runtime:is(.homer-selecting-messages,.homer-card-stage-active) .homer
 body.homer-runtime .homer-generation-options{display:grid;gap:10px}
 body.homer-runtime:not(.homer-card-stage-active) #send_textarea::placeholder{text-align:left!important;font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif!important}
 body.homer-runtime:not(.homer-card-stage-active) #chat .mes:not(:has(iframe,.homer-card-component,.homer-roleplayhub-documents)) .mes_text :is(p,span,em,strong){font-family:inherit!important;text-shadow:none!important;-webkit-text-stroke:0!important}
-.homer-generation-options>button{display:grid;text-align:left;gap:5px;padding:12px!important;background:#f3f2f5!important;color:#292432!important;border:1px solid #e4dfe9!important;border-radius:12px!important;min-height:44px;font:14px/1.6 system-ui;text-shadow:none!important}
-.homer-generation-options small{color:#756c81!important;font-size:12px}
+.homer-generation-options>button{display:grid;text-align:left;gap:5px;padding:12px!important;background:var(--app-fill)!important;color:var(--app-text)!important;border:1px solid var(--app-line)!important;border-radius:12px!important;min-height:44px;font:14px/1.6 system-ui;text-shadow:none!important}
+.homer-generation-options small{color:var(--app-muted)!important;font-size:12px}
 
 /* R4: transparent chrome and personal colors, shared by preview and runtime. */
-body.has-preview .preview-header,body.homer-runtime .homer-chat-header,body.homer-runtime.homer-left-drawer-open .homer-chat-header{background:transparent!important}
-body.has-preview .preview-heading h2,body.homer-runtime .homer-chat-header__title{visibility:hidden!important}
 body.has-preview .preview-generation-row,body.homer-runtime .homer-continuation-trigger{display:none!important}
 body.has-preview .preview-message,body.homer-runtime:not(.homer-card-stage-active) #chat .mes:not([is_user="true"]){color:var(--homer-assistant-text,#fff)!important}
 body.has-preview .preview-message.is-user,body.homer-runtime:not(.homer-card-stage-active) #chat .mes[is_user="true"]{color:var(--homer-user-text,#fff)!important}
@@ -201,17 +204,17 @@ body.has-preview .preview-menu-button span{background:var(--homer-background-tex
 body.homer-runtime .homer-chat-manage__actions>button{background:#f3f2f5!important;color:#292432!important;border:1px solid #e4dfe9!important;min-height:48px;text-shadow:none!important;box-shadow:none!important}
 body.homer-runtime .homer-chat-manage__actions>button:active{background:#e8ddfa!important}
 body.homer-runtime .homer-chat-manage__danger{background:#fff3f2!important;color:#a32a25!important;border:1px solid #e6b7b3!important}
-.homer-appearance-dialog{box-sizing:border-box;width:min(480px,calc(100vw - 24px));max-height:calc(100dvh - 32px);overflow:auto;padding:22px;border:1px solid #e4dfe9!important;border-radius:22px!important;background:#fff!important;color:#292432!important;font:14px/1.6 system-ui;text-shadow:none!important}
+.homer-appearance-dialog{box-sizing:border-box;width:min(480px,calc(100vw - 24px));max-height:calc(100dvh - 32px);overflow:auto;padding:22px;border:1px solid var(--app-line)!important;border-radius:22px!important;background:#fff!important;color:var(--app-text)!important;font:14px/1.6 system-ui;text-shadow:none!important}
 .homer-appearance-dialog *{box-sizing:border-box;text-shadow:none!important}
 .homer-appearance-dialog::backdrop{background:#17121f66;backdrop-filter:blur(3px)}
-.homer-appearance-dialog header{display:flex;align-items:center;justify-content:space-between;gap:12px}.homer-appearance-dialog h2{font:650 20px/1.4 system-ui;color:#292432!important;margin:0}
-.homer-appearance-dialog button{min-height:44px;border:1px solid #e4dfe9!important;border-radius:12px!important;padding:10px 14px;background:#f3f2f5!important;color:#292432!important;font:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent}
-.homer-appearance-dialog header button{width:44px;font-size:22px}.homer-appearance-note,.homer-appearance-status{color:#665c72!important;font-size:13px;line-height:1.6}
-.homer-appearance-fields{display:grid;gap:16px}.homer-appearance-color{display:grid;grid-template-columns:1fr 52px;gap:10px;align-items:center;color:#292432!important}
+.homer-appearance-dialog header{display:flex;align-items:center;justify-content:space-between;gap:12px}.homer-appearance-dialog h2{font:650 20px/1.4 system-ui;color:var(--app-text)!important;margin:0}
+.homer-appearance-dialog button{min-height:44px;border:1px solid var(--app-line)!important;border-radius:12px!important;padding:10px 14px;background:var(--app-fill)!important;color:var(--app-text)!important;font:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.homer-appearance-dialog header button{width:44px;font-size:22px}.homer-appearance-note,.homer-appearance-status{color:var(--app-muted)!important;font-size:13px;line-height:1.6}
+.homer-appearance-fields{display:grid;gap:10px}.homer-appearance-color{display:grid;grid-template-columns:1fr 52px;gap:8px;align-items:center;color:#292432!important}
 .homer-appearance-color input[type=color]{width:52px;height:44px;padding:3px;border:1px solid #b7adbf;background:#fff;border-radius:10px}
 .homer-appearance-swatches{grid-column:1/-1;display:flex;justify-content:space-between;gap:5px}.homer-appearance-swatches button{min-height:36px;min-width:36px;width:36px;height:36px;padding:0;border:1px solid #aaa!important;background:var(--swatch)!important;border-radius:50%!important}
-.homer-appearance-pictures{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:20px}.homer-appearance-dialog footer{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}.homer-appearance-dialog .is-primary{background:#7140ce!important;color:#fff!important;border-color:#7140ce!important}
-.homer-appearance-dialog button:disabled{opacity:.5;cursor:not-allowed}.homer-appearance-dialog :focus-visible{outline:2px solid #7140ce;outline-offset:2px}
+.homer-appearance-pictures{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}.homer-appearance-dialog footer{display:flex;gap:8px;justify-content:flex-end;margin-top:12px}.homer-appearance-dialog .is-primary{background:var(--app-accent)!important;color:#fff!important;border-color:var(--app-accent)!important}
+.homer-appearance-dialog button:disabled{opacity:.5;cursor:not-allowed}.homer-appearance-dialog :focus-visible{outline:2px solid var(--app-accent);outline-offset:2px}
 
 /* Memory Books inherits a dark upstream theme. Scope a full light palette to its
    popups so inner help text, cards and every secondary popup remain readable. */
@@ -225,9 +228,54 @@ body.homer-runtime .stmb-popup :is(.menu_button,button,.popup-button){min-height
 body.homer-runtime .stmb-popup :is(input.text_pole,select,textarea){background:#fff!important;color:#292432!important;border:1px solid #b7adbf!important;border-radius:10px;min-height:44px;font-size:15px;padding:8px}
 body.homer-runtime .stmb-popup input[type=checkbox]{width:22px;height:22px;accent-color:#7140ce}.stmb-popup .checkbox_label{min-height:44px;align-items:center;gap:12px}
 body.homer-runtime .stmb-popup .popup-controls{display:grid!important;grid-template-columns:1fr 1fr;gap:8px;background:#fff!important;padding:12px!important;white-space:normal!important;border-top:1px solid #e4dfe9}
-.homer-memory-intro{font:14px/1.7 system-ui;color:#655c70;margin:0 0 16px}.homer-memory-step{padding:14px 0;border-top:1px solid #e4dfe9}.homer-memory-step>h3{font:650 16px/1.5 system-ui!important;margin:0 0 10px}
+.homer-memory-intro{font:13px/1.45 system-ui;color:#655c70;margin:0 0 8px}.homer-memory-step{padding:8px 0;border-top:1px solid #e4dfe9}.homer-memory-step>h3{font:650 14px/1.4 system-ui!important;margin:0 0 8px}
 .homer-memory-advanced{border:1px solid #e4dfe9;border-radius:14px;margin:16px 0;padding:12px}.homer-memory-advanced>summary{min-height:44px;cursor:pointer;font-weight:600;line-height:44px;color:#292432}
 .homer-memory-range{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.homer-memory-range input{width:74px}.homer-memory-range label{display:flex;align-items:center;gap:6px}
 body.homer-runtime .stmb-popup .popup-controls{width:100%!important;align-self:stretch;justify-items:stretch}
 body.homer-runtime .stmb-popup .popup-controls .menu_button{width:100%;max-width:none;margin:0!important}
 body.homer-runtime .stmb-popup .popup-controls .popup-button-custom:first-child{background:#7140ce!important;color:#fff!important;border-color:#7140ce!important}
+
+/* Chat interaction geometry: reserve the transparent toolbar's hit area even
+   when a multi-screen message scrolls beneath it. Do not clip card stages. */
+body.homer-runtime:not(.homer-card-stage-active) #chat{clip-path:inset(calc(48px + env(safe-area-inset-top)) 0 0 0)}
+body.has-preview .preview-messages{clip-path:inset(0)}
+body.homer-runtime #chat .mes_text,body.homer-runtime #chat .mes_text *{
+  -webkit-user-select:none!important;user-select:none!important;-webkit-touch-callout:none;
+}
+body.homer-runtime #chat :is(textarea,input,[contenteditable=true],[contenteditable=true] *){-webkit-user-select:text!important;user-select:text!important}
+body.homer-runtime #homer-message-menu-dialog{max-height:calc(100dvh - 120px)!important;overflow-y:auto!important}
+body.homer-runtime .homer-message-menu__action.is-danger{color:#ad2440!important}
+body.homer-runtime .homer-header-button .fa-gear{font-family:"Font Awesome 6 Free"!important;font-weight:900;font-size:22px}
+
+/* Drawer summaries stay on the same row; long values remain available in their dialogs. */
+body.has-preview #preview-settings-drawer:not(.homer-control-center) .preview-privacy-note,
+body.homer-runtime #homer-right-drawer .homer-privacy-note{color:#68616f!important;font-size:12px!important;line-height:1.45}
+body.has-preview .preview-site-nav a svg,body.homer-runtime .homer-main-navigation__icon{width:20px!important;min-width:20px!important;flex:0 0 20px!important;font-size:20px!important;padding:0!important}
+body.homer-runtime .homer-main-navigation__label{white-space:nowrap!important}
+body.homer-runtime:not(.homer-card-stage-active) #chat .mes:not(:has(iframe,.homer-card-component,.homer-roleplayhub-documents)) .mes_text p{margin:0 0 .45em!important}
+body.homer-runtime:not(.homer-card-stage-active) #chat .mes .mes_text p:last-child{margin-bottom:0!important}
+
+/* Session model controls: compact rows, strong text contrast, sticky actions. */
+body.homer-runtime #stmb-memory-boundary-jump{width:116px!important;min-width:116px!important;max-width:none!important;height:44px!important;min-height:44px!important;border-radius:22px!important;padding:8px 12px!important;gap:6px;color:#fff!important;background:#29485f!important;font-size:12px!important;white-space:nowrap}
+body.homer-runtime #stmb-memory-boundary-jump::after{content:"未整理记忆";font-family:system-ui;white-space:nowrap}
+body.homer-runtime .homer-preset-panel{max-height:calc(100dvh - 120px);overflow-y:auto}
+body.homer-runtime .homer-preset-panel .homer-status-grid{display:none}
+body.homer-runtime .homer-preset-notice{font-size:12px;line-height:1.5;margin:8px 0}
+body.homer-runtime .homer-preset-row__name{white-space:normal!important;overflow-wrap:anywhere;line-height:1.5}
+/* The composer is app-owned; card documents and saved bubble colors are not. */
+body.has-preview .preview-composer :is(textarea,#preview-add),body.homer-runtime :is(#send_textarea,#options_button,#leftSendForm){color:#fff!important;caret-color:#fff!important}
+body.has-preview .preview-composer textarea::placeholder,body.homer-runtime #send_textarea::placeholder{color:#c4c4c4!important}
+body.homer-runtime #stmb-memory-boundary-jump{background:var(--chat-accent)!important;color:#fff!important}
+body.homer-runtime .homer-memory-layout>h2{font-size:20px!important;margin:0 0 8px!important}
+body.homer-runtime .homer-memory-layout .info-block{padding:10px!important;margin:6px 0!important;font-size:13px!important;line-height:1.45!important}
+.homer-memory-progress{margin-top:6px;font-size:13px}.homer-memory-progress summary{min-height:44px;display:flex;align-items:center;cursor:pointer}
+body.homer-runtime :is(.homer-sheet-dialog,.homer-site-dialog,.homer-preset-dialog)::backdrop{backdrop-filter:none!important;background:#0005}
+body.homer-runtime :is(.homer-sheet-dialog,.homer-site-dialog) .homer-preset-panel__eyebrow{display:none!important}
+body.homer-runtime #homer-memory-dialog [hidden]{display:none!important}
+.homer-chat-tool>button{min-height:44px;min-width:88px;padding:8px 16px;background:#eee8f8;color:#30263e;border:0;border-radius:10px;font:14px/1.4 system-ui}
+body.homer-runtime #homer-mod-dialog .homer-sheet-dialog__actions{display:flex;gap:6px;flex-wrap:wrap;padding:10px 0 0;margin:8px 0 0;bottom:0}
+body.homer-runtime #homer-mod-dialog .homer-sheet-dialog__actions>*{flex:1;min-width:0;text-align:center;font-size:13px!important;padding:10px 6px!important}
+body.homer-runtime #homer-mod-dialog .homer-empty{padding:20px 8px;min-height:64px;font-size:13px;color:var(--chat-muted)}
+body.homer-runtime .homer-mod-row{padding:8px!important;border:0!important;border-radius:0!important;border-bottom:1px solid var(--chat-line)!important;background:transparent!important}
+body.homer-runtime .homer-mod-row__main{min-width:0;flex:1}.homer-mod-row__copy{min-width:0}.homer-mod-row__copy small{font-size:12px!important;line-height:1.4!important}
+body.homer-runtime .homer-mod-row__order button{min-width:44px;min-height:44px;background:var(--chat-soft)!important;color:var(--chat-text)!important}

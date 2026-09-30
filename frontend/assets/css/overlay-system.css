@@ -1,0 +1,32 @@
+@import url('./theme.css');
+/* Owned dialogs only: never reaches a character's iframe/HTML or message area. */
+html body :is(dialog,[role=dialog][aria-modal=true],.xy-modal):not(.homer-settings-page){
+ --ui-panel:var(--app-panel);--ui-panel-soft:var(--app-fill);--ui-text:var(--app-text);--ui-muted:var(--app-muted);--ui-line:var(--app-line);--ui-accent:var(--app-accent);
+ --chat-panel:var(--app-panel);--chat-text:var(--app-text);--chat-muted:var(--app-muted);--chat-line:var(--app-line);--chat-accent:var(--app-accent);
+ --homer-panel:var(--app-panel);--homer-paper:var(--app-panel);--homer-panel-soft:var(--app-fill);--homer-ink:var(--app-text);--homer-muted:var(--app-muted);--homer-line:var(--app-line);--homer-accent:var(--app-accent);--homer-accent-soft:var(--app-tint);
+ color:var(--app-text);background-color:var(--app-panel);border-color:var(--app-line);color-scheme:inherit;box-shadow:0 16px 64px #0003;
+}
+html body :is(dialog,[role=dialog][aria-modal=true],.xy-modal):not(.homer-settings-page) :is(input:not([type=checkbox]):not([type=radio]):not([type=color]):not([type=range]),select,textarea){
+ min-height:48px;max-width:100%;border:1px solid var(--app-line);border-radius:12px;background:var(--app-fill);color:var(--app-text);padding:10px 12px;font:inherit;box-sizing:border-box;
+}
+html body :is(dialog,[role=dialog][aria-modal=true],.xy-modal):not(.homer-settings-page) :is(button,.menu_button){min-height:48px;box-shadow:none;text-shadow:none;font-family:inherit;-webkit-tap-highlight-color:transparent;filter:none}
+html body :is(dialog,[role=dialog][aria-modal=true],.xy-modal) :is(button,a,summary):focus:not(:focus-visible){outline:none;box-shadow:none}
+html body :is(dialog,[role=dialog][aria-modal=true],.xy-modal) :focus-visible{outline:2px solid var(--app-accent);outline-offset:2px}
+html body :is(dialog,[role=dialog][aria-modal=true],.xy-modal) :disabled{cursor:not-allowed;opacity:.5}
+html body :is(dialog,[role=dialog][aria-modal=true],.xy-modal) input:is([type=checkbox],[type=radio]){accent-color:var(--app-accent);width:20px;height:20px;flex:none}
+html body :is(.popup:not(.homer-settings-page),.community-dialog,.ui-model-dialog,.xy-modal,.ref-version-editor){border:0;border-radius:22px;padding:0;max-height:calc(100dvh - 32px);overflow:auto}
+html body .popup:not(.homer-settings-page) .popup-content{padding:20px;text-align:left;line-height:1.6}
+html body .popup:not(.homer-settings-page) .popup-controls{display:flex;gap:8px;flex-wrap:wrap;padding:12px 20px;border-top:1px solid var(--app-line);background:var(--app-panel)}
+html body .popup:not(.homer-settings-page) .menu_button{border:0;border-radius:10px;background:var(--app-fill);color:var(--app-text);padding:10px 14px}
+html body .popup:not(.homer-settings-page) :is(h2,h3,h4,label,strong){color:var(--app-text);text-shadow:none}
+html body .popup:not(.homer-settings-page) :is(.info-block,small){background:var(--app-fill);color:var(--app-muted)}
+html body :is(.community-dialog,.ui-model-dialog,.xy-modal,.ref-version-editor)>header{background:var(--app-panel);color:var(--app-text);padding:16px 20px;border-bottom:1px solid var(--app-line)}
+html body .community-dialog button{background:var(--app-fill);color:var(--app-text);border:0;margin:2px;padding:10px 14px}
+html body dialog::backdrop{background:#0007;backdrop-filter:none}
+/* Plugin search/dropdowns are appended to body, outside their owning dialog. */
+html body .select2-dropdown{border:1px solid var(--app-line);border-radius:14px;background:var(--app-panel);color:var(--app-text);padding:6px;box-shadow:0 10px 32px #0002;overflow:hidden}
+html body .select2-results__option{min-height:44px;padding:10px 12px;border-radius:8px;color:var(--app-text);font:14px/1.5 system-ui,sans-serif}
+html body .select2-container--default .select2-results__option:is([aria-selected=true],.select2-results__option--highlighted){background:var(--app-tint);color:var(--app-accent)}
+html body .select2-container--default .select2-results__option[aria-disabled=true]{opacity:.5;background:transparent}
+html body .select2-search__field{min-height:44px;border:1px solid var(--app-line)!important;border-radius:10px;background:var(--app-fill);color:var(--app-text);font:14px system-ui,sans-serif}
+@media(max-width:600px){html body .popup:not(.homer-settings-page){width:calc(100% - 24px);max-width:none;margin:auto;max-height:calc(100dvh - 32px)}}

@@ -1,9 +1,9 @@
 :root {
-  --farm-paper: #f5efdf;
+  --farm-paper: var(--app-panel);
   --farm-paper-2: #fffaf0;
-  --farm-ink: #283128;
-  --farm-muted: #7e7668;
-  --farm-line: #978d7a;
+  --farm-ink: var(--app-text);
+  --farm-muted: var(--app-muted);
+  --farm-line: var(--app-line);
   --farm-green: #47764a;
   --farm-green-dark: #29472e;
   --farm-green-soft: #dbe8c8;

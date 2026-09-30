@@ -1,0 +1,20 @@
+/* Writing is the primary task; metadata and media are grouped separately. */
+html body.community-screen-compose .c-page{background:var(--app-bg);padding-bottom:0}
+html body.community-screen-compose .c-header{border-bottom:0;background:var(--app-panel);backdrop-filter:none;padding:4px 12px}
+html body.community-screen-compose .c-primary{background:var(--app-accent);color:var(--app-on-accent);border-radius:18px;min-height:38px;padding:6px 18px}
+html body.community-screen-compose .c-primary:disabled{opacity:1;background:var(--app-fill);color:var(--app-muted)}
+html body.community-screen-compose .c-editor{padding:12px 20px calc(92px + env(safe-area-inset-bottom));max-width:720px;margin:auto}
+html body.community-screen-compose .c-compose-context{display:flex;align-items:center;margin-bottom:16px}
+html body.community-screen-compose .c-compose-context .c-form-row{display:flex;gap:10px;min-height:40px;border:0;background:var(--app-fill);border-radius:20px;padding:0 12px;font-size:12px}
+html body.community-screen-compose .c-compose-context select{background:transparent;color:var(--app-text);border:0;border-radius:0;padding:6px 2px;height:40px;max-width:180px;font-size:14px;font-weight:600;text-align:left}
+html body.community-screen-compose .c-writing-surface{background:var(--app-panel);border-radius:0}
+html body.community-screen-compose .c-title-input{font-size:21px;line-height:1.5;padding:8px 0 16px;border:0;border-bottom:1px solid var(--app-line);background:transparent!important;color:var(--app-text)!important;-webkit-text-fill-color:var(--app-text)!important}
+html body.community-screen-compose .c-body-input{font-size:16px;line-height:1.75;min-height:240px;height:clamp(240px,34dvh,340px);resize:none;padding:16px 0;border:0;background:transparent!important;color:var(--app-text)!important;-webkit-text-fill-color:var(--app-text)!important}
+html body.community-screen-compose :is(.c-title-input,.c-body-input)::placeholder{font-weight:400;color:var(--app-muted);-webkit-text-fill-color:var(--app-muted);opacity:1}
+html body.community-screen-compose .c-editor-meta{padding:10px 0;border-top:1px solid var(--app-line);font-size:12px}
+.c-card-link-help{margin:12px 0 18px;font-size:13px;color:var(--app-muted)}.c-card-link-help summary{cursor:pointer;min-height:32px;display:flex;align-items:center}.c-card-link-help summary::before{content:'↗';margin-right:8px}.c-card-link-help p{padding:4px 0;line-height:1.6}
+html body.community-screen-compose .c-tag-input{border:0;border-radius:12px;background:var(--app-fill);padding:8px 12px;min-height:52px;margin-top:14px;gap:8px}
+html body.community-screen-compose .c-tag-input input{background:transparent!important;flex:1;max-width:none;width:0;text-align:left;font-size:13px;color:var(--app-text);-webkit-text-fill-color:var(--app-text)}
+html body.community-screen-compose .c-editor-tools{background:var(--app-panel);border-top:1px solid var(--app-line);padding:8px 12px max(8px,env(safe-area-inset-bottom));gap:4px;justify-content:space-between;flex-wrap:nowrap}
+html body.community-screen-compose .c-editor-tools :is(button,label){display:flex;flex:1;justify-content:center;gap:6px;font-size:13px;min-height:48px;padding:8px 4px;border-radius:12px;white-space:nowrap;color:var(--app-text)}
+html body.community-screen-compose .c-editor-tools [aria-expanded=true]{background:var(--app-fill);color:var(--app-accent)}

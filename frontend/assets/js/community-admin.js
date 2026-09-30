@@ -34,7 +34,7 @@ export async function mountCommunityAdmin(root){
   root.replaceChildren(element('h2',localEnabled()?'本机社区管理 · 不上传':'社区管理'),element('p',localEnabled()?'以下操作只影响本机验收数据，不会删除线上内容或处罚真实用户。':'审核内容、处理反馈与管理账号；社区仍按服务端设置控制开放范围。'),nav,toolbar,status,list,pager);
   const tabs={reports:'举报处理',content:'内容巡查',users:'用户管理',appeals:'申诉',rules:'关键词规则',topics:'版块管理',announcements:'社区公告',stats:'数据统计',logs:'操作日志',config:'开放设置'};
   for(const [id,title] of Object.entries(tabs))nav.append(button(title,async()=>{tab=id;offset=0;filters={};await load();},{'data-tab':id}));
-  try{config=await social('admin/config');await load();}catch(error){showError(root,error);root.dataset.mounted='';}
+  try{config=await social('admin/config');if(!config || !config.categories || !config.mode)throw Error('社区管理服务未就绪，请先完成服务端接入；这里不是零条记录。');await load();}catch(error){nav.replaceChildren();toolbar.replaceChildren();pager.replaceChildren();showError(root,error);root.dataset.mounted='';root.append(button('重新连接',()=>mountCommunityAdmin(root)));}
   function filter(label,key,options){
     const f=options?select(label,options,filters[key]||''):field(label,filters[key]||'');
     f.control.onchange=()=>{filters[key]=f.control.value;offset=0;load();};toolbar.append(f.row);

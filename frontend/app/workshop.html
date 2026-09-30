@@ -6,7 +6,7 @@
   <title>创作工坊 · 惑梦（Homer）</title>
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png?v=20260901-persistent-pages">
   <link rel="icon" href="/favicon.ico?v=20260901-persistent-pages">
-  <script src="/assets/vendor/tailwindcss-browser.js?v=20260917-r8"></script>
+  <link rel="stylesheet" href="/assets/css/utilities.css?v=20260925-r25">
   <link rel="stylesheet" href="/app/assets/css/app.css?v=20260917-r8">
   <script type="module" src="/app/assets/js/hub-pages.js?v=20260917-r8"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
@@ -27,9 +27,10 @@
     @media (max-width: 560px) { .ws-create-grid { grid-template-columns: 1fr; } .ws-create-option { min-height: 76px; } }
   </style>
   <link rel="stylesheet" href="/assets/css/app-design.css?v=20260917-r8">
+  <link rel="stylesheet" href="/assets/css/tavo-reference.css?v=20260918-r12">
   <script defer src="/assets/js/option-picker.js?v=20260917-r8"></script>
 </head>
-<body class="min-h-screen hub-page hub-page--workshop">
+<body class="min-h-screen hub-page hub-page--workshop ref-workshop">
   <div class="xy-stars-bg"></div>
   <div class="xy-meteor"></div>
 
@@ -44,14 +45,14 @@
           <div class="ws-create-mask" x-show="createMenuOpen" x-transition.opacity @click.self="createMenuOpen = false" role="presentation">
             <section class="ws-create-dialog" role="dialog" aria-modal="true" aria-labelledby="ws-create-title">
               <div class="ws-create-head">
-                <div><h2 id="ws-create-title">新建作品</h2><p>选择你要发布到惑梦的内容类型。</p></div>
+                <div><h2 id="ws-create-title">新建作品</h2></div>
                 <button type="button" class="ws-create-close" @click="createMenuOpen = false" aria-label="关闭">×</button>
               </div>
               <div class="ws-create-grid">
-                <a class="ws-create-option" href="/app/create.html"><span class="ws-create-option__icon">◉</span><span><strong>新建角色</strong><small>创建完整角色卡，可选择报名当前赛事。</small></span></a>
-                <a class="ws-create-option" href="/app/community-library.html?tab=mod&new=1"><span class="ws-create-option__icon">◇</span><span><strong>新建 Mod</strong><small>发布对话扩展作品</small></span></a>
-                <a class="ws-create-option" href="/app/community-library.html?tab=ui_template&new=1"><span class="ws-create-option__icon">▧</span><span><strong>新建界面模板</strong><small>发布界面与交互作品</small></span></a>
-                <a class="ws-create-option" href="/app/community-library.html?tab=preset&new=1"><span class="ws-create-option__icon">☷</span><span><strong>新建预设</strong><small>发布自己的预设作品</small></span></a>
+                <a class="ws-create-option" href="/app/create.html"><span class="ws-create-option__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="7" r="4"/><path d="M4 22v-3a8 8 0 0 1 16 0v3"/></svg></span><span><strong>新建角色</strong><small>创建角色卡或导入已有卡包</small></span></a>
+                <a class="ws-create-option" href="/app/workshop-resource-editor.html?type=mod"><span class="ws-create-option__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m8 4-6 8 6 8 M16 4l6 8-6 8 M14 3l-4 18"/></svg></span><span><strong>新建 Mod</strong><small>发布对话扩展作品</small></span></a>
+                <a class="ws-create-option" href="/app/workshop-resource-editor.html?type=ui_template"><span class="ws-create-option__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18 M9 9v12"/></svg></span><span><strong>新建界面模板</strong><small>发布界面与交互作品</small></span></a>
+                <a class="ws-create-option" href="/app/workshop-resource-editor.html?type=preset"><span class="ws-create-option__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 5h18 M3 12h18 M3 19h18"/><path d="M8 2v6 M16 9v6 M10 16v6"/></svg></span><span><strong>新建预设</strong><small>发布自己的预设作品</small></span></a>
               </div>
             </section>
           </div>
@@ -67,12 +68,10 @@
       <section class="app-page-pad max-w-6xl mx-auto ws-page" x-show="ready" x-transition.opacity>
 
         <nav class="ws-quicknav ws-quicknav--focused" aria-label="创作入口">
-          <a class="ws-navitem ws-navitem--primary" href="/app/create.html"><span class="ws-navitem__ico" aria-hidden="true">＋</span><span class="ws-navitem__text"><strong>新建角色</strong><em>创建或导入角色卡</em></span></a>
-          <a class="ws-navitem" href="/app/my-apps.html"><span class="ws-navitem__ico" aria-hidden="true">◉</span><span class="ws-navitem__text"><strong>我的角色</strong><em>继续编辑与管理发布</em></span></a>
-          <a class="ws-navitem" href="/app/community-library.html?tab=mod"><span class="ws-navitem__ico" aria-hidden="true">◇</span><span class="ws-navitem__text"><strong>Mod</strong><em>浏览与创作扩展</em></span></a>
-          <a class="ws-navitem" href="/app/community-library.html?tab=ui_template"><span class="ws-navitem__ico" aria-hidden="true">▧</span><span class="ws-navitem__text"><strong>界面模板</strong><em>浏览与创作界面</em></span></a>
-          <a class="ws-navitem" href="/app/community-library.html?tab=preset"><span class="ws-navitem__ico" aria-hidden="true">☷</span><span class="ws-navitem__text"><strong>预设</strong><em>浏览与创作预设</em></span></a>
-          <a class="ws-navitem" href="/app/data-merge.html"><span class="ws-navitem__ico" aria-hidden="true">⇄</span><span class="ws-navitem__text"><strong>数据合并</strong><em>合并世界书 / 正则并导出</em></span></a>
+          <a class="ws-navitem" href="/app/workshop-resource.html?type=mod"><span class="ws-navitem__ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m8 4-6 8 6 8 M16 4l6 8-6 8 M14 3l-4 18"/></svg></span><span class="ws-navitem__text"><strong>Mod</strong></span></a>
+          <a class="ws-navitem" href="/app/workshop-resource.html?type=ui_template"><span class="ws-navitem__ico" aria-hidden="true">.*</span><span class="ws-navitem__text"><strong>界面模板</strong></span></a>
+          <a class="ws-navitem" href="/app/workshop-resource.html?type=preset"><span class="ws-navitem__ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 5h18 M3 12h18 M3 19h18 M8 2v6 M16 9v6 M10 16v6"/></svg></span><span class="ws-navitem__text"><strong>预设</strong></span></a>
+          <a class="ws-navitem" href="/app/data-merge.html"><span class="ws-navitem__ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 3v5c0 6 16 2 16 8v5 M20 3v5c0 6-16 2-16 8v5 M1 18l3 3 3-3 M17 18l3 3 3-3"/></svg></span><span class="ws-navitem__text"><strong>数据合并</strong></span></a>
         </nav>
 
 

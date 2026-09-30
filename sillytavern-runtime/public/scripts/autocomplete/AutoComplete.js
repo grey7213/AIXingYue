@@ -514,6 +514,10 @@ export class AutoComplete {
      * Update position of DOM.
      */
     updatePosition() {
+        // Resize/scroll events also reach inactive editors during startup.
+        // Position only an open suggestion panel; show/render positions it
+        // when activated, so hidden editors never need a cursor mirror.
+        if (!this.isActive) return;
         if (this.isFloating) {
             this.updateFloatingPosition();
         } else {
@@ -540,6 +544,7 @@ export class AutoComplete {
      * Update position of details DOM.
      */
     updateDetailsPosition() {
+        if (!this.isActive) return;
         if (this.isShowingDetails || !this.isReplaceable) {
             if (this.isFloating) {
                 this.updateFloatingDetailsPosition();
@@ -571,6 +576,7 @@ export class AutoComplete {
      * Update position of floating autocomplete.
      */
     updateFloatingPosition() {
+        if (!this.isActive) return;
         const location = this.getCursorPosition();
         const rect = this.textarea.getBoundingClientRect();
         const layerRect = this.getLayer().getBoundingClientRect();
@@ -594,6 +600,7 @@ export class AutoComplete {
     }
 
     updateFloatingDetailsPosition(location = null) {
+        if (!this.isActive) return;
         if (!location) location = this.getCursorPosition();
         const rect = this.textarea.getBoundingClientRect();
         const layerRect = this.getLayer().getBoundingClientRect();

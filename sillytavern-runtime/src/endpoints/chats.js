@@ -514,7 +514,7 @@ export function getChatData(chatFilePath) {
     return chatData;
 }
 
-router.post('/get', validateAvatarUrlMiddleware, function (request, response) {
+router.post('/get', validateAvatarUrlMiddleware, async function (request, response) {
     try {
         const dirName = String(request.body.avatar_url).replace('.png', '');
         const directoryPath = path.join(request.user.directories.chats, dirName);
@@ -536,9 +536,17 @@ router.post('/get', validateAvatarUrlMiddleware, function (request, response) {
         const chatFileName = `${String(request.body.file_name)}.jsonl`;
         const chatFilePath = path.join(directoryPath, sanitize(chatFileName));
 
+        // Cloud-backed clients already have the messages. Read only the local
+        // header so rebinding does not invent a conflicting integrity token.
+        if (request.body.metadata_only === true) {
+            if (!fs.existsSync(chatFilePath)) return response.send({});
+            const header = tryParse(await readFirstLine(chatFilePath));
+            return response.send({ chat_metadata: header?.chat_metadata || {} });
+        }
         return response.send(getChatData(chatFilePath));
     } catch (error) {
         console.error(error);
+        if (request.body?.metadata_only === true) return response.sendStatus(500);
         return response.send({});
     }
 });

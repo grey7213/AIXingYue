@@ -1,6 +1,11 @@
 import { api, ApiError, getCachedUser } from '/app/assets/js/app-core.js?v=20260917-r8';
 import { openChatTool } from '/assets/js/chat-tools.js';
 import { bindChatAppearance } from '/assets/js/chat-appearance.js';
+import { settingsPage } from '/assets/js/chat-settings-page.js';
+import { controlCenter } from '/assets/js/chat-control-center.js';
+import { fillModelSelect } from '/assets/js/model-catalog.js';
+import { messageActionIcon, positionChatMenu } from '/assets/js/chat-menu.js';
+import { readPageCache, writePageCache } from './page-cache.js';
 
 const HOST_CHANNEL = 'homer:dialogue-host:v1';
 try { if (localStorage.getItem('ai_xingyue_shell_theme') === 'dark') document.documentElement.setAttribute('data-theme', 'dark'); } catch {}
@@ -29,6 +34,7 @@ const menuButton = document.querySelector('#preview-menu');
 const settingsButton = document.querySelector('#preview-settings');
 const leftDrawer = document.querySelector('#preview-left-drawer');
 const rightDrawer = document.querySelector('#preview-settings-drawer');
+controlCenter(rightDrawer);
 const leftClose = document.querySelector('#preview-left-close');
 const rightClose = document.querySelector('#preview-settings-close');
 const scrim = document.querySelector('#preview-scrim');
@@ -40,9 +46,31 @@ const networkRetry = document.querySelector('#preview-network-retry');
 const modelButton = document.querySelector('#preview-model-settings');
 const modelSummary = document.querySelector('#preview-model-summary');
 const modelDialog = document.querySelector('#preview-model-dialog');
+// Cached conversation UI and the ready runtime use the same component grammar.
+{
+  const form=modelDialog.querySelector('form'), group=document.createElement('div');
+  group.className='homer-model-fields';
+  const labels=[...form.querySelectorAll(':scope > label')];
+  labels[0].className='homer-model-select-field';
+  const picker=labels[0].querySelector('select');picker.classList.add('homer-model-select');
+  const modelLabel=document.createElement('span');modelLabel.className='homer-model-field__label';modelLabel.textContent='当前模型';labels[0].replaceChildren(modelLabel,picker);
+  const hints=['数值越高越有变化，越低越稳定。','控制候选词范围，通常保持在 0.8–1。','降低已频繁出现词语再次出现的概率。','鼓励模型尝试尚未出现的新内容。'];
+  labels.slice(1).forEach((label,i)=>{
+    label.className='homer-model-field';
+    label.querySelector('span').classList.add('homer-model-field__head');
+    const number=label.querySelector('input[type=number]'),range=label.querySelector('input[type=range]');
+    const title=label.querySelector('span>span');title.classList.add('homer-model-field__label');
+    number.className='homer-model-field__number';number.setAttribute('aria-label',title.textContent);
+    range.className='homer-model-field__range';range.setAttribute('aria-label',title.textContent+'滑块');
+    const hint=document.createElement('small');hint.className='homer-model-field__hint';hint.textContent=hints[i];label.append(hint);group.append(label);
+  });
+  labels[0].after(group);
+  const note=document.createElement('p');note.className='homer-sheet-dialog__notice';note.textContent='仅用于当前会话，不改变其他对话的模型设置。';form.querySelector('header').after(note);
+  form.querySelector('#preview-model-save').textContent='保存';
+}
+settingsPage(modelDialog, { shell: modelDialog.querySelector('form'), head: modelDialog.querySelector('header'), footer: modelDialog.querySelector('footer'), title: '模型设置' });
 const modelForm = document.querySelector('#preview-model-form');
 const modelSelect = document.querySelector('#preview-model-select');
-const modelClose = document.querySelector('#preview-model-close');
 const modelCancel = document.querySelector('#preview-model-cancel');
 
 let readyTimer = 0;
@@ -52,12 +80,105 @@ let activeAppId = '';
 let activeConversationId = '';
 let previewRequestId = 0;
 let runtimeReady = false;
+let runtimeBound = false;
 let runtimeState = null;
 let readyHandoffTimer = 0;
 let launchRequestId = 0;
 let history = [];
 let pendingDraft = '';
 const pendingCommands = [];
+let pendingTool = null;
+let prewarming = new URLSearchParams(location.search).get('prewarm') === '1';
+let coreReady = false;
+let adminPreview = new URLSearchParams(location.search).get('admin_preview') === '1';
+let pendingAdminCard = '';
+let adminBindPending = false;
+let bridgeAvailable = false;
+let preparedAdminCard = '';
+
+function prepareAdminCard() {
+  if (!bridgeAvailable || !preparedAdminCard) return;
+  frame.contentWindow.postMessage({ channel: HOST_CHANNEL, version: 1,
+    type: 'prepare-admin-preview', app_id: preparedAdminCard }, location.origin);
+  preparedAdminCard = '';
+}
+
+window.addEventListener('homer:prepare-admin-preview', event => {
+  preparedAdminCard = String(event.detail?.app_id || '').trim().slice(0, 160);
+  prepareAdminCard();
+});
+
+function bindPreparedAdminPreview() {
+  if (!pendingAdminCard || !coreReady) return;
+  const appId = pendingAdminCard;
+  pendingAdminCard = '';
+  frame.contentWindow.postMessage({ channel: HOST_CHANNEL, version: 1,
+    type: 'bind-admin-preview', app_id: appId }, location.origin);
+}
+
+function openAdminPreview(appId) {
+  if (adminBindPending || pendingAdminCard || navigationPending || pendingDraft || runtimeState?.generating) return;
+  // A same-card revisit retains the live preview, including unsaved settings.
+  if (adminPreview && runtimeReady && activeAppId === String(appId)) return;
+  ++launchRequestId;
+  ++previewRequestId;
+  pendingCommands.length = 0;
+  pendingTool?.dialog.close(); pendingTool = null;
+  adminPreview = true;
+  activeAppId = String(appId);
+  activeConversationId = '';
+  const target = new URL(location.href);
+  target.searchParams.set('app_id', activeAppId);
+  target.searchParams.set('admin_preview', '1');
+  for (const key of ['conversation_id', 'conv_id', 'prewarm']) target.searchParams.delete(key);
+  window.history.replaceState({}, '', target);
+  runtimeReady = false; runtimeState = null;
+  adminBindPending = true;
+  frame.inert = true;
+  closeDrawers(); modelDialog.close();
+  pendingAdminCard = activeAppId;
+  performance.mark('homer-admin-workspace-click');
+  bindPreparedAdminPreview();
+  clearReadyTimer();
+  readyTimer = window.setTimeout(() => fail(new Error('管理员会话连接超时，请重试。')), READY_TIMEOUT_MS);
+}
+
+function bindPreparedConversation() {
+  if (adminPreview) { bindPreparedAdminPreview(); return; }
+  if (!prewarming || !coreReady || !activeAppId || !activeConversationId) return;
+  frame.contentWindow.postMessage({ channel: HOST_CHANNEL, version: 1, type: 'bind-conversation',
+    app_id: activeAppId, conversation_id: activeConversationId }, location.origin);
+  prewarming = false;
+}
+
+function openRuntimeTool(section) {
+  pendingTool?.dialog.close();
+  if (runtimeReady) {
+    postRuntimeCommand('open-settings', { section }, { queue: false });
+    document.body.classList.add('is-ready');
+    return;
+  }
+  const dialog = document.createElement('dialog');
+  dialog.className = 'homer-chat-tool';
+  const heading = document.createElement('h2');
+  heading.textContent = ({ memory: '长记忆', mod: 'Mod', preset: '预设开关', attachments: '添加内容', generation: '生成操作' })[section] || '对话工具';
+  const status = document.createElement('p');
+  status.setAttribute('role', 'status');
+  status.textContent = '\u6b63\u5728\u51c6\u5907\u529f\u80fd\u2026';
+  const cancel = document.createElement('button');
+  cancel.textContent = '取消';
+  cancel.type = 'button';
+  cancel.onclick = () => dialog.close();
+  dialog.append(heading, status, cancel);
+  document.body.append(dialog);
+  const request = { dialog, section, conversation: activeConversationId };
+  pendingTool = request;
+  dialog.addEventListener('close', () => {
+    if (pendingTool === request) pendingTool = null;
+    dialog.remove();
+  }, { once: true });
+  dialog.showModal();
+}
 
 function nativeCall(name, ...args) {
   try {
@@ -142,11 +263,22 @@ function flushRuntimeCommands() {
 
 function markReady(roleName = '') {
   clearReadyTimer();
+  adminBindPending = false;
+  frame.inert = false;
   runtimeReady = true;
   ++previewRequestId;
   window.clearTimeout(readyHandoffTimer);
   setDocumentTitle(roleName);
   flushRuntimeCommands();
+  if (pendingTool) {
+    const request = pendingTool;
+    pendingTool = null;
+    request.dialog.close();
+    if (request.conversation === activeConversationId) {
+      postRuntimeCommand('open-settings', { section: request.section }, { queue: false });
+      document.body.classList.add('is-ready');
+    }
+  }
   postRuntimeCommand('request-state', {}, { queue: false });
   document.body.classList.remove('is-error');
   launcherVisual.src = '/assets/img/brand/launch-loading-1080x1920.png?v=20260901-persistent-pages';
@@ -240,6 +372,7 @@ function readCachedConversation(conversationId) {
 }
 
 function writeCachedConversation(snapshot) {
+  if (adminPreview) return;
   if (!snapshot?.conversation_id) return;
   const payload = JSON.stringify({ ...snapshot, updated_at: Date.now() });
   nativeCall('saveConversationSnapshot', payload);
@@ -248,6 +381,15 @@ function writeCachedConversation(snapshot) {
   } catch {
     // Android SQLite remains available when browser storage is full.
   }
+  const owner = getCachedUser();
+  const cached = readPageCache('histories', owner);
+  const list = Array.isArray(cached?.list) ? cached.list : [];
+  const previous = list.find(item => String(item.id) === String(snapshot.conversation_id));
+  const item = { ...previous, id: snapshot.conversation_id, app_id: snapshot.app_id,
+    app_name: snapshot.title || previous?.app_name || '角色对话',
+    app_icon: snapshot.avatar || previous?.app_icon || '',
+    last_message: snapshot.messages?.at(-1)?.content || previous?.last_message || '', updated_at: Date.now() };
+  writePageCache('histories', owner, { list: [item, ...list.filter(row => String(row.id) !== String(item.id))].slice(0, 100) });
 }
 
 function readCachedHistory() {
@@ -388,6 +530,10 @@ function showConversationSwitchShell(message) {
   const appId = String(message?.app_id || '').trim();
   const conversationId = String(message?.conversation_id || '').trim();
   if (!appId || !conversationId) return;
+  // Android can reveal the prepared document just before its navigation event
+  // arrives. An immediate tool tap belongs to this first binding, not to an
+  // empty conversation id. Already-scoped requests never transfer between chats.
+  if (prewarming && pendingTool && !pendingTool.conversation) pendingTool.conversation = conversationId;
   // Ignore the acknowledgement of a switch already reflected in the host.
   if (!runtimeReady && conversationId === activeConversationId && activeAppId === appId) return;
   clearReadyTimer();
@@ -416,6 +562,7 @@ function showConversationSwitchShell(message) {
 
 function fail(error) {
   clearReadyTimer();
+  adminBindPending = false;
   runtimeReady = false;
   console.error('对话能力启动失败', error);
   showShell();
@@ -428,13 +575,6 @@ function fail(error) {
     return;
   }
   showToast(error?.message || '对话能力暂时无法连接，本地历史仍可使用。', 3200);
-}
-
-async function readPublicSettings() {
-  const response = await fetch('/console/api/public/site-settings', { credentials: 'include', cache: 'no-store' });
-  if (!response.ok) throw new Error(`站点设置读取失败（${response.status}）`);
-  const body = await response.json();
-  return body?.data || body || {};
 }
 
 function normalizeRuntimeUrl(value) {
@@ -466,6 +606,9 @@ function updateVisibleConversationUrl(appId, conversationId) {
   next.searchParams.set('app_id', safeAppId);
   next.searchParams.set('conversation_id', safeConversationId);
   next.searchParams.delete('conv_id');
+  next.searchParams.delete('prewarm');
+  if (adminPreview) next.searchParams.set('admin_preview', '1');
+  else next.searchParams.delete('admin_preview');
   window.history.replaceState({ app_id: safeAppId, conversation_id: safeConversationId }, '', next);
 }
 
@@ -485,8 +628,8 @@ async function loadHistory() {
   }
 }
 
-async function resolveLaunchTarget(requestId) {
-  const params = new URLSearchParams(location.search);
+async function resolveLaunchTarget(requestId, href = location.href) {
+  const params = new URL(href, location.href).searchParams;
   let appId = String(params.get('app_id') || '').trim();
   let conversationId = String(params.get('conversation_id') || params.get('conv_id') || '').trim();
   if (appId && conversationId) {
@@ -494,7 +637,6 @@ async function resolveLaunchTarget(requestId) {
     void loadQuickPreview(conversationId);
     return runtimeTarget(appId, conversationId);
   }
-  const [settings] = await Promise.all([readPublicSettings(), api.profile()]);
   if (requestId !== launchRequestId) return null;
   if (!appId) {
     const response = await api.conversations();
@@ -511,8 +653,9 @@ async function resolveLaunchTarget(requestId) {
   const launch = payload?.launch;
   if (!launch?.app_id || !launch?.conversation_id) throw new Error('后端没有返回可启动的角色会话。');
   updateVisibleConversationUrl(String(launch.app_id), String(launch.conversation_id));
+  if (!conversationId) writeCachedConversation({ conversation_id: launch.conversation_id, app_id: launch.app_id, messages: [], title: payload?.character?.name || '' });
   void loadQuickPreview(String(launch.conversation_id));
-  return runtimeTarget(String(launch.app_id), String(launch.conversation_id), settings?.runtime?.dialogue_url || payload?.runtime?.public_url || DEFAULT_RUNTIME_PATH);
+  return runtimeTarget(String(launch.app_id), String(launch.conversation_id));
 }
 
 function allowedNavigationPath(value) {
@@ -531,8 +674,10 @@ function allowedNavigationPath(value) {
 }
 
 function cacheRuntimeState(state) {
+  if (Boolean(state?.admin_preview) !== adminPreview) return;
   if (String(state?.conversation_id || '') !== activeConversationId) return;
   runtimeState = state;
+  if (adminPreview) { updateModelSummary(state); return; }
   const snapshot = conversationSnapshot(state);
   if (snapshot.messages.some(item => item.role === 'user' && item.content === pendingDraft)) {
     pendingDraft = '';
@@ -559,14 +704,33 @@ function handleRuntimeMessage(event) {
   if (event.origin !== location.origin || event.source !== frame.contentWindow) return;
   const message = event.data;
   if (!message || message.channel !== HOST_CHANNEL || message.version !== 1) return;
+  if (message.type === 'bridge-available') {
+    bridgeAvailable = true;
+    prepareAdminCard();
+    return;
+  }
+  if (message.type === 'core-ready') {
+    coreReady = true;
+    bridgeAvailable = true;
+    bindPreparedConversation();
+    return;
+  }
   if (message.type === 'ready') {
+    if (Boolean(message.admin_preview) !== adminPreview || String(message.app_id || '') !== activeAppId) return;
     if (activeConversationId && String(message.conversation_id || '') !== activeConversationId) return;
+    coreReady = true;
+    bridgeAvailable = true;
+    prewarming = false;
+    runtimeBound = true;
     updateVisibleConversationUrl(message.app_id, message.conversation_id);
     markReady(message.role_name || message.title || '');
+    if (adminPreview) performance.mark('homer-admin-workspace-ready');
     return;
   }
   if (message.type === 'conversation-switching' || message.type === 'conversation-switch-failed') {
-    showConversationSwitchShell(message);
+    if (message.type === 'conversation-switch-failed') adminPreview = Boolean(message.admin_preview);
+    if (adminPreview) updateVisibleConversationUrl(message.app_id, message.conversation_id);
+    else showConversationSwitchShell(message);
     if (message.type === 'conversation-switch-failed') {
       pendingCommands.length = 0;
       markReady(message.role_name || '');
@@ -583,6 +747,7 @@ function handleRuntimeMessage(event) {
     return;
   }
   if (message.type === 'conversation' && runtimeReady) {
+    if (Boolean(message.admin_preview) !== adminPreview) return;
     updateVisibleConversationUrl(message.app_id, message.conversation_id);
     return;
   }
@@ -592,6 +757,7 @@ function handleRuntimeMessage(event) {
     return;
   }
   if (message.type === 'command-error') {
+    if (adminPreview && !runtimeReady) { fail(new Error(message.message || '管理员会话连接失败')); return; }
     pendingCommands.length = 0;
     if (pendingDraft) {
       previewInput.value = pendingDraft;
@@ -620,13 +786,7 @@ function openModelDialog() {
   closeDrawers();
   const data = modelData();
   const settings = { temperature: 1, top_p: 1, frequency_penalty: 0, presence_penalty: 0, ...(data?.model_settings || {}) };
-  modelSelect.replaceChildren();
-  for (const model of data?.models || []) {
-    const option = document.createElement('option');
-    option.value = String(model?.id || '');
-    option.textContent = String(model?.name || model?.model || model?.id || '未命名模型');
-    modelSelect.append(option);
-  }
+  fillModelSelect(modelSelect, data?.models || [], settings.model_id);
   if (!modelSelect.options.length) {
     const option = document.createElement('option');
     option.value = String(settings.model_id || '');
@@ -644,7 +804,13 @@ function openModelDialog() {
 }
 
 async function switchConversation(appId, conversationId) {
-  if (!appId || !conversationId || conversationId === activeConversationId) {
+  const nextAppId = String(appId || '').trim();
+  const nextConversationId = String(conversationId || '').trim();
+  if (!nextAppId || !nextConversationId) {
+    closeDrawers();
+    return;
+  }
+  if (!adminPreview && nextConversationId === activeConversationId && nextAppId === activeAppId) {
     closeDrawers();
     return;
   }
@@ -652,16 +818,24 @@ async function switchConversation(appId, conversationId) {
     showToast('当前消息处理完成后再切换会话');
     return;
   }
+  activeAppId = nextAppId;
+  activeConversationId = nextConversationId;
+  adminPreview = false;
+  updateVisibleConversationUrl(nextAppId, nextConversationId);
   const wasReady = runtimeReady;
   ++launchRequestId;
   pendingCommands.length = 0;
-  if (wasReady) {
-    postRuntimeCommand('switch-conversation', { app_id: appId, conversation_id: conversationId });
-    showConversationSwitchShell({ app_id: appId, conversation_id: conversationId });
+  if (wasReady || runtimeBound) {
+    frame.contentWindow.postMessage({ channel: HOST_CHANNEL, version: 1, type: 'switch-conversation', app_id: nextAppId, conversation_id: nextConversationId }, location.origin);
+    showConversationSwitchShell({ app_id: nextAppId, conversation_id: nextConversationId });
     return;
   }
-  showConversationSwitchShell({ app_id: appId, conversation_id: conversationId });
-  activeTarget = runtimeTarget(appId, conversationId);
+  showConversationSwitchShell({ app_id: nextAppId, conversation_id: nextConversationId });
+  if (prewarming) {
+    bindPreparedConversation();
+    return;
+  }
+  activeTarget = runtimeTarget(nextAppId, nextConversationId);
   frame.src = activeTarget.href;
 }
 
@@ -669,6 +843,25 @@ async function start() {
   const requestId = ++launchRequestId;
   clearReadyTimer();
   runtimeReady = false;
+  if (adminPreview) {
+    const appId = new URLSearchParams(location.search).get('app_id') || activeAppId;
+    if (!appId) { fail(new Error('请从管理后台选择测试角色。')); return; }
+    if (!coreReady) {
+      prewarming = true;
+      activeTarget = runtimeTarget('', '');
+      activeTarget.searchParams.set('homer_prewarm', '1');
+      frame.src = activeTarget.href;
+    }
+    pendingAdminCard = '';
+    openAdminPreview(appId);
+    return;
+  }
+  if (prewarming) {
+    activeTarget = runtimeTarget('', '');
+    activeTarget.searchParams.set('homer_prewarm', '1');
+    frame.src = activeTarget.href;
+    return;
+  }
   launcherVisual.src = '/assets/img/brand/launch-loading-1080x1920.png?v=20260901-persistent-pages';
   showShell();
   history = readCachedHistory();
@@ -693,14 +886,28 @@ async function start() {
 window.addEventListener('message', handleRuntimeMessage);
 // Android keeps this document alive when a different history item is opened.
 // A cancelled event means navigation was handled, including a busy-chat refusal.
+let navigationPending = false;
 window.addEventListener('homer:navigate-conversation', event => {
   try {
     const target = new URL(String(event.detail?.url || ''), location.href);
     const appId = target.searchParams.get('app_id');
     const conversationId = target.searchParams.get('conversation_id') || target.searchParams.get('conv_id');
-    if (target.origin !== location.origin || target.pathname !== '/app/chat.html' || !appId || !conversationId) return;
+    if (target.origin !== location.origin || target.pathname !== '/app/chat.html' || !appId) return;
     event.preventDefault();
-    void switchConversation(appId, conversationId);
+    if (adminBindPending || navigationPending || pendingDraft || runtimeState?.generating) return;
+    if (target.searchParams.get('admin_preview') === '1') { openAdminPreview(appId); return; }
+    if (conversationId) { void switchConversation(appId, conversationId); return; }
+    navigationPending = true;
+    const requestId = ++launchRequestId;
+    const oldApp = activeAppId, oldConversation = activeConversationId;
+    void resolveLaunchTarget(requestId, target.href).then(resolved => {
+      if (!resolved) return;
+      const nextApp = resolved.searchParams.get('homer_app_id');
+      const nextConversation = resolved.searchParams.get('homer_conversation_id');
+      activeAppId = oldApp; activeConversationId = oldConversation;
+      return switchConversation(nextApp, nextConversation);
+    }).catch(error => { showToast(error.message || '创建会话失败，请重试'); })
+      .finally(() => { navigationPending = false; });
   } catch { /* The native container falls back to normal navigation. */ }
 });
 frame.addEventListener('error', () => fail(new Error('对话能力连接失败。')));
@@ -733,13 +940,11 @@ for (const button of document.querySelectorAll('[data-chat-tool]')) {
     openChatTool(button.dataset.chatTool, { container: previewMessages, selector: '.preview-message', isUser: element => element.classList.contains('is-user'), title: previewTitle.textContent });
   });
 }
-modelClose.addEventListener('click', () => modelDialog.close());
 modelCancel.addEventListener('click', () => modelDialog.close());
 for (const section of document.querySelectorAll('[data-runtime-section]')) {
   section.addEventListener('click', () => {
     closeDrawers();
-    postRuntimeCommand('open-settings', { section: section.dataset.runtimeSection });
-    if (runtimeReady) document.body.classList.add('is-ready');
+    openRuntimeTool(section.dataset.runtimeSection);
   });
 }
 for (const range of modelForm.querySelectorAll('[data-model-range]')) {
@@ -761,7 +966,7 @@ modelForm.addEventListener('submit', event => {
   const data = modelData();
   data.model_settings = settings;
   runtimeState = { ...(runtimeState || {}), ...data };
-  try { localStorage.setItem(scopedKey(`${SETTINGS_CACHE_PREFIX}${activeConversationId}`), JSON.stringify(data)); } catch {}
+  try { if (!adminPreview) localStorage.setItem(scopedKey(`${SETTINGS_CACHE_PREFIX}${activeConversationId}`), JSON.stringify(data)); } catch {}
   postRuntimeCommand('model-settings', { settings });
   updateModelSummary(data);
   modelDialog.close();
@@ -799,12 +1004,10 @@ function openPreviewMessageMenu(bubble) {
   document.querySelector('#preview-message-actions')?.remove();
   const menu = document.createElement('dialog');
   menu.id = 'preview-message-actions'; menu.className = 'preview-message-actions'; menu.setAttribute('aria-label', '消息操作');
-  const actions = [['copy','复制','M8 8h12v12H8z M16 8V4H4v12h4'],['edit','改写','m4 16 12-12 4 4L8 20H4v-4 M14 6l4 4'],['rollback','回溯','M9 4 4 9l5 5 M4 9h9a7 7 0 0 1 7 7v4'],['delete','删除','M3 6h18 M9 6V3h6v3 M6 6l1 15h10l1-15 M10 10v7 M14 10v7'],['hide',bubble.dataset.hidden === 'true' ? '取消隐藏' : '隐藏','M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12 M9 12a3 3 0 1 0 6 0 3 3 0 1 0-6 0'],['select','多选','M10 6h11 M10 12h11 M10 18h11 M3 5l2 2 3-3 M3 11l2 2 3-3 M3 17l2 2 3-3'],['collapse',bubble.dataset.collapsed === 'true' ? '展开' : '折叠',bubble.dataset.collapsed === 'true' ? 'm5 5 7 7 7-7 M5 19h14' : 'm5 13 7-7 7 7 M5 19h14']];
-  for (const [action,label,icon] of actions) {
+  const actions = [['copy','复制'],['edit','改写'],['rollback','回溯'],['delete','删除'],['hide',bubble.dataset.hidden === 'true' ? '取消隐藏' : '隐藏'],['select','多选'],['collapse',bubble.dataset.collapsed === 'true' ? '展开' : '折叠']];
+  for (const [action,label] of actions) {
     const button = document.createElement('button'); button.type = 'button';
-    const mark = document.createElementNS('http://www.w3.org/2000/svg','svg');
-    for (const [key,value] of Object.entries({viewBox:'0 0 24 24',fill:'none',stroke:'currentColor','stroke-width':'1.7','stroke-linecap':'round','stroke-linejoin':'round','aria-hidden':'true'})) mark.setAttribute(key,value);
-    const path = document.createElementNS('http://www.w3.org/2000/svg','path'); path.setAttribute('d',icon); mark.append(path);
+    const mark = messageActionIcon(action);
     const text = document.createElement('span'); text.textContent = label; button.append(mark,text);
     button.addEventListener('click', async () => {
       menu.close();
@@ -817,14 +1020,12 @@ function openPreviewMessageMenu(bubble) {
       }
     }); menu.append(button);
   }
-  menu.addEventListener('close',()=>menu.remove(),{once:true});
-  menu.addEventListener('click',event=>{if(event.target === menu)menu.close();});
+  const reposition=()=>positionChatMenu(menu,bubble,{header:document.querySelector('.preview-header'),composer:previewComposer,isUser:bubble.classList.contains('is-user'),pressY:previewPressOrigin?.y});
+  menu.addEventListener('close',()=>{window.removeEventListener('resize',reposition);window.visualViewport?.removeEventListener('resize',reposition);previewMessages.removeEventListener('scroll',closeMenu);menu.remove();},{once:true});
+  const closeMenu=()=>menu.close();
+  menu.addEventListener('click',event=>{if(event.target !== menu)return;const r=menu.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)menu.close();});
   document.body.append(menu); menu.showModal();
-  const box=bubble.getBoundingClientRect();
-  const left=bubble.classList.contains('is-user')?box.right-menu.offsetWidth:box.left;
-  const above=box.top-menu.offsetHeight-8;
-  menu.style.left=Math.max(10,Math.min(left,innerWidth-menu.offsetWidth-10))+'px';
-  menu.style.top=Math.max(10,Math.min(above>=10?above:box.bottom+8,innerHeight-menu.offsetHeight-10))+'px';
+  reposition();window.addEventListener('resize',reposition);window.visualViewport?.addEventListener('resize',reposition);previewMessages.addEventListener('scroll',closeMenu,{once:true});
 }
 previewMessages.addEventListener('contextmenu',event=>{
   const bubble=event.target.closest('.preview-message'); if(!bubble)return;
@@ -833,9 +1034,9 @@ previewMessages.addEventListener('contextmenu',event=>{
 previewMessages.addEventListener('pointerdown',event=>{
   if(event.button>0)return;const bubble=event.target.closest('.preview-message');if(!bubble)return;
   previewPressOrigin={x:event.clientX,y:event.clientY};
-  clearTimeout(previewPressTimer);previewPressTimer=setTimeout(()=>openPreviewMessageMenu(bubble),520);
+  clearTimeout(previewPressTimer);previewPressTimer=setTimeout(()=>openPreviewMessageMenu(bubble),500);
 },{passive:true});
 previewMessages.addEventListener('pointermove',event=>{
-  if(previewPressOrigin && Math.hypot(event.clientX-previewPressOrigin.x,event.clientY-previewPressOrigin.y)>12)clearTimeout(previewPressTimer);
+  if(previewPressOrigin && Math.hypot(event.clientX-previewPressOrigin.x,event.clientY-previewPressOrigin.y)>10)clearTimeout(previewPressTimer);
 },{passive:true});
 for(const name of ['pointerup','pointercancel'])previewMessages.addEventListener(name,()=>{clearTimeout(previewPressTimer);previewPressOrigin=null;});

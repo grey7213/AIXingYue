@@ -4072,11 +4072,12 @@ async function _save(name, data) {
     // Prevent double saving if both immediate and debounced save are called
     cancelDebounce(saveWorldDebounced);
 
-    await fetch('/api/worldinfo/edit', {
+    const response = await fetch('/api/worldinfo/edit', {
         method: 'POST',
         headers: getRequestHeaders(),
         body: JSON.stringify({ name: name, data: data }),
     });
+    if (!response.ok) throw new Error('记忆保存失败，请重试。');
     await eventSource.emit(event_types.WORLDINFO_UPDATED, name, data);
 }
 
@@ -4100,10 +4101,18 @@ export async function saveWorldInfo(name, data, immediately = false) {
     }
 
     // Update cache immediately, so any future call can pull from this
+    const previous = worldInfoCache.get(name);
     worldInfoCache.set(name, data);
 
     if (immediately) {
-        return await _save(name, data);
+        try { return await _save(name, data); }
+        catch (error) {
+            if (worldInfoCache.get(name) === data) {
+                if (previous === undefined) worldInfoCache.delete(name);
+                else worldInfoCache.set(name, previous);
+            }
+            throw error;
+        }
     }
 
     saveWorldDebounced(name, data);

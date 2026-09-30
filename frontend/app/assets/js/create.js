@@ -185,6 +185,7 @@ function createPage() {
     siteSettings: null,
     previewOpen: false,
     activeSection: 'creator-basic',
+    creatorToolsOpen: false,
     platformWorldbookApplied: true,
     advancedCreationAccess: { allowed: false, source: 'none', farm_unlocked: false, admin_override: false, streak_days: 0, unlocked_plots: 0, required_days: 49 },
     tavernHelperScriptsLoaded: false,
@@ -225,12 +226,13 @@ function createPage() {
     async loadCommunityFavorites() {
       this.communityFavLoading = true;
       try {
-        const [presets, templates] = await Promise.all([
+        const [presets, templates, ownTemplates] = await Promise.all([
           api.communityWorks({ type: 'preset', scope: 'favorites' }).catch(() => null),
           api.communityWorks({ type: 'ui_template', scope: 'favorites' }).catch(() => null),
+          api.communityWorks({ type: 'ui_template', scope: 'mine' }).catch(() => null),
         ]);
         this.favoritePresets = presets?.data?.list || [];
-        this.favoriteUiTemplates = templates?.data?.list || [];
+        this.favoriteUiTemplates = [...new Map([...(ownTemplates?.data?.list || []), ...(templates?.data?.list || [])].map(item => [item.id, item])).values()];
       } finally {
         this.communityFavLoading = false;
       }
@@ -354,10 +356,9 @@ function createPage() {
     },
 
     scrollToSection(id) {
-      const target = document.getElementById(id);
-      if (!target) return;
+      if (!['creator-basic','creator-media','creator-prompts','creator-extensions','creator-settings'].includes(id)) return;
       this.activeSection = id;
-      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      this.$nextTick(() => document.querySelector('.creator-editor__content')?.scrollIntoView({ behavior: 'instant', block: 'start' }));
     },
 
     async loadExisting() {
@@ -396,6 +397,7 @@ function createPage() {
           : [];
         this.form.regex_scripts = Array.isArray(app.regex_scripts)
           ? app.regex_scripts.map((s, idx) => ({
+              ...s,
               id: s.id || ('regex-' + (idx + 1)),
               name: s.name || `${this.creatorText('regex_name_prefix', 'Regex')} ${idx + 1}`,
               find: s.find || s.pattern || '',
@@ -483,7 +485,7 @@ function createPage() {
       try {
         const siteResult = await api.modelPresets();
         const siteData = siteResult?.data || siteResult || {};
-        const sitePresets = (siteData.list || []).map(p => ({ ...p, label: p.model || p.name || p.id, group: p.name || this.creatorText('site_model_group_label', '站点模型'), price_label: p.price_label || siteData.price_label || '50 惑梦币/次' }));
+        const sitePresets = (siteData.list || []).map(p => ({ ...p, label: p.display_name || p.name || p.model || p.id, group: p.group_name || p.preset_name || this.creatorText('site_model_group_label', '站点模型'), price_label: p.price_label || siteData.price_label || '' }));
         this.modelPresets = sitePresets;
         this.defaultModelPresetId = siteData.default_id || this.modelPresets[0]?.id || '';
         if (String(this.form.llm_model || '').startsWith('user:')) {
@@ -500,7 +502,7 @@ function createPage() {
     modelPresetGroups() {
       const groups = [];
       for (const preset of this.modelPresets) {
-        const key = preset.preset_id || preset.group || preset.id;
+        const key = preset.group_id || preset.preset_id || preset.group || preset.id;
         let group = groups.find(item => item.key === key);
         if (!group) {
           group = { key, label: preset.group || preset.name || '站点模型', list: [] };
@@ -793,6 +795,7 @@ function createPage() {
           .filter(q => q.message),
         regex_scripts: this.form.regex_scripts
           .map((s, idx) => ({
+            ...s,
             id: s.id || ('regex-' + (idx + 1)),
             name: (s.name || `${this.creatorText('regex_name_prefix', 'Regex')} ${idx + 1}`).trim(),
             find: (s.find || '').trim(),

@@ -1,4 +1,5 @@
 import { Popper } from '../lib.js';
+import { loadExtensionAsset } from './extension-asset-loader.js';
 
 import { eventSource, event_types, saveSettings, saveSettingsDebounced, getRequestHeaders, animation_duration, CLIENT_VERSION } from '../script.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from './popup.js';
@@ -588,7 +589,15 @@ async function getManifests(names) {
  * Tries to activate all available extensions that are not already active.
  * @returns {Promise<void>}
  */
-async function activateExtensions() {
+let extensionActivation;
+function activateExtensions() {
+    if (!extensionActivation) {
+        extensionActivation = activateExtensionsOnce().finally(() => { extensionActivation = null; });
+    }
+    return extensionActivation;
+}
+
+async function activateExtensionsOnce() {
     extensionLoadErrors.clear();
     const clientVersion = CLIENT_VERSION.split(':')[1];
     const extensions = Object.entries(manifests).sort((a, b) => sortManifestsByOrder(a[1], b[1]));
@@ -704,12 +713,14 @@ async function activateExtensions() {
         await Promise.allSettled(groups.get(order).map(({ name, manifest, displayName }) => {
             try {
                 console.debug('Activating extension', name);
+                performance.mark(`homer-extension-start:${name}`);
                 const promise = addExtensionLocale(name, manifest).finally(() =>
                     Promise.all([addExtensionScript(name, manifest), addExtensionStyle(name, manifest)]),
                 );
                 promises.push(promise);
                 return promise
                     .then(() => {
+                        performance.mark(`homer-extension-ready:${name}`);
                         activeExtensions.add(name);
                         return callExtensionHook(name, 'activate');
                     })
@@ -740,6 +751,8 @@ function prefetchExtensionAssets(eligible) {
         if (manifest.css) {
             appendPreloadLink('preload', extensionAssetUrl(`${name}/${manifest.css}`), 'style');
         }
+        const locale = manifest.i18n?.[getCurrentLocale()];
+        if (locale) appendPreloadLink('preload', extensionAssetUrl(`${name}/${locale}`), 'fetch');
     }
 }
 
@@ -760,6 +773,7 @@ function appendPreloadLink(rel, href, as = '') {
     if (as) {
         link.as = as;
     }
+    if (as === 'fetch') link.crossOrigin = 'anonymous';
     link.onerror = () => link.remove();
     document.head.appendChild(link);
 }
@@ -882,24 +896,9 @@ function addExtensionStyle(name, manifest) {
         return Promise.resolve();
     }
 
-    return new Promise((resolve, reject) => {
-        const url = extensionAssetUrl(`${name}/${manifest.css}`);
-        const id = sanitizeSelector(`${name}-css`);
-
-        if ($(`link[id="${id}"]`).length === 0) {
-            const link = document.createElement('link');
-            link.id = id;
-            link.rel = 'stylesheet';
-            link.type = 'text/css';
-            link.href = url;
-            link.onload = function () {
-                resolve();
-            };
-            link.onerror = function (e) {
-                reject(e);
-            };
-            document.head.appendChild(link);
-        }
+    return loadExtensionAsset({
+        document, kind: 'style', url: extensionAssetUrl(`${name}/${manifest.css}`),
+        id: sanitizeSelector(`${name}-css`),
     });
 }
 
@@ -914,28 +913,9 @@ function addExtensionScript(name, manifest) {
         return Promise.resolve();
     }
 
-    return new Promise((resolve, reject) => {
-        const url = extensionAssetUrl(`${name}/${manifest.js}`);
-        const id = sanitizeSelector(`${name}-js`);
-        let ready = false;
-
-        if ($(`script[id="${id}"]`).length === 0) {
-            const script = document.createElement('script');
-            script.id = id;
-            script.type = 'module';
-            script.src = url;
-            script.async = true;
-            script.onerror = function (err) {
-                reject(err);
-            };
-            script.onload = function () {
-                if (!ready) {
-                    ready = true;
-                    resolve();
-                }
-            };
-            document.body.appendChild(script);
-        }
+    return loadExtensionAsset({
+        document, kind: 'script', url: extensionAssetUrl(`${name}/${manifest.js}`),
+        id: sanitizeSelector(`${name}-js`),
     });
 }
 
@@ -1879,6 +1859,28 @@ export async function installExtension(url, global, branch = '') {
  * @param {boolean} versionChanged Is this a version change?
  * @param {boolean} enableAutoUpdate Enable auto-update
  */
+let discoveryPreload;
+
+async function discoverWithManifests() {
+    const extensions = await discoverExtensions();
+    return { extensions, loadedManifests: await getManifests(extensions.map(x => x.name)) };
+}
+
+// Fetch metadata and warm module bytes without evaluating scripts. Actual
+// activation still waits for the account's settings/requirements checks.
+export function prefetchExtensionDiscovery() {
+    if (!discoveryPreload) {
+        const pending = discoverWithManifests().then(result => {
+            prefetchExtensionAssets(Object.entries(result.loadedManifests)
+                .filter(([name]) => name !== 'third-party/st-yuzi-phone' && !extension_settings.disabledExtensions.includes(name))
+                .map(([name, manifest]) => ({ name, manifest })));
+            return result;
+        });
+        discoveryPreload = pending;
+        pending.catch(() => { if (discoveryPreload === pending) discoveryPreload = null; });
+    }
+}
+
 export async function loadExtensionSettings(settings, versionChanged, enableAutoUpdate) {
     if (settings.extension_settings) {
         Object.assign(extension_settings, settings.extension_settings);
@@ -1903,10 +1905,12 @@ export async function loadExtensionSettings(settings, versionChanged, enableAuto
 
     // Activate offline extensions
     await eventSource.emit(event_types.EXTENSIONS_FIRST_LOAD);
-    const extensions = await discoverExtensions();
+    const pendingDiscovery = discoveryPreload || discoverWithManifests();
+    discoveryPreload = null;
+    const { extensions, loadedManifests } = await pendingDiscovery;
     extensionNames = extensions.map(x => x.name);
     extensionTypes = Object.fromEntries(extensions.map(x => [x.name, x.type]));
-    manifests = await getManifests(extensionNames);
+    manifests = loadedManifests;
 
     if (versionChanged && enableAutoUpdate) {
         await autoUpdateExtensions(false);

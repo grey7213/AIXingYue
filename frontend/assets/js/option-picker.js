@@ -1,11 +1,23 @@
 /* Designed option windows, retaining the original control's binding and value. */
 (() => {
   if (window.HomerOptionPicker) return;
+  document.documentElement.dataset.homerInput='pointer';
+  document.addEventListener('pointerdown',()=>document.documentElement.dataset.homerInput='pointer',true);
+  document.addEventListener('keydown',()=>document.documentElement.dataset.homerInput='keyboard',true);
+  function applyTheme(){try{const saved=localStorage.getItem('ai_xingyue_shell_theme');const theme=saved==='dark'?'dark':saved!==null?'light':(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');document.documentElement.dataset.theme=theme;window.HomerNative?.setAppTheme?.(theme);}catch{}}
+  applyTheme();window.HomerApplyTheme=applyTheme;
+  window.addEventListener('storage',event=>{if(event.key==='ai_xingyue_shell_theme')applyTheme();});
+  for(const name of ['homer:page-visible','pageshow','homer:theme-changed'])window.addEventListener(name,applyTheme);
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)applyTheme();});
+  try{const channel=new BroadcastChannel('homer-appearance');channel.onmessage=applyTheme;window.HomerPublishTheme=()=>{applyTheme();channel.postMessage('changed');};}catch{window.HomerPublishTheme=applyTheme;}
   const source = document.currentScript?.src || new URL('/assets/js/option-picker.js', location.href).href;
   const css = document.createElement('link');
   css.rel = 'stylesheet';
   css.href = new URL('../css/option-picker.css?v=20260917-r8', source).href;
   document.head.append(css);
+  const surfaces=document.createElement('link');surfaces.rel='stylesheet';surfaces.href=new URL('../css/surface-controls.css',source).href;document.head.append(surfaces);
+  const overlays=document.createElement('link');overlays.rel='stylesheet';overlays.href=new URL('../css/overlay-system.css',source).href;document.head.append(overlays);
+  const refinements=document.createElement('link');refinements.rel='stylesheet';refinements.href=new URL('../css/dialog-refinement.css',source).href;document.head.append(refinements);
   let active = null;
   function el(tag, className, text) {
     const node = document.createElement(tag);
@@ -29,16 +41,21 @@
     const title = el('h2', '', labelFor(select));
     title.id = 'homer-option-picker-title';
     const close = el('button', 'homer-option-picker__close', '×');
-    close.type = 'button'; close.setAttribute('aria-label', '关闭选项');
+    close.type = 'button'; close.setAttribute('aria-label', '取消');
     head.append(title, close);
     const search = el('input', 'homer-option-picker__search');
     search.type = 'search'; search.placeholder = '搜索选项';
     search.setAttribute('aria-label', '搜索选项');
     const list = el('div', 'homer-option-picker__list');
+    const groupsBar = el('nav', 'homer-option-picker__groups');
+    groupsBar.setAttribute('aria-label', '选项分组');
+    let selectedGroup = null;
     list.setAttribute('role', 'group'); list.setAttribute('aria-label', '可选项');
     const status = el('p', 'homer-option-picker__status');
     status.setAttribute('role', 'status');
     const footer = el('footer', 'homer-option-picker__footer');
+    footer.hidden = !select.multiple;
+    dialog.classList.toggle('is-multiple', select.multiple);
     const cancel = el('button', '', '取消'); cancel.type = 'button';
     footer.append(cancel);
     const pending = new Set(Array.from(select.selectedOptions));
@@ -56,10 +73,22 @@
     function render() {
       list.replaceChildren();
       const query = search.value.trim().toLocaleLowerCase();
+      const groups = Array.from(select.querySelectorAll('optgroup'));
+      search.hidden = select.options.length <= 8 && groups.length < 2;
+      if (selectedGroup && !groups.includes(selectedGroup)) selectedGroup = null;
+      groupsBar.replaceChildren(); groupsBar.hidden = groups.length < 2;
+      if (groups.length > 1) {
+        for (const group of [null, ...groups]) {
+          const count = group ? group.querySelectorAll('option:not([hidden])').length : Array.from(select.options).filter(o=>!o.hidden).length;
+          const tab = el('button', '', `${group?.label || '全部'} ${count}`);tab.type='button';
+          tab.setAttribute('aria-pressed', String(selectedGroup === group));
+          tab.addEventListener('click', () => {selectedGroup=group;render();list.scrollTop=0;groupsBar.querySelector('[aria-pressed="true"]')?.focus({preventScroll:true});});groupsBar.append(tab);
+        }
+      }
       let count = 0; let lastGroup = null;
       Array.from(select.options).forEach(option => {
-        if (option.hidden || !option.text.toLocaleLowerCase().includes(query)) return;
         const group = option.parentElement?.tagName === 'OPTGROUP' ? option.parentElement : null;
+        if (option.hidden || (selectedGroup && group!==selectedGroup) || !`${group?.label || ''} ${option.text}`.toLocaleLowerCase().includes(query)) return;
         if (group && group !== lastGroup) list.append(el('h3', 'homer-option-picker__group', group.label));
         lastGroup = group;
         const button = el('button', 'homer-option-picker__option'); button.type = 'button';
@@ -78,8 +107,9 @@
         list.append(button); count++;
       });
       status.textContent = count ? `${count} 个选项` : (select.options.length ? '没有匹配的选项，试试其他关键词' : '暂无可选项');
+      status.classList.toggle('is-empty', count === 0);
     }
-    dialog.append(head, search, list, status, footer);
+    dialog.append(head, search, groupsBar, list, status, footer);
     document.body.append(dialog); active = { dialog, select };
     const observer = new MutationObserver(render);
     observer.observe(select, { childList: true, subtree: true, characterData: true, attributes: true });
@@ -110,6 +140,7 @@
     render(); dialog.showModal();
     // Focus the current item without summoning the Android keyboard on every open.
     (list.querySelector('[aria-checked="true"]:not(:disabled)') || close).focus({ preventScroll: true });
+    list.querySelector('[aria-checked="true"]')?.scrollIntoView({ block: 'nearest' });
     return dialog;
   }
   function selectTarget(event) {

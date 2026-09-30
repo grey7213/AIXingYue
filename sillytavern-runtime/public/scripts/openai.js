@@ -1621,8 +1621,8 @@ export async function prepareOpenAIMessages({
  * @param {boolean?} [options.quiet=false] Suppress toast messages
  */
 export function tryParseStreamingError(response, decoded, { quiet = false } = {}) {
-    try {
-        const data = JSON.parse(decoded);
+    let data;
+    try { data = JSON.parse(decoded); } catch { return; }
 
         if (!data) {
             return;
@@ -1635,8 +1635,9 @@ export function tryParseStreamingError(response, decoded, { quiet = false } = {}
         // if trying to fix "[object Object]" displayed to users, start here
 
         if (data.error) {
-            !quiet && toastr.error(data.error.message || response.statusText, 'Chat Completion API');
-            throw new Error(data);
+            const error = generationFailure(data, response.status);
+            !quiet && toastr.error(error.message, '生成失败');
+            throw error;
         }
 
         if (data.message) {
@@ -1648,9 +1649,6 @@ export function tryParseStreamingError(response, decoded, { quiet = false } = {}
             !quiet && toastr.error(data.detail?.error?.message || response.statusText, 'Chat Completion API');
             throw new Error(data);
         }
-    } catch {
-        // No JSON. Do nothing.
-    }
 }
 
 /**
@@ -3047,20 +3045,40 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
     }
 
     const model = getChatCompletionModel(oai_settings);
-    const { generate_data, stream, canMultiSwipe } = await createGenerationParameters(oai_settings, model, type, messages, { jsonSchema });
-    await eventSource.emit(event_types.CHAT_COMPLETION_SETTINGS_READY, generate_data);
+    const diagnostic = beginDiagnostic(model, type);
+    try { requireAvailableModel(model); }
+    catch (error) { finishDiagnostic(diagnostic, error); throw error; }
+    let parameters;
+    try {
+        parameters = await createGenerationParameters(oai_settings, model, type, messages, { jsonSchema });
+        await eventSource.emit(event_types.CHAT_COMPLETION_SETTINGS_READY, parameters.generate_data);
+    } catch (cause) {
+        const error = cause.name === 'AbortError' ? cause : generationFailure({}, 400);
+        finishDiagnostic(diagnostic, error);
+        throw error;
+    }
+    const { generate_data, stream, canMultiSwipe } = parameters;
 
     const generate_url = '/api/backends/chat-completions/generate';
-    const response = await fetch(generate_url, {
+    let response;
+    try { response = await fetch(generate_url, {
         method: 'POST',
         body: JSON.stringify(generate_data),
         headers: getRequestHeaders(),
         signal: signal,
-    });
+    }); } catch (cause) {
+        const error = cause.name === 'AbortError' ? cause : generationFailure({ error: { code: 'HM-GNET' } });
+        finishDiagnostic(diagnostic, error);
+        if (error.name !== 'AbortError') toastr.error(error.message, '生成失败');
+        throw error;
+    }
 
     if (!response.ok) {
-        tryParseStreamingError(response, await response.text());
-        throw new Error(`Got response status ${response.status}`);
+        const payload = await response.json().catch(() => ({}));
+        const error = generationFailure(payload, response.status);
+        finishDiagnostic(diagnostic, error);
+        toastr.error(error.message, '生成失败');
+        throw error;
     }
     if (stream) {
         const eventStream = getEventSourceStream();
@@ -3071,11 +3089,15 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
             const swipes = [];
             const toolCalls = [];
             const state = { reasoning: '', images: [], signature: '', toolSignatures: {} };
-            while (true) {
+            let completed = false;
+            try { while (true) {
                 const { done, value } = await reader.read();
-                if (done) return;
+                if (done) {
+                    if (!completed) throw generationFailure({}, 502);
+                    break;
+                }
                 const rawData = value.data;
-                if (rawData === '[DONE]') return;
+                if (rawData === '[DONE]') { completed = true; break; }
                 tryParseStreamingError(response, rawData);
                 const parsed = JSON.parse(rawData);
 
@@ -3088,21 +3110,48 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
                 }
 
                 ToolManager.parseToolCalls(toolCalls, parsed, state.toolSignatures);
+                observeDiagnostic(diagnostic, parsed, text);
+                if (parsed.choices?.some(choice => choice.finish_reason)) completed = true;
 
                 yield { text, swipes: swipes, logprobs: parseChatCompletionLogprobs(parsed), toolCalls: toolCalls, state: state };
             }
+            if (!text.trim() && !toolCalls.length && !state.images.length) throw generationFailure({}, 204);
+            finishDiagnostic(diagnostic);
+            } catch (cause) {
+                const error = cause.name === 'AbortError' || cause.code ? cause : generationFailure({ error: { code: 'HM-GNET' } });
+                finishDiagnostic(diagnostic, error);
+                if (error.name !== 'AbortError') toastr.error(error.message, '生成失败');
+                throw error;
+            } finally {
+                if (diagnostic.status === 'generating') finishDiagnostic(diagnostic, new DOMException('Cancelled', 'AbortError'));
+                // A provider that keeps its SSE socket open must not hold UI
+                // error recovery hostage while cancellation propagates upstream.
+                void reader.cancel().catch(() => {});
+                reader.releaseLock();
+            }
         };
     } else {
-        const data = await response.json();
+        let data;
+        try { data = await response.json(); }
+        catch (cause) {
+            const error = cause.name === 'AbortError' ? cause : generationFailure({}, 502);
+            finishDiagnostic(diagnostic, error); throw error;
+        }
+        observeDiagnostic(diagnostic, data, data.choices?.[0]?.message?.content || '');
 
         checkQuotaError(data);
         checkModerationError(data);
 
         if (data.error) {
-            const message = data.error.message || response.statusText || t`Unknown error`;
-            toastr.error(message, t`API returned an error`);
-            throw new Error(message);
+            const error = generationFailure(data, response.status);
+            finishDiagnostic(diagnostic, error);
+            toastr.error(error.message, '生成失败');
+            throw error;
         }
+        if (!diagnostic.output_chars && !data.choices?.[0]?.message?.tool_calls?.length) {
+            const error = generationFailure({}, 204); finishDiagnostic(diagnostic, error); throw error;
+        }
+        finishDiagnostic(diagnostic);
 
         if (type !== 'quiet') {
             const logprobs = parseChatCompletionLogprobs(data);
@@ -7254,3 +7303,5 @@ export function initOpenAI() {
     $('#customize_additional_parameters').on('click', onCustomizeParametersClick);
     $('#openai_proxy_preset').on('change', onProxyPresetChange);
 }
+import { beginDiagnostic, observeDiagnostic, finishDiagnostic, generationFailure } from './homer-generation-diagnostics.mjs';
+import { requireAvailableModel } from './homer-model-gate.mjs';

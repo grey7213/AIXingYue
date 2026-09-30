@@ -1,5 +1,6 @@
 // Shared tools for the local snapshot and the live message list. Only rendered
 // messages are inspected: no character settings, worldbook or preset source.
+import { settingsPage } from './chat-settings-page.js';
 export function openChatTool(kind, { container, selector, isUser, title }) {
   document.querySelector('#homer-chat-tool')?.remove();
   const messages = [...container.querySelectorAll(selector)];
@@ -46,5 +47,7 @@ export function openChatTool(kind, { container, selector, isUser, title }) {
   const previous = document.activeElement;
   dialog.addEventListener('close', () => { dialog.remove(); if (previous?.isConnected) previous.focus({ preventScroll: true }); }, { once: true });
   dialog.addEventListener('click', event => { if (event.target === dialog) { const box = dialog.getBoundingClientRect(); if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) dialog.close(); } });
-  document.body.append(dialog); dialog.showModal(); close.focus();
+  settingsPage(dialog,{head,title:heading.textContent,close});
+  document.body.append(dialog); dialog.showModal();
+  (dialog.querySelector('input') || close).focus();
 }

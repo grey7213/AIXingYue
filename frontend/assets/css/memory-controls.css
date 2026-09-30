@@ -1,0 +1,53 @@
+/* Higher specificity than the host/plugin generic button grid. */
+html body dialog.stmb-popup.homer-settings-page{overflow:hidden!important}
+/* The settings page owns scrolling; the inherited popup body must not add another scroller. */
+html body dialog.stmb-popup.homer-settings-page :is(.popup-body,.popup-content){overflow:visible!important;max-height:none!important;height:auto!important;flex:none!important;width:100%!important}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-advanced-group .info-block{max-height:none!important;overflow:visible!important;padding:12px!important;background:var(--app-fill)!important;color:var(--app-text)!important;border:0!important;border-radius:12px!important}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-advanced-group .info-block:has(.homer-memory-actions){padding:0!important;background:transparent!important}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-advanced-group .info-block small{display:block;margin-bottom:8px;color:var(--app-muted)!important;opacity:1!important;font-size:12px!important}
+html body dialog.stmb-popup.homer-settings-page .homer-settings-page__content .homer-memory-actions{display:flex!important;flex-direction:column!important;align-items:stretch!important;gap:0!important;width:100%!important;max-width:none!important;padding:0!important;margin:0!important;white-space:normal!important}
+html body dialog.stmb-popup.homer-settings-page .homer-settings-page__content .homer-memory-actions>.menu_button{display:flex!important;align-items:center!important;justify-content:space-between!important;flex:none!important;width:100%!important;max-width:none!important;min-width:0!important;min-height:50px!important;height:auto!important;margin:0!important;padding:12px 4px!important;white-space:normal!important;word-break:normal!important;overflow-wrap:normal!important;border:0!important;border-bottom:1px solid var(--app-line)!important;border-radius:0!important;box-shadow:none!important;background:transparent!important;color:var(--app-text)!important;font-size:15px!important;line-height:1.5!important;text-align:left!important}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-actions>.menu_button::after{content:'›';color:var(--app-muted);font-size:22px;margin-left:12px}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-actions>.menu_button:last-child{border-bottom:0!important}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-actions>[id*=delete]{color:var(--app-danger)!important}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-advanced-group{padding:16px!important;margin:0 0 12px!important;border-radius:16px!important;background:var(--app-panel)!important;overflow:visible!important;max-height:none!important}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-advanced-group :is(h3,h4){font-size:14px!important;line-height:1.5!important;font-weight:600!important;margin:0 0 10px!important}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-layout,html body dialog.stmb-popup.homer-settings-page .homer-memory-tab{overflow:visible!important;max-height:none!important;height:auto!important}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-advanced-group :is(.stmb-section-title,.world_entry_form_control){max-height:none!important;overflow:visible!important}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-advanced-group>small{display:block;margin-bottom:10px;color:var(--app-muted)!important;opacity:1!important;font-size:12px!important}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-actions>.menu_button:focus-visible{outline:2px solid var(--app-accent)!important;outline-offset:-2px!important}
+
+/* R23: simple overview -> summarize / memories / settings, not a setup wizard. */
+html body dialog.stmb-popup.homer-settings-page .homer-memory-home{display:flex;flex-direction:column;gap:14px}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-tab[hidden]{display:none!important}
+html body dialog.stmb-popup.homer-settings-page :is(.homer-memory-home,.homer-memory-records) .homer-memory-note,
+html body dialog.stmb-popup.homer-settings-page .homer-memory-tab>.homer-memory-note{font-size:13px!important;line-height:1.6!important;color:var(--app-muted)!important;margin:0 2px 14px!important}
+html body dialog.stmb-popup.homer-settings-page :is(.homer-memory-quick,#homer-memory-auto-controls){background:var(--app-panel)!important;border-radius:16px;overflow:hidden;padding:0!important}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-row{display:grid!important;grid-template-columns:minmax(0,1fr) auto 12px;align-items:center;gap:10px;min-height:58px!important;width:100%!important;margin:0!important;padding:14px 16px!important;border:0!important;border-bottom:1px solid var(--app-line)!important;border-radius:0!important;background:transparent!important;color:var(--app-text)!important;text-align:left!important;font-size:15px!important;line-height:1.5!important;box-shadow:none!important}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-row:last-child{border-bottom:0!important}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-row small{font-size:12px!important;color:var(--app-muted)!important;max-width:140px;text-align:right;line-height:1.4!important}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-chevron{font-size:22px!important;color:var(--app-muted)!important}
+html body dialog.stmb-popup.homer-settings-page :is(.homer-memory-auto-toggle,.homer-memory-frequency){display:flex!important;justify-content:space-between;align-items:center;gap:16px;min-height:66px;margin:0!important;padding:14px 16px!important;font-size:15px!important;color:var(--app-text)!important}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-frequency{border-top:1px solid var(--app-line)}
+html body dialog.stmb-popup.homer-settings-page :is(.homer-memory-auto-toggle,.homer-memory-frequency) small{display:block;font-size:12px!important;line-height:1.5!important;color:var(--app-muted)!important;margin-top:4px}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-frequency>span:last-child{display:flex;align-items:center;gap:6px;flex:none;font-size:13px!important;color:var(--app-muted)!important}
+html body dialog.stmb-popup.homer-settings-page #stmb-auto-summary-interval{width:64px!important;min-height:44px!important;padding:8px!important;border:0!important;border-radius:8px!important;background:var(--app-fill)!important;color:var(--app-text)!important;text-align:center}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-auto-toggle input{appearance:none!important;flex:none;width:48px!important;height:30px!important;min-height:30px!important;border:0!important;border-radius:18px!important;background:var(--app-line)!important;position:relative;margin:0!important;box-shadow:none!important;cursor:pointer}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-auto-toggle input::after{content:'';position:absolute;width:24px;height:24px;top:3px;left:3px;background:#fff;border-radius:50%;box-shadow:0 1px 3px #0002}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-auto-toggle input:checked{background:var(--app-accent)!important}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-auto-toggle input:checked::after{left:21px}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-records{display:flex;flex-direction:column;gap:12px}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-record{display:block!important;width:100%!important;background:var(--app-panel)!important;color:var(--app-text)!important;padding:16px!important;margin:0!important;border:0!important;border-radius:14px!important;text-align:left!important;box-shadow:none!important}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-record strong{font-size:15px!important;font-weight:600!important;overflow-wrap:anywhere}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-record p{font-size:14px!important;line-height:1.6!important;color:var(--app-muted)!important;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;margin:8px 0!important;overflow-wrap:anywhere}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-record small{font-size:12px!important;color:var(--app-muted)!important}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-editor{display:flex;flex-direction:column;gap:14px}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-editor :is(input[type=text],input:not([type]),textarea){width:100%!important;padding:14px!important;line-height:1.6!important;font-size:15px!important;background:var(--app-panel)!important;color:var(--app-text)!important}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-editor textarea{min-height:280px!important;height:40dvh!important;resize:vertical}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-editor-actions{display:flex;gap:12px}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-editor button{min-height:48px!important;padding:12px 16px!important;border:0!important;border-radius:10px!important;background:var(--app-fill)!important;color:var(--app-text)!important;font-size:15px!important;box-shadow:none!important}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-editor-actions button{flex:1}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-editor .homer-memory-save{background:var(--app-accent)!important;color:var(--app-on-accent)!important}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-editor .homer-memory-delete{background:transparent!important;color:var(--app-danger)!important}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-delete-confirm{padding:12px;border:1px solid var(--app-line);border-radius:12px}
+html body dialog.stmb-popup.homer-settings-page .homer-memory-delete-confirm[hidden]{display:none!important}

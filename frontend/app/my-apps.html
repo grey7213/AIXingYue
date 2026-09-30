@@ -6,14 +6,15 @@
   <title>我的角色 · 惑梦（Homer）</title>
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png?v=20260901-persistent-pages">
   <link rel="icon" href="/favicon.ico?v=20260901-persistent-pages">
-  <script src="/assets/vendor/tailwindcss-browser.js?v=20260917-r8"></script>
+  <link rel="stylesheet" href="/assets/css/utilities.css?v=20260925-r25">
   <link rel="stylesheet" href="/app/assets/css/app.css?v=20260917-r8">
   <script type="module" src="/app/assets/js/my-apps.js?v=20260917-r8"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
   <link rel="stylesheet" href="/assets/css/app-design.css?v=20260917-r8">
+  <link rel="stylesheet" href="/assets/css/tavo-reference.css?v=20260918-r12">
   <script defer src="/assets/js/option-picker.js?v=20260917-r8"></script>
 </head>
-<body class="min-h-screen">
+<body class="min-h-screen ref-role-library">
   <div class="xy-stars-bg"></div>
 
   <div class="app-shell" x-data="myAppsPage()" x-cloak>
@@ -21,9 +22,10 @@
 
     <main class="app-main">
       <header class="app-topbar">
+        <a class="ref-library-back" href="/app/workshop.html" aria-label="返回创作工坊"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="m15 4-8 8 8 8"/></svg></a>
         <h1 x-text="myText('topbar_title', '我的角色')">我的角色</h1>
         <div class="grow"></div>
-        <a href="/app/create.html" class="xy-btn xy-btn-primary text-sm" x-text="myText('new_role_text', '＋ 新建角色')">＋ 新建角色</a>
+        <a href="/app/create.html" class="xy-btn xy-btn-primary text-sm" x-text="myText('new_role_text', '＋ 新建')">＋ 新建</a>
       </header>
 
       <template x-if="toast">
@@ -31,49 +33,61 @@
       </template>
 
       <div class="max-w-6xl mx-auto app-page-pad">
+        <div class="ref-library-search">
+          <label><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="10" cy="10" r="6.5"/><path d="m15 15 6 6"/></svg><input type="search" x-model="query" placeholder="搜索角色" aria-label="搜索我的角色"></label>
+          <select x-model="visibility" aria-label="角色公开状态"><option value="all">全部</option><option value="public">公开</option><option value="private">私密</option></select>
+        </div>
+        <p class="ref-library-error" role="alert" x-show="loadError"><span x-text="loadError"></span> <button type="button" @click="loadApps" :disabled="loading">重试</button></p>
         <div x-show="loading && !apps.length" class="flex justify-center py-24"><div class="xy-loading"></div></div>
-        <div x-show="!loading && apps.length === 0" class="xy-glass p-10 text-center text-violet-200/70">
+        <div x-show="!loading && !loadError && apps.length === 0" class="xy-glass p-10 text-center text-violet-200/70">
           <img src="/assets/img/apk/empty_view.webp?v=20260901-persistent-pages" class="w-28 mx-auto opacity-60 mb-4">
           <p class="text-sm mb-4" x-text="emptyText('my_apps_empty_title', '还没有自己创建的角色')">还没有自己创建的角色</p>
           <a href="/app/create.html" class="xy-btn xy-btn-primary text-sm" x-text="emptyText('my_apps_cta_text', '马上去创建')">马上去创建</a>
         </div>
 
-        <div class="grid md:grid-cols-2 xl:grid-cols-3 gap-5" x-show="apps.length">
-          <template x-for="app in apps" :key="app.id">
-            <article class="xy-glass overflow-hidden">
-              <div class="aspect-[16/9] bg-black/30">
+        <p class="ref-library-empty" role="status" x-show="apps.length && !filteredApps.length">没有匹配的角色，试试其他名字或标签。</p>
+        <div class="ref-library-list" x-show="filteredApps.length">
+          <template x-for="app in filteredApps" :key="app.id">
+            <article class="ref-library-row">
+              <a class="ref-library-cover" :href="`/app/create.html?id=${encodeURIComponent(app.id)}`" :aria-label="`编辑${app.name || '未命名角色'}`">
                 <img :src="app.cover || app.icon || '/assets/img/apk/avatar.webp?v=20260901-persistent-pages'" class="w-full h-full object-cover" alt="" onerror="this.src='/assets/img/apk/avatar.webp?v=20260901-persistent-pages'">
-              </div>
-              <div class="p-5">
+              </a>
+              <div class="ref-library-copy">
                 <div class="flex items-start gap-3">
                   <div class="flex-1 min-w-0">
-                    <h2 class="font-bold text-lg truncate" x-text="app.name || myText('unnamed_role', '未命名角色')"></h2>
+                    <h2><a :href="`/app/create.html?id=${encodeURIComponent(app.id)}`" x-text="app.name || myText('unnamed_role', '未命名角色')"></a></h2>
                     <p class="text-sm text-slate-400 line-clamp-2 mt-1" x-text="app.description || app.summary || myText('summary_fallback', '暂无简介')"></p>
                   </div>
                 </div>
-                <div class="flex flex-wrap gap-2 mt-4">
+                <div class="ref-library-meta">
+                  <span x-text="app.is_public === false ? '私密' : '公开'"></span>
                   <template x-for="tag in (app.tags || []).slice(0, 4)" :key="tag">
-                    <span class="chip text-xs" x-text="tag"></span>
+                    <span x-text="tag"></span>
                   </template>
                 </div>
-                <div class="flex gap-2 mt-5">
-                  <a class="xy-btn xy-btn-primary text-sm flex-1 text-center" :href="`/app/character.html?id=${encodeURIComponent(app.id)}`" x-text="myText('detail_text', '详情')">详情</a>
-                  <button class="xy-btn xy-btn-ghost text-sm" @click="edit(app)" x-text="myText('edit_text', '编辑')">编辑</button>
-                  <button class="xy-btn xy-btn-ghost text-sm" @click="remove(app)" x-text="myText('delete_text', '删除')">删除</button>
-                </div>
               </div>
+              <button type="button" class="ref-library-more" @click="openActions(app)" :aria-label="`${app.name || '未命名角色'}的操作`"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/></svg></button>
             </article>
           </template>
         </div>
       </div>
     </main>
 
+    <dialog class="ref-library-actions" x-ref="actions" aria-labelledby="library-actions-title" @click="if ($event.target === $el) $el.close()">
+      <h2 id="library-actions-title" x-text="actionApp?.name || '角色操作'"></h2>
+      <a :href="`/app/create.html?id=${encodeURIComponent(actionApp?.id || '')}`">编辑角色</a>
+      <a :href="`/app/character.html?id=${encodeURIComponent(actionApp?.id || '')}`">查看详情</a>
+      <button type="button" @click="$refs.actions.close();edit(actionApp)">发布新版本</button>
+      <button type="button" class="is-danger" @click="$refs.actions.close();remove(actionApp)">删除角色</button>
+      <button type="button" @click="$refs.actions.close()">取消</button>
+    </dialog>
+
     <template x-if="editing">
-      <div class="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-        <div class="xy-glass w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto">
+      <div class="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4" @keydown.escape.window="if (!saving) editing = null">
+        <div class="xy-glass ref-version-editor w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto" role="dialog" aria-modal="true" aria-label="发布角色新版本">
           <div class="flex items-center justify-between mb-5">
-            <h2 class="text-xl font-bold" x-text="myText('edit_modal_title', '编辑角色')">编辑角色</h2>
-            <button class="xy-btn xy-btn-ghost text-sm" @click="editing = null" x-text="myText('close_text', '关闭')">关闭</button>
+            <h2 class="text-xl font-bold">发布角色新版本</h2>
+            <button class="xy-btn xy-btn-ghost text-sm" @click="editing = null" :disabled="saving" aria-label="关闭">关闭</button>
           </div>
           <div class="space-y-4">
             <div>

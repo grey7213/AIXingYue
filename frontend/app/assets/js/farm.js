@@ -109,7 +109,8 @@ function farmPage() {
     friendsMode: 'empty',
     friendsMessage: '',
     seeds: BASE_SEEDS.map(item => ({ ...item })),
-    coins: 0,
+    get coins() { return this.points; },
+    unifiedBalance: false,
     xp: 0,
     energy: 0,
     energyMax: 5,
@@ -213,8 +214,10 @@ function farmPage() {
       this.nowMs = Date.now() + this.serverOffsetMs;
       if (raw.account_balance) this.applyCredits(raw.account_balance);
       else if (profile.points != null) this.points = intValue(profile.points, this.points);
-      // 农场币是独立货币，与账号积分分开显示。
-      this.coins = intValue(profile.coins ?? profile.farm_coins, this.coins);
+      // Do not pretend that an old independent-currency server has been migrated.
+      this.unifiedBalance = !!raw.account_balance && profile.points != null
+        && intValue(profile.points, -1) === intValue(profile.coins, -2);
+      if (!this.unifiedBalance) this.loadError = '农场积分服务需要更新，暂不能种植或收获。账号积分不受影响，请联系管理员。';
       this.xp = intValue(profile.xp ?? profile.experience, this.xp);
       this.energy = intValue(profile.energy, this.energy);
       this.energyMax = intValue(profile.energy_max ?? raw.energy_max, 5);
@@ -362,7 +365,7 @@ function farmPage() {
     plotActionHint(plot) {
       if (plot.locked) return `连续活跃 ${plot.unlockDays} 天后开放`;
       if (plot.empty) return '选择一种种子开始种植';
-      if (plot.ready) return '作物已经成熟，收获可获得农场币和经验';
+      if (plot.ready) return '作物已经成熟，收获可增加账号积分和经验';
       if (plot.watered) return `已浇水 · 还需 ${this.plotStatus(plot)}`;
       return `消耗 1 体力浇水，可缩短剩余成熟时间 20%`;
     },
@@ -392,7 +395,7 @@ function farmPage() {
       const plot = this.seedPlot;
       if (!plot || this.busy) return;
       if (this.coins < seed.cost) {
-        this.showToast('农场币不足，先收获已有作物吧', 'error');
+        this.showToast('账号积分不足，先收获已有作物吧', 'error');
         return;
       }
       await this.runAction('plant', plot.plotNo, () => api.farmPlant(plot.plotNo, seed.apiKind, makeIdempotencyKey(`plant-${plot.plotNo}-${seed.apiKind}`)), `${seed.name}已经种下`);
@@ -421,6 +424,7 @@ function farmPage() {
     },
 
     async runAction(action, plotNo, request, fallbackMessage) {
+      if (!this.unifiedBalance) { this.showToast('农场积分服务尚未更新，此操作没有提交', 'error'); return; }
       this.busy = true;
       this.activePlotNo = plotNo;
       try {
@@ -440,7 +444,7 @@ function farmPage() {
         } else {
           this.showToast(data.message || fallbackMessage, 'success');
         }
-        if (action === 'harvest') {
+        if (['plant', 'harvest', 'steal'].includes(action)) {
           const refreshed = await Promise.allSettled([api.credits(), api.rewards(), api.profile()]);
           if (refreshed[0].status === 'fulfilled') this.applyCredits(refreshed[0].value);
           if (refreshed[1].status === 'fulfilled') this.applyDailyMeta(refreshed[1].value);

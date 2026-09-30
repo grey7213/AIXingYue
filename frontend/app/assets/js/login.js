@@ -53,9 +53,14 @@ function resetPassword(email, password, code) {
 }
 
 function loginPage() {
+  // Keep native controllers out of Alpine's reactive proxy.
+  let sessionProbe = null;
   return {
     view: 'login',
     loading: false,
+    loginError: '',
+    localServer: location.hostname.endsWith('.trycloudflare.com') || (location.protocol === 'http:' && /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(location.hostname)),
+    serverAddress: location.origin,
     toast: null,
     toastTimer: null,
     loginForm: { email: '', password: '' },
@@ -74,12 +79,19 @@ function loginPage() {
       // 再向服务端确认。若服务端不再认可（401），清理本地标记，
       // 避免登录页和 /app/ 之间循环跳转。
       if (isLoggedIn()) {
+        const probe = new AbortController();
+        sessionProbe = probe;
+        const timer = setTimeout(() => probe.abort(), 8000);
         try {
-          await api.profile();
+          await api.profile({ signal: probe.signal });
+          if (probe.signal.aborted) return;
           location.replace(safeNextPath());
           return;
         } catch (error) {
-          if (error instanceof ApiError && error.code === 401) clearAuth();
+          if (!probe.signal.aborted && error instanceof ApiError && error.code === 401) clearAuth();
+        } finally {
+          clearTimeout(timer);
+          if (sessionProbe === probe) sessionProbe = null;
         }
       }
       this.loadSiteSettings();
@@ -109,17 +121,26 @@ function loginPage() {
     },
 
     async doLogin() {
+      if (this.loading) return;
+      sessionProbe?.abort();
       this.loading = true;
+      this.loginError = '';
+      const controller = new AbortController();
+      let timedOut = false;
+      const timer = setTimeout(() => { timedOut = true; controller.abort(); }, 8000);
       try {
-        const r = await api.login(this.loginForm.email.trim(), this.loginForm.password);
+        const r = await api.login(this.loginForm.email.trim(), this.loginForm.password, { signal: controller.signal });
+        if (timedOut) throw new Error('登录超时');
         const token = (r && (r.data || r));
         if (typeof token !== 'string') throw new Error(this.authText('login_invalid_response_text', '登录响应无效'));
         setToken(token);
         this.showToast(this.authText('login_success_text', '登录成功'), 'success');
         setTimeout(() => this.goNext(), 600);
       } catch (err) {
-        this.showToast(err.message || this.authText('login_failed_text', '登录失败'), 'error');
-      } finally { this.loading = false; }
+        this.loginError = timedOut
+          ? (this.localServer ? '连接电脑测试服务超时。请确认手机能访问下方地址，再点登录重试；没有自动重发。' : '登录请求超时，请检查网络后重试。')
+          : (err.code === 0 && this.localServer ? '无法连接电脑测试服务。登录页面在手机内置，并不代表已连上电脑。' : err.message || this.authText('login_failed_text', '登录失败'));
+      } finally { clearTimeout(timer); this.loading = false; }
     },
 
     async sendCode() {

@@ -6,7 +6,7 @@
   <title>积分充值 · 惑梦（Homer）</title>
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png?v=20260901-persistent-pages">
   <link rel="icon" href="/favicon.ico?v=20260901-persistent-pages">
-  <script src="/assets/vendor/tailwindcss-browser.js?v=20260917-r8"></script>
+  <link rel="stylesheet" href="/assets/css/utilities.css?v=20260925-r25">
   <link rel="stylesheet" href="/app/assets/css/app.css?v=20260917-r8">
   <link rel="stylesheet" href="/app/assets/css/rewards-payment.css?v=20260917-r8">
   <script type="module" src="/app/assets/js/hub-pages.js?v=20260917-r8"></script>
@@ -22,6 +22,7 @@
     <aside class="app-sidebar" data-app-sidebar></aside>
     <main class="app-main">
       <header class="app-topbar">
+        <a href="/app/me.html" class="profile-topbar__back" aria-label="返回我的">‹</a>
         <h1 x-text="rewardsText('page_title', '积分充值')">积分充值</h1>
         <div class="grow"></div>
         <div class="flex gap-2">
@@ -71,8 +72,8 @@
             <p class="rw-redeem__note" x-text="paymentNote()"></p>
             <button class="xy-btn xy-btn-ghost w-full justify-center mt-3" x-show="aifadianAvailable()" @click="openAifadian">前往爱发电购买卡密</button>
             <div class="rw-redeem__row">
-              <input class="xy-input flex-1 uppercase font-mono" x-model="redeemInput" @keydown.enter="redeemNow" :placeholder="depositText('redeem_placeholder', 'XY-XXXX-XXXX-XXXX-XXXX')">
-              <button class="xy-btn xy-btn-ghost shrink-0" @click="redeemNow" :disabled="busy">兑换卡密</button>
+              <input class="xy-input flex-1 uppercase font-mono" x-model="redeemInput" :disabled="busy || !paymentAvailable()" @keydown.enter="redeemNow" aria-label="兑换卡密" :placeholder="depositText('redeem_placeholder', 'XY-XXXX-XXXX-XXXX-XXXX')">
+              <button class="xy-btn xy-btn-ghost shrink-0" @click="redeemNow" :disabled="busy || !paymentAvailable() || !redeemInput.trim()" x-text="busy ? '兑换中…' : '兑换卡密'">兑换卡密</button>
             </div>
           </aside>
         </div>
@@ -102,6 +103,7 @@
                 <h3 x-text="depositText('subscriptions_title', '月度订阅')">月度订阅</h3>
                 <span class="rw-rate" x-text="depositText('subscriptions_note', '订阅为月度额度包，额度用完后可继续兑换积分包。')"></span>
               </div>
+              <p class="rw-rate">可回复次数随模型与实际用量变化，套餐描述中的次数仅供参考；以当前模型的计费说明为准。</p>
               <div class="rw-plans rw-plans--subs">
                 <template x-for="sub in (deposit?.subscriptions || [])" :key="sub.id">
                   <button class="rw-plan" :class="{ 'ring-2 ring-violet-400': selectedPlan?.id === sub.id }" @click="selectPlan(sub)">

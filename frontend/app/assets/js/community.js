@@ -146,6 +146,8 @@ function communityPage() {
     editingWorkId: '',
     form: emptyWorkForm(),
     saving: false,
+    importing: false,
+    uploadingCover: false,
     contests: [],
     contest: null,
     rankings: [],
@@ -153,7 +155,7 @@ function communityPage() {
     contestForm: { title: '', content: '', reward: '', start_at: '', end_at: '' },
 
     async init() {
-      if (!await allowCommunityPreview()) return;
+      // Resource publishing belongs to the existing creator workspace, not admin preview.
       injectLayout('workshop');
       if (!requireAuth()) return;
       const cached = getCachedUser();
@@ -291,6 +293,33 @@ function communityPage() {
       try { return JSON.parse(raw); } catch { return raw; }
     },
 
+    async importWorkFile(event) {
+      const file=event.target.files?.[0];if(!file)return;
+      this.importing=true;
+      try {
+        if(file.size>8*1024*1024)throw Error('文件不能超过 8 MB');
+        const raw=await file.text();
+        if(this.form.type!=='ui_template')JSON.parse(raw);
+        this.form.content_text=raw;
+        if(!this.form.name.trim())this.form.name=file.name.replace(/\.[^.]+$/,'').slice(0,120);
+        this.showNotice('文件已读入，检查名称与公开范围后再发布');
+      } catch(error){this.showNotice(error instanceof SyntaxError?'文件不是有效的 JSON，请重新选择导出的世界书或预设文件':error.message);}
+      finally{this.importing=false;event.target.value='';}
+    },
+
+    async chooseWorkCover(event) {
+      const file=event.target.files?.[0];if(!file)return;
+      this.uploadingCover=true;
+      try {
+        if(!['image/png','image/jpeg','image/webp'].includes(file.type)||file.size>8*1024*1024)throw Error('请选择 8 MB 以内的 PNG、JPG 或 WebP 图片');
+        const image=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(Error('图片读取失败'));reader.readAsDataURL(file);});
+        const result=responseData(await api.uploadCover(image,file.name));
+        const url=result.url||result.path||result.cover_url;if(!url)throw Error('封面上传未完成，请重试');
+        this.form.cover_url=url;
+      }catch(error){this.showNotice(error.message);}
+      finally{this.uploadingCover=false;event.target.value='';}
+    },
+
     parseStructuredEntries(type) {
       const raw = this.form.content_text.trim();
       if (!raw) throw new Error(`${this.typeLabel(type)}至少需要一个条目`);
@@ -307,7 +336,7 @@ function communityPage() {
     },
 
     async submitWork() {
-      if (this.saving || !this.form.name.trim()) return;
+      if (this.saving || this.importing || this.uploadingCover || !this.form.name.trim()) return;
       if (this.editingWorkId && !this.form.version_name.trim()) {
         this.showNotice('发布新版本前请填写版本名称');
         return;

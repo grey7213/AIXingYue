@@ -6,7 +6,7 @@
   <title>角色编辑器 · 惑梦（Homer）</title>
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png?v=20260901-persistent-pages">
   <link rel="icon" href="/favicon.ico?v=20260901-persistent-pages">
-  <script src="/assets/vendor/tailwindcss-browser.js?v=20260917-r8"></script>
+  <link rel="stylesheet" href="/assets/css/utilities.css?v=20260925-r25">
   <link rel="stylesheet" href="/app/assets/css/app.css?v=20260917-r8">
   <link rel="stylesheet" href="/app/assets/css/worldbook-editor.css?v=20260917-r8">
   <link rel="stylesheet" href="/app/assets/css/card-experience-editor.css?v=20260917-r8">
@@ -14,6 +14,7 @@
   <script type="module" src="/app/assets/js/create.js?v=20260917-r8"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
   <link rel="stylesheet" href="/assets/css/app-design.css?v=20260917-r8">
+  <link rel="stylesheet" href="/assets/css/tavo-reference.css?v=20260918-r12">
   <script defer src="/assets/js/option-picker.js?v=20260917-r8"></script>
 </head>
 <body class="min-h-screen creator-editor-page">
@@ -22,7 +23,7 @@
   <div class="app-shell creator-editor" x-data="createPage()" x-cloak>
     <aside class="app-sidebar" data-app-sidebar></aside>
 
-    <main class="app-main creator-editor__main">
+    <main class="app-main creator-editor__main ref-creator">
       <!-- 顶部工具栏 -->
       <header class="editor-toolbar">
         <a href="/app/my-apps.html" class="editor-toolbar__btn" :title="creatorText('back_title', '返回管理')">
@@ -32,10 +33,12 @@
         <div class="editor-toolbar__identity">
           <span class="editor-toolbar__brand-mark" aria-hidden="true"></span>
           <div>
-            <strong x-text="editingId ? creatorText('edit_page_title', '编辑角色卡') : creatorText('create_page_title', '创作角色卡')"></strong>
+            <strong x-text="editingId ? '编辑角色' : '新建角色'"></strong>
             <small x-text="creatorText('page_subtitle', 'Character Card Editor')"></small>
           </div>
         </div>
+        <button type="button" class="editor-more-trigger" aria-label="角色卡操作" @click="creatorToolsOpen=!creatorToolsOpen" :aria-expanded="creatorToolsOpen">•••</button>
+        <div class="editor-toolbar__tools" role="group" aria-label="角色卡操作" x-show="creatorToolsOpen">
         <button class="editor-toolbar__btn is-danger" x-show="editingId" @click="remove" :title="creatorText('delete_title', '删除角色')">
           <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m-9 0v14a2 2 0 002 2h6a2 2 0 002-2V6"/></svg>
           <span x-text="creatorText('delete_text', '删除')"></span>
@@ -71,6 +74,7 @@
           </template>
           <span x-text="form.is_public ? creatorText('public_text', '公开') : creatorText('private_text', '私密')"></span>
         </button>
+        </div>
         <button class="editor-toolbar__primary" @click="submit" :disabled="loading || uploading || uploadingBg || uploadingMedia">
           <template x-if="!loading">
             <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 21v-8H7v8M7 3v5h8M5 21h14a2 2 0 002-2V7l-5-5H5a2 2 0 00-2 2v15a2 2 0 002 2z"/></svg>
@@ -100,11 +104,12 @@
 
         <div class="creator-editor__layout">
           <div class="editor-form">
+        <section x-show="activeSection === 'creator-basic'" aria-label="角色展示设置">
         <!-- 基础字段 -->
         <div class="editor-section-title" id="creator-basic" x-text="creatorText('basic_section_title', '基础设置')"></div>
         <div class="editor-field">
           <label class="editor-field__label" x-text="creatorText('name_label', '标题')"></label>
-          <input class="xy-input" x-model="form.name" maxlength="48" :placeholder="creatorText('name_placeholder', '给你的角色起个名字')">
+          <input class="xy-input" x-model="form.name" maxlength="48" aria-label="角色名字" :placeholder="creatorText('name_placeholder', '给你的角色起个名字')">
           <div class="editor-field__counter"><span x-text="(form.name || '').length"></span>/48</div>
         </div>
 
@@ -159,6 +164,8 @@
           <div class="editor-checkbox__text"><div class="editor-checkbox__title">参加当前赛事</div><div class="editor-checkbox__desc">公开发布时将当前版本报名正在进行的赛事；赛事结束或转为私密时不会接受投票。</div></div>
         </label>
 
+        </section>
+        <section x-show="activeSection === 'creator-media'" aria-label="角色视觉素材">
         <!-- 视觉素材 -->
         <div class="editor-section-title" id="creator-media" x-text="creatorText('media_section_title', '视觉素材')"></div>
         <div class="editor-row-2">
@@ -214,13 +221,15 @@
           </div>
         </div>
 
+        </section>
+        <section x-show="activeSection === 'creator-prompts'" aria-label="角色详细设定">
         <!-- 提示词 -->
         <div class="editor-section-title" id="creator-prompts" x-text="creatorText('prompt_section_title', '角色提示词')"></div>
 
         <div class="editor-field">
           <label class="editor-field__label" x-text="creatorText('description_label', '角色设定')"></label>
           <div class="editor-field__hint" x-text="creatorText('description_hint', '角色身份、性格、说话风格、互动边界。这是发给模型最重要的部分。支持 {{char}}/{{user}} 和 <% if %>/<%- getvar(&quot;x&quot;) %> 模板。')"></div>
-          <textarea class="xy-input" style="min-height:200px" x-model="form.description" :placeholder="creatorText('description_placeholder', '一个二十出头的少女剑客，话不多，却总能在关键时刻冒出几句温暖的玩笑...')"></textarea>
+          <textarea class="xy-input" style="min-height:200px" x-model="form.description" aria-label="角色设定" :placeholder="creatorText('description_placeholder', '一个二十出头的少女剑客，话不多，却总能在关键时刻冒出几句温暖的玩笑...')"></textarea>
         </div>
 
         <div class="editor-row-2">
@@ -255,6 +264,8 @@
         </div>
 
         <!-- Prompt Manager（折叠） -->
+        </section>
+        <section x-show="activeSection === 'creator-extensions'" aria-label="角色世界与扩展">
         <div class="editor-section-title" id="creator-extensions" x-text="creatorText('extensions_section_title', '世界与扩展')"></div>
         <div class="editor-group" :class="{ 'is-open': expand.promptManager }">
           <div class="editor-group__head" @click="expand.promptManager = !expand.promptManager">
@@ -761,6 +772,8 @@
           </div>
         </div>
 
+        </section>
+        <section x-show="activeSection === 'creator-settings'" aria-label="角色模型与语音">
         <div class="editor-section-title" id="creator-settings" x-text="creatorText('settings_section_title', '模型与发布设置')"></div>
         <div class="editor-group" :class="{ 'is-open': expand.sampling }">
           <div class="editor-group__head" @click="expand.sampling = !expand.sampling">
@@ -894,6 +907,7 @@
           <svg class="w-4 h-4 flex-shrink-0 mt-0.5 text-cyan-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01"/></svg>
           <div x-text="creatorText('bottom_note', '角色默认使用站点模型，API Key 由后台统一管理。保存后可以随时在「我的角色」里编辑或删除。')"></div>
         </div>
+        </section>
           </div>
 
           <aside class="creator-preview" :class="{ 'is-open': previewOpen }" aria-label="角色卡实时预览">

@@ -3,7 +3,13 @@
 
 <head>
     <title>对话 · 惑梦</title>
-    <base href="/">
+    <!-- Keep the preload scanner on the same module path as the live DOM.
+         A root base later changed by JS starts every stylesheet/script twice. -->
+    <base href="./">
+    <!-- Fetch the existing module graph while HTML and classic libraries parse.
+         modulepreload does not execute modules or create another runtime. -->
+    <link rel="modulepreload" href="script.js">
+    <link rel="modulepreload" href="lib.js">
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, viewport-fit=cover, initial-scale=1, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content">
     <meta name="apple-mobile-web-app-capable" content="yes">

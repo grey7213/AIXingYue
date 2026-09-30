@@ -4,6 +4,10 @@ import {canUseLocal,enableLocal,disableLocal,localEnabled,resetLocal} from './co
 
 export const social = async (path, method='GET', body) => {
   const response = await api.social(path, {method, ...(body === undefined ? {} : {body})});
+  // Older hosts return HTTP 200 with an empty generic placeholder for unknown routes.
+  // It is not an empty community, and must never be treated as a successful write.
+  if(response?.path && response?.data && Object.keys(response.data).length===0)
+    throw Error('社区服务尚未部署完成，请联系管理员。当前操作没有保存。');
   return response?.data ?? response;
 };
 export function element(tag, text='', attrs={}) {
@@ -53,6 +57,7 @@ export async function policy(bootstrap, required=false) {
 export async function authorizeCommunity() {
   if(new URLSearchParams(location.search).get('acceptance')==='local')await enableLocal();
   let data;try{data=await social('bootstrap');}catch(error){if(error.status===404||error.code===404)throw Error('社区服务暂未连接，请稍后重试或联系管理员。');throw error;}
+  if(typeof data.available!=='boolean')throw Error('社区服务尚未部署完成，请联系管理员。');
   if(!data.available)throw Error('社区暂时维护中，请稍后再试。');
   if(data.local)mountLocalBanner();
   if(!data.consented && !await policy(data,true))return null;
@@ -60,6 +65,20 @@ export async function authorizeCommunity() {
 }
 
 export function mountLocalBanner(){
+  // Only community data is local. Never label the real character editor,
+  // wallet, or other live features as "not uploaded".
+  const localSurface=document.querySelector('[data-local-slot],.community-admin');
+  if(localEnabled()&&!localSurface){
+    document.querySelectorAll('[data-local-acceptance]').forEach(node=>node.remove());
+    delete document.body.dataset.communityLocal;
+    return;
+  }
+  if(!localEnabled()){
+    document.querySelectorAll('[data-local-acceptance]').forEach(node=>node.remove());
+    delete document.body.dataset.communityLocal;
+    for(const a of document.querySelectorAll('[data-community-nav]'))if(a.querySelector('span'))a.querySelector('span').textContent='社区';
+    return;
+  }
   if(!localEnabled()||document.querySelector('[data-local-acceptance]'))return;
   document.body.dataset.communityLocal='true';
   styles();
@@ -69,6 +88,9 @@ export function mountLocalBanner(){
     body.append(button('本机社区管理',async()=>{const view=sheet('本机社区管理 · 不影响线上账号');const {mountCommunityAdmin}=await import('/assets/js/community-admin.js?v=20260917-r8');await mountCommunityAdmin(view.body);}),button('清空验收数据',async()=>{if(await confirmAction('清空这台设备上当前账号的本机社区验收数据？线上数据不会改变。')){await resetLocal();location.reload();}}),button('退出验收',()=>{disableLocal();location.replace('/app/explore.html');}));
   }));const root=document.querySelector('[data-local-slot]')||document.querySelector('main')||document.body;root.prepend(banner);
 }
+
+for(const event of ['storage','pageshow','homer:app-enter','homer:page-visible','homer:community-mode'])
+  window.addEventListener(event,()=>mountLocalBanner());
 
 // Create text nodes and verified anchors, never execute post HTML.
 export async function renderCommunityText(node,content) {
@@ -116,6 +138,7 @@ function renderItems(root,items,type='posts') {
 export async function mountCommunityPosts(root,scope='mine') {
   let cursor='',loading=false;root.replaceChildren();
   const list=element('section'),more=button('更多',()=>load(false));
+  more.hidden=true;
   root.append(list,more);
   async function load(reset){
     if(loading)return;loading=true;
@@ -164,6 +187,7 @@ export async function accountStatus() {
 export async function communityNotifications(root) {
   styles();root.replaceChildren();let kind='',cursor='',serial=0;
   const tabs=element('nav','',{class:'community-tabs','aria-label':'消息分类'}),list=element('section', '', {'aria-live':'polite'}),more=button('更多消息',()=>load(false));
+  more.hidden=true;
   for(const [key,label] of [['','全部'],['reply','回复'],['mention','提及'],['like','点赞'],['system','系统'],['report','举报'],['appeal','申诉']])tabs.append(button(label,()=>{kind=key;return load(true);},{'data-kind':key,'aria-pressed':key===kind}));
   root.append(tabs,button('全部标为已读',async()=>{await social('notifications','PUT',{all:true});await load(true);}),list,more);
   async function load(reset){
@@ -192,18 +216,18 @@ export async function installCommunityExtensions(active) {
     const settings=document.querySelector('.profile-settings__body');
     if(settings && !settings.querySelector('[data-community-settings]')){
     const section=element('section','',{'data-community-settings':'',class:'community-inline'});
-      section.append(element('h3','社区'),element('a','我的社区动态',{href:'/app/community-activity.html',class:'community-reference'}),element('a','社区消息',{href:'/app/community-messages.html',class:'community-reference'}),button('社区设置与行为规范',async()=>{if(await authorizeCommunity())await communitySettings();}),button('账号状态与申诉',accountStatus));
+      section.hidden=new URLSearchParams(location.search).get('panel')!=='settings';
+      section.append(element('h3','社区设置'),button('社区设置与行为规范',async()=>{if(await authorizeCommunity())await communitySettings();}),button('账号状态与申诉',accountStatus));
       if(localAdmin)section.append(element('a','本机交互验收（仅此设备）',{href:'/app/community.html?acceptance=local',class:'community-reference'}));
       settings.append(section);
     }
   }
   const path=location.pathname;
-  if(!['/app/favorites.html','/app/my-apps.html'].includes(path))return;
+  // Activity and drafts are already in My; character management stays focused.
+  if(path!=='/app/favorites.html')return;
   if(document.querySelector('[data-community-personal]'))return;
   const main=document.querySelector('main');if(!main)return;
   const section=element('nav','',{class:'community-inline','data-community-personal':'','aria-label':'内容分类'});
-  const isSaved=path.endsWith('favorites.html');
-  if(isSaved)section.append(element('a','角色卡',{href:'/app/favorites.html','aria-current':'page'}),element('a','社区帖子',{href:'/app/favorites.html?tab=community'}));
-  else section.append(element('a','我的社区动态与草稿',{href:'/app/community-activity.html',class:'community-reference'}));
+  section.append(element('a','角色卡',{href:'/app/favorites.html','aria-current':'page'}),element('a','社区帖子',{href:'/app/favorites.html?tab=community'}));
   const header=main.querySelector('header');if(header)header.after(section);else main.prepend(section);
 }

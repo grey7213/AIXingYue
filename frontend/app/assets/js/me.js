@@ -3,9 +3,20 @@ import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v
 import { clearPageCache, readPageCache, writePageCache } from '/app/assets/js/page-cache.js?v=20260917-r8';
 
 const ME_CACHE_SCOPE = 'me';
+import {readPreferences,writePreferences} from './recommendations.js';
+import {confirmAction} from '/assets/js/dialogs.js';
 
 function mePage() {
   return {
+    panel: ['settings','profile','persona','preferences'].includes(new URLSearchParams(location.search).get('panel')) ? new URLSearchParams(location.search).get('panel') : '',
+    preferences: {enabled:false,interests:[],dislikedTags:[],hiddenTags:[],signals:[]},interestDraft:'',hiddenDraft:'',dislikedDraft:'',
+    async savePreferences(){
+      const interests=this.interestDraft.split(/[,，\n]/).map(t=>t.trim()).filter(Boolean),hiddenTags=this.hiddenDraft.split(/[,，\n]/).map(t=>t.trim()).filter(Boolean),dislikedTags=this.dislikedDraft.split(/[,，\n]/).map(t=>t.trim()).filter(Boolean);
+      if([interests,hiddenTags,dislikedTags].some(tags=>tags.length>40||tags.some(t=>t.length>40))){this.showToast('每类最多填写 40 个标签，每个不超过 40 字','error');return;}
+      const next={...readPreferences(this.user),enabled:this.preferences.enabled,interests,hiddenTags,dislikedTags};
+      if(writePreferences(this.user,next)){this.preferences=readPreferences(this.user);this.showToast('偏好已保存，下次刷新推荐时生效','success');}else this.showToast('保存失败，请检查本机存储空间','error');
+    },
+    async resetRecommendations(){if(!await confirmAction('清除本机学习到的浏览和收藏偏好？你手动选择的兴趣和原始收藏不会删除。',{title:'重置推荐',confirmText:'清除学习记录'}))return;const next={...readPreferences(this.user),signals:[]};if(writePreferences(this.user,next)){this.preferences=next;this.showToast('学习记录已清除','success');}else this.showToast('清除失败，请重试','error');},
     user: null,
     points: 0,
     sidebarOpen: false,
@@ -21,6 +32,9 @@ function mePage() {
     persona: { name: '', description: '' },
     savingPersona: false,
     siteSettings: null,
+    adminVerified: false,
+    profileError: '',
+    profileRefreshing: false,
 
     async init() {
       injectLayout('me');
@@ -29,27 +43,45 @@ function mePage() {
       const cached = getCachedUser();
       if (cached) {
         this.user = cached;
+        this.preferences=readPreferences(cached);this.interestDraft=this.preferences.interests.join('，');this.hiddenDraft=this.preferences.hiddenTags.join('，');this.dislikedDraft=this.preferences.dislikedTags.join('，');
         this.syncProfileForm(cached);
         this.restoreSnapshot(cached);
       }
-      const [profileResult] = await Promise.allSettled([
-        api.profile(),
-        this.refreshPoints(),
-        this.loadPersona(),
-      ]);
-      if (profileResult.status === 'fulfilled') {
-        this.applyProfile(profileResult.value);
-      } else {
-        const err = profileResult.reason;
+      // Account authority must never wait for unrelated wallet/persona requests.
+      void this.refreshPoints();
+      void this.loadPersona();
+      await this.refreshProfile();
+    },
+
+    async refreshProfile() {
+      if (this.profileRefreshing) return;
+      this.profileRefreshing = true;
+      this.profileError = '';
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      try {
+        const response = await api.profile({ signal: controller.signal });
+        const profile = response?.data || response;
+        if (!profile?.id) throw new Error('账户资料无效');
+        this.applyProfile(profile);
+      } catch (err) {
+        this.adminVerified = false;
         if (err instanceof ApiError && err.code === 401) {
           clearAuth();
           location.replace('/app/login.html?next=' + encodeURIComponent(location.pathname));
+        } else {
+          this.profileError = '账户权限暂未确认，请重试。';
         }
+      } finally {
+        clearTimeout(timeout);
+        this.profileRefreshing = false;
       }
     },
 
     applyProfile(profile) {
       this.user = profile || null;
+      // Never grant a management entry from the persisted profile alone.
+      this.adminVerified = profile?.is_admin === true || profile?.is_env_admin === true || profile?.role === 'admin';
       if (profile) {
         this.syncProfileForm(profile);
         setCachedUser(profile);

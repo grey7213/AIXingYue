@@ -50,6 +50,7 @@ import {
   normalizeLorebookEntrySettings,
 } from "./addlore.js";
 import { autoCreateLorebook } from "./autocreate.js";
+import { createHomerMemoryAccess } from "./homerMemoryAccess.js";
 import {
   handleAutoSummaryMessageReceived,
   clearAutoSummaryState,
@@ -8433,10 +8434,12 @@ function initializeSettingsPopupSelect2(popupInstance = currentPopupInstance) {
   }, 0);
 }
 
-async function buildSettingsTemplateData({ includeSidePromptSets = false } = {}) {
+async function buildSettingsTemplateData({ includeSidePromptSets = false, includePrompt = false } = {}) {
   const settings = initializeSettings();
-  await SummaryPromptManager.firstRunInitIfMissing(settings);
-  const sceneData = await getSceneData();
+  // The overview only needs local settings and markers. Prompt files are loaded
+  // by the prompt editor / generation path, not on every settings entry.
+  if(includePrompt) await SummaryPromptManager.firstRunInitIfMissing(settings);
+  const sceneData = await getSceneData({ estimateTokens: !document.body.classList.contains('homer-runtime') });
   const sceneMarkers = getSceneMarkers();
 
   // Build Regex script options (Global, Scoped, Preset), include disabled too.
@@ -8619,7 +8622,7 @@ async function buildSettingsTemplateData({ includeSidePromptSets = false } = {})
         selectedProfile.prompt && selectedProfile.prompt.trim()
           ? selectedProfile.prompt
           : selectedProfile.preset
-            ? await SummaryPromptManager.getPrompt(selectedProfile.preset)
+            ? (includePrompt ? await SummaryPromptManager.getPrompt(selectedProfile.preset) : '')
             : getDefaultPrompt(),
     },
   };
@@ -8628,15 +8631,13 @@ async function buildSettingsTemplateData({ includeSidePromptSets = false } = {})
 /**
  * Show main settings popup
  */
-async function showSettingsPopup() {
+async function showSettingsPopup(options = {}) {
+  if (options.signal?.aborted || currentPopupInstance?.dlg?.open) return;
   const settings = initializeSettings();
-  try {
-    await reconcileCurrentManualGroupStloFilters(settings);
-  } catch (error) {
-    console.warn("STMemoryBooks: Failed to reconcile existing STLO character filters:", error);
-    toastr.warning(error?.message || String(error), "STMemoryBooks");
-  }
+  // Binding validation remains in the write/generation path; opening an overview
+  // must not wait for remote lorebooks or mutate their filters.
   const templateData = await buildSettingsTemplateData();
+  if (options.signal?.aborted) return;
 
   const content = DOMPurify.sanitize(settingsTemplate(templateData));
 
@@ -8727,6 +8728,7 @@ async function showSettingsPopup() {
     setupSettingsEventListeners(currentPopupInstance);
     populateInlineButtons();
     initializeSettingsPopupSelect2(currentPopupInstance);
+    options.onReady?.();
     await currentPopupInstance.show();
   } catch (error) {
     console.error("STMemoryBooks: Error showing settings popup:", error);
@@ -9944,7 +9946,22 @@ function createUI() {
  * Setup event listeners
  */
 function setupEventListeners() {
+  if(window.HomerMemoryBooks?.open){document.querySelector('#stmb-menu-item')?.setAttribute('data-homer-ready','true');return;}
   $(document).on("click", SELECTORS.menuItem, showSettingsPopup);
+  // The menu is inserted before asynchronous initialization finishes. The host
+  // must not dispatch a click until the delegated listener is actually installed.
+  document.querySelector('#stmb-menu-item')?.setAttribute('data-homer-ready', 'true');
+  window.HomerMemoryBooks = {
+    open: showSettingsPopup,
+    memories: createHomerMemoryAccess({
+      binding: () => initializeSettings().moduleSettings.manualModeEnabled
+        ? (getSceneMarkers()?.manualLorebook || null) : (chat_metadata?.[METADATA_KEY] || null),
+      chatKey: () => getStmbChatKey(), load: loadWorldInfo, save: saveWorldInfo,
+      writeLane: withLorebookWriteLanes,
+      changed: () => { void eventSource.emit(MEMORY_TIER_CACHE_REFRESH_EVENT); },
+    }),
+  };
+  window.dispatchEvent(new Event('homer:memory-ready'));
 
   eventSource.on(event_types.CHAT_CHANGED, handleChatChanged);
   eventSource.on(MEMORY_TIER_CACHE_REFRESH_EVENT, refreshMemoryTierMacroCache);
@@ -10898,6 +10915,8 @@ async function init() {
   if (hasBeenInitialized) return;
   hasBeenInitialized = true;
   console.log("STMemoryBooks: Initializing");
+  // Make local settings actions available before optional locale fetch/migration.
+  setupEventListeners();
   // Merge this extension's locale data into SillyTavern's current locale:
   // - Do not reinitialize ST i18n (host owns init)
   // - Load JSON for current locale if available, then ensure English fallback exists
@@ -11179,6 +11198,12 @@ async function showRegexSelectionPopup() {
 
 // Initialize when ready
 $(document).ready(() => {
+  // Embedded core-ready guarantees settings and extension modules are loaded.
+  // Long Memory need not wait for backgrounds/tokenizers and other APP_READY
+  // consumers, or the standalone two-second fallback, to register its actions.
+  if (document.documentElement.classList.contains('homer-embedded-runtime')) {
+    window.addEventListener('homer:runtime-core-ready', init, { once: true });
+  }
   if (eventSource && event_types.APP_READY) {
     eventSource.on(event_types.APP_READY, init);
   }

@@ -34,6 +34,7 @@ if (CSS.supports('selector(:has(*))')) {
 }
 
 export const INTERACTABLE_CONTROL_CLASS = 'interactable';
+let interactableQuery = interactableSelectors.join(',');
 export const CUSTOM_INTERACTABLE_CONTROL_CLASS = 'custom_interactable';
 
 export const NOT_FOCUSABLE_CONTROL_CLASS = 'not_focusable';
@@ -44,17 +45,27 @@ export const DISABLED_CONTROL_CLASS = 'disabled';
  * @type {MutationObserver}
  */
 const observer = new MutationObserver(mutations => {
+    const pending = new Set();
     mutations.forEach(mutation => {
         if (mutation.type === 'childList') {
-            mutation.addedNodes.forEach(handleNodeChange);
+            mutation.addedNodes.forEach(node => { if (node instanceof Element) pending.add(node); });
         }
         if (mutation.type === 'attributes') {
             const target = mutation.target;
             if (mutation.attributeName === 'class' && target instanceof Element) {
-                handleNodeChange(target);
+                pending.add(target);
             }
         }
     });
+    // A single fragment insertion produces records for both a parent and its
+    // descendants. Process each affected subtree once, synchronously, so keys
+    // work immediately without repeatedly rescanning the whole settings UI.
+    for (const node of pending) {
+        if (!node.isConnected) continue;
+        let parent = node.parentElement;
+        while (parent && !pending.has(parent)) parent = parent.parentElement;
+        if (!parent) handleNodeChange(node);
+    }
 });
 
 /**
@@ -88,6 +99,7 @@ function handleNodeChange(node) {
  */
 export function registerInteractableType(interactableSelector, { disabledByDefault = false, notFocusableByDefault = false } = {}) {
     interactableSelectors.push(interactableSelector);
+    interactableQuery = interactableSelectors.join(',');
 
     const interactables = document.querySelectorAll(interactableSelector);
 
@@ -109,7 +121,7 @@ export function registerInteractableType(interactableSelector, { disabledByDefau
  */
 export function isKeyboardInteractable(control) {
     // Check if this control matches any of the selectors
-    return interactableSelectors.some(selector => control.matches(selector));
+    return control.matches(interactableQuery);
 }
 
 /**
@@ -175,15 +187,19 @@ function initializeInteractables(element = document) {
  * @returns {HTMLElement[]} An array containing all the interactables that match the given selectors
  */
 function getAllInteractables(element) {
-    // Query each selector individually and combine all to a big array to return
-    return [].concat(...interactableSelectors.map(selector => Array.from(element.querySelectorAll(`${selector}`))));
+    // One selector-list query preserves the same union without duplicate nodes
+    // or thirty traversals for every DOM mutation.
+    return Array.from(element.querySelectorAll(interactableQuery));
 }
 
 /**
  * Function to apply scroll reset behavior to a container
  * @param {Element} container - The container
  */
+const scrollResetBound = new WeakSet();
 const applyScrollResetBehavior = (container) => {
+    if (scrollResetBound.has(container)) return;
+    scrollResetBound.add(container);
     container.addEventListener('focusout', (e) => {
         setTimeout(() => {
             const focusedElement = document.activeElement;

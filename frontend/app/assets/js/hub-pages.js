@@ -2,6 +2,7 @@ import { confirmAction, showMessage } from '/assets/js/dialogs.js?v=20260917-r8'
 import { api, requireAuth, getCachedUser, setCachedUser, clearAuth, ApiError } from '/app/assets/js/app-core.js?v=20260917-r8';
 import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260917-r8';
 import { readPageCache, writePageCache } from './page-cache.js';
+import { messagePreview } from '/assets/js/message-preview.js';
 
 async function loadUser(ctx) {
   if (!requireAuth()) return false;
@@ -88,7 +89,7 @@ export function favoritesPage() {
 
 export function historiesPage() {
   return {
-    user: null, points: 0, loading: false, conversations: [], siteSettings: null,
+    user: null, points: 0, loading: false, conversations: [], siteSettings: null, search: '',
     copyingId: '', deletingId: '', likingId: '', favoritingId: '',
     _listEpoch: 0,
     async init() {
@@ -97,7 +98,19 @@ export function historiesPage() {
       this.user = getCachedUser();
       const cached = readPageCache('histories', this.user);
       if (Array.isArray(cached?.list)) this.conversations = cached.list.map(item => this.normalizeConversation(item));
+      this._onVisible = () => {
+        const latest = readPageCache('histories', getCachedUser());
+        if (Array.isArray(latest?.list)) this.conversations = latest.list.map(item => this.normalizeConversation(item));
+        void this.loadList().catch(() => {});
+      };
+      window.addEventListener('homer:page-visible', this._onVisible);
+      window.addEventListener('pageshow', this._onVisible);
       await Promise.allSettled([loadSiteSettings(this), loadUser(this), this.loadList()]);
+    },
+    destroy() {
+      window.removeEventListener('homer:page-visible', this._onVisible);
+      window.removeEventListener('pageshow', this._onVisible);
+      ++this._listEpoch;
     },
     emptyText(key, fallback = '') { return emptyText(this, key, fallback); },
     appNavText(key, fallback = '') { return appNavText(this, key, fallback); },
@@ -112,7 +125,17 @@ export function historiesPage() {
       return c?.app_name || c?.title || this.chatText('unnamed_conversation', '未命名会话');
     },
     conversationPreview(c) {
-      return c?.last_message || c?.app_summary || this.chatText('continue_preview', '点击继续对话');
+      return messagePreview(c?.last_message || c?.app_summary) || this.chatText('continue_preview', '点击继续对话');
+    },
+    get filteredConversations() {
+      const q = this.search.trim().toLocaleLowerCase();
+      return this.conversations.filter(c => !q || `${this.conversationTitle(c)} ${this.conversationPreview(c)}`.toLocaleLowerCase().includes(q));
+    },
+    conversationDate(c) {
+      const raw = c.updated_at || c.created_at;
+      if (!raw) return '';
+      const d = new Date(typeof raw === 'number' && raw < 1e12 ? raw * 1000 : raw);
+      return Number.isNaN(d.getTime()) ? '' : d.toLocaleString('zh-CN', {month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
     },
     archiveLabel(c) {
       const count = Number(c?.archive_count || 1);
@@ -175,7 +198,7 @@ export function historiesPage() {
       this.loading = true;
       try {
         const r = await api.conversations();
-        if (epoch !== this._listEpoch) return;
+        if (epoch !== this._listEpoch || String(owner?.id || owner?.user_id || '') !== String(getCachedUser()?.id || getCachedUser()?.user_id || '')) return;
         this.conversations = (r?.data?.list || []).map(item => this.normalizeConversation(item));
         writePageCache('histories', owner, { list: this.conversations.slice(0, 100) });
       } finally { if (epoch === this._listEpoch) this.loading = false; }
@@ -258,15 +281,17 @@ export function workshopPage() {
       }
       // Local navigation and new-card tools do not depend on server statistics.
       this.ready = true;
-      await Promise.allSettled([loadSiteSettings(this), (async () => {
+      this._onVisible = () => { void this.refreshWorkshop(); };
+      window.addEventListener('homer:page-visible', this._onVisible);
+      await Promise.allSettled([loadSiteSettings(this), this.refreshWorkshop(), (async () => {
         const previousOwner = String(this.user?.id || this.user?.user_id || '');
         if (!await loadUser(this)) return;
         if (previousOwner !== String(this.user?.id || this.user?.user_id || '')) {
           this.myApps = []; this.myTotal = 0; this.appsLoaded = false; this.stats = null;
         }
-        await this.refreshWorkshop();
       })()]);
     },
+    destroy() { window.removeEventListener('homer:page-visible', this._onVisible); },
     async refreshWorkshop() {
       if (this.refreshing) return;
       const owner = getCachedUser();

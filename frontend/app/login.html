@@ -6,7 +6,7 @@
   <title>登录 · 惑梦（Homer）</title>
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png?v=20260901-persistent-pages">
   <link rel="icon" href="/favicon.ico?v=20260901-persistent-pages">
-  <script src="/assets/vendor/tailwindcss-browser.js?v=20260917-r8"></script>
+  <link rel="stylesheet" href="/assets/css/utilities.css?v=20260925-r25">
   <link rel="stylesheet" href="/app/assets/css/app.css?v=20260917-r8">
   <script type="module" src="/app/assets/js/login.js?v=20260917-r8"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
@@ -14,16 +14,13 @@
   <link rel="stylesheet" href="/assets/css/app-design.css?v=20260917-r8">
   <script defer src="/assets/js/option-picker.js?v=20260917-r8"></script>
 </head>
-<body class="min-h-screen bg-[#0a0420]">
+<body class="min-h-screen auth-page">
   <div class="xy-stars-bg"></div>
 
   <div class="min-h-screen flex items-center justify-center px-6 py-12 relative" x-data="loginPage()" x-cloak>
     <template x-if="toast">
       <div class="xy-toast" :class="`xy-toast-${toast.type}`" x-text="toast.message"></div>
     </template>
-
-    <div class="absolute -top-20 -right-20 w-96 h-96 rounded-full bg-violet-600/20 blur-3xl pointer-events-none"></div>
-    <div class="absolute -bottom-20 -left-20 w-96 h-96 rounded-full bg-fuchsia-600/15 blur-3xl pointer-events-none"></div>
 
     <div class="w-full max-w-md relative">
       <!-- LOGO + 标题 -->
@@ -33,11 +30,11 @@
         <p class="text-slate-400 text-sm" x-text="authText('brand_subtitle', '让想象 · 照进二次元')">让想象 · 照进二次元</p>
       </div>
 
-      <div class="xy-glass p-2 mb-6 flex">
-        <button @click="view='login'" class="flex-1 py-2.5 rounded-xl text-sm font-medium transition" :class="view==='login' ? 'bg-violet-500/30 text-white' : 'text-slate-400 hover:text-white'" x-text="authText('login_tab_label', '登录')">登录</button>
-        <button @click="view='register'" class="flex-1 py-2.5 rounded-xl text-sm font-medium transition" :class="view==='register' ? 'bg-violet-500/30 text-white' : 'text-slate-400 hover:text-white'" x-text="authText('register_tab_label', '注册')">注册</button>
-        <button @click="openReset()" class="flex-1 py-2.5 rounded-xl text-sm font-medium transition" :class="view==='reset' ? 'bg-violet-500/30 text-white' : 'text-slate-400 hover:text-white'" x-text="authText('reset_tab_label', '重置密码')">重置密码</button>
-      </div>
+      <nav class="auth-tabs" aria-label="账户操作">
+        <button @click="view='login'" :aria-pressed="view==='login'" x-text="authText('login_tab_label', '登录')">登录</button>
+        <button @click="view='register'" :aria-pressed="view==='register'" x-text="authText('register_tab_label', '注册')">注册</button>
+        <button @click="openReset()" :aria-pressed="view==='reset'" x-text="authText('reset_tab_label', '重置密码')">重置密码</button>
+      </nav>
 
       <!-- 登录 -->
       <div x-show="view==='login'" class="xy-glass p-7">
@@ -55,10 +52,16 @@
           </div>
           <button type="submit" class="xy-btn xy-btn-primary w-full" :disabled="loading">
             <span x-show="!loading" x-text="authText('login_button_text', '进入 惑梦（Homer）')">进入 惑梦（Homer）</span>
-            <span x-show="loading" class="xy-loading"></span>
+            <span x-show="loading">正在登录…</span>
           </button>
+          <p x-show="loginError" x-text="loginError" role="alert" aria-live="polite" class="text-sm leading-relaxed" style="color:var(--ui-text,#24262b)"></p>
         </form>
-        <p class="text-xs text-slate-500 mt-5 text-center" x-text="authText('login_hint', '用 APP 注册过的账号也可以直接登录')">用 APP 注册过的账号也可以直接登录</p>
+        <div x-show="localServer" class="text-sm leading-relaxed mt-5" style="color:var(--ui-text,#24262b)">
+          <p>电脑本地验收 · 请使用本地测试账号</p>
+          <p x-text="serverAddress" style="overflow-wrap:anywhere"></p>
+          <p>手机需能访问这台电脑。正式服账号不会自动同步到本地。</p>
+        </div>
+        <p x-show="!localServer" class="text-xs text-slate-500 mt-5 text-center" x-text="authText('login_hint', '用 APP 注册过的账号也可以直接登录')">用 APP 注册过的账号也可以直接登录</p>
       </div>
 
       <!-- 注册 -->

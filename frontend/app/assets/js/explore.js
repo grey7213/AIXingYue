@@ -1,6 +1,7 @@
 import { api, requireAuth, getCachedUser, setCachedUser, ApiError } from '/app/assets/js/app-core.js?v=20260917-r8';
 import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260917-r8';
 import { readPageCache, writePageCache } from '/app/assets/js/page-cache.js?v=20260917-r8';
+import { recommend,recordInterest,filterBlocked,watchPreferences } from './recommendations.js';
 
 const DEFAULT_PAGE_SIZE = 12;
 const INITIAL_RANDOM_SEED = Math.floor(Math.random() * 2147483647);
@@ -88,6 +89,8 @@ function explorePage() {
     _browsePageshowBound: false,
     _listEpoch: 0,
     _listAbortController: null,
+    _candidateCards: [],
+    _candidateFeatured: [],
 
     async init() {
       injectLayout(this.activeNav);
@@ -104,6 +107,11 @@ function explorePage() {
       const cached = getCachedUser();
       if (cached) this.user = cached;
       const restoredPersistentState = !restoredBrowseState && this.restorePersistentState(cached);
+      this._candidateCards = [...this.cards]; this._candidateFeatured = [...this.featuredPool];
+      this.applyPreferenceFilters();
+      this._stopPreferenceWatch = watchPreferences(cached, () => {
+        if (String(getCachedUser()?.id) === String(cached?.id)) this.applyPreferenceFilters();
+      });
 
       const accountPromise = (async () => {
         try {
@@ -138,6 +146,11 @@ function explorePage() {
     },
 
     setCategory(k) { this.activeCategory = k; this.syncAdvancedForm(); this.loadList(true); },
+    applyPreferenceFilters() {
+      const user=this.user||getCachedUser();
+      this.cards=this.activeSort==='random'&&!this.searchKeyword?recommend(user,this._candidateCards):filterBlocked(user,this._candidateCards);
+      this.featuredPool=filterBlocked(user,this._candidateFeatured);
+    },
     setSort(k) { this.activeSort = k; this.syncAdvancedForm(); this.loadList(true); },
     setRank(k) { this.activeRank = k; this.syncAdvancedForm(); this.loadList(true); },
     setZone(k) { this.activeZone = k === 'all' ? 'all' : 'clean'; this.syncAdvancedForm(); this.loadList(true); },
@@ -274,8 +287,8 @@ function explorePage() {
         if (this.activeSort === 'random') params.seed = this.randomSeed;
         if (this.activeCategory !== 'all') params.tag = this.activeCategory;
         if (this.searchKeyword) params.q = this.searchKeyword;
-        if (this.activeZone === 'all') params.zone = 'all';
-        else if (!this.searchKeyword) params.zone = 'clean';
+        // Searching must not silently expand a selected pure zone to the full library.
+        params.zone = this.activeZone === 'all' ? 'all' : 'clean';
         if (this.pictureless) params.pictureless = 'true';
         const r = await fetchExplorePage(params, requestController.signal);
         if (requestEpoch !== this._listEpoch) return;
@@ -283,20 +296,21 @@ function explorePage() {
         const list = data.apps || data.list || data.items || [];
         if (requestPage === 1) {
           const featured = Array.isArray(data.featured_apps) ? data.featured_apps : [];
-          this.featuredPool = featured
+          this._candidateFeatured = featured
             .map((raw, index) => normalizeCard(raw, this.siteSettings?.app_home || {}, index))
             .filter(Boolean);
         }
-        const baseCards = requestPage === 1 ? [] : this.cards;
+        const baseCards = requestPage === 1 ? [] : this._candidateCards;
         const seen = new Set(baseCards.map(card => card.id));
         const normalized = list
           .map((raw, index) => normalizeCard(raw, this.siteSettings?.app_home || {}, index))
           .filter(card => card && !seen.has(card.id));
-        this.cards = [...baseCards, ...normalized];
+        this._candidateCards = [...baseCards, ...normalized];
+        this.applyPreferenceFilters();
         const total = parseInt(data.total ?? this.cards.length, 10);
         this.total = Number.isNaN(total) ? this.cards.length : total;
         const receivedCount = Array.isArray(list) ? list.length : 0;
-        this.hasMore = this.cards.length < this.total && receivedCount > 0;
+        this.hasMore = this._candidateCards.length < this.total && receivedCount > 0;
         this.page = requestPage + 1;
         this.persistState();
       } catch (err) {
@@ -334,6 +348,7 @@ function explorePage() {
       try {
         const r = await api.toggleFavorite(card.id);
         card.favorited = !!r?.data?.favorited;
+        recordInterest(this.user||getCachedUser(),'card',card,card.favorited?'save':'unsave');
       } catch {}
     },
 
@@ -354,8 +369,8 @@ function explorePage() {
           activeZone: this.activeZone,
           randomSeed: this.randomSeed,
           pictureless: this.pictureless,
-          cards: this.cards.slice(0, 80),
-          featuredPool: this.featuredPool.slice(0, 2),
+          cards: this._candidateCards.slice(0, 80),
+          featuredPool: this._candidateFeatured.slice(0, 2),
           clickedId: card?.id || '',
         }));
       } catch {}
@@ -370,6 +385,7 @@ function explorePage() {
         if (!link) return;
         try {
           const id = new URL(link.href, location.origin).searchParams.get('id') || '';
+          const viewed=this.cards.find(card=>String(card.id)===id)||this.featuredPool.find(card=>String(card.id)===id);if(viewed)recordInterest(this.user||getCachedUser(),'card',viewed,'view');
           this.rememberBrowsePosition({ id });
         } catch {
           this.rememberBrowsePosition();
@@ -377,7 +393,7 @@ function explorePage() {
       }, true);
       const restore = () => {
         const state = this.restoreBrowseState();
-        if (state) this.restoreBrowseScroll(state.scrollY, state.clickedId);
+        if (state) { this._candidateCards=[...this.cards];this._candidateFeatured=[...this.featuredPool];this.applyPreferenceFilters();this.restoreBrowseScroll(state.scrollY, state.clickedId); }
       };
       window.addEventListener('pageshow', () => setTimeout(restore, 0));
       window.addEventListener('popstate', () => setTimeout(restore, 0));
@@ -459,7 +475,7 @@ function explorePage() {
     },
 
     persistState() {
-      if (!this.user || !this.cards.length) return;
+      if (!this.user || !this._candidateCards.length) return;
       writePageCache(EXPLORE_CACHE_SCOPE, this.user, {
         page: this.page,
         pageSize: this.pageSize,
@@ -472,8 +488,8 @@ function explorePage() {
         activeZone: this.activeZone,
         randomSeed: this.randomSeed,
         pictureless: this.pictureless,
-        cards: this.cards.slice(0, 80),
-        featuredPool: this.featuredPool.slice(0, 2),
+        cards: this._candidateCards.slice(0, 80),
+        featuredPool: this._candidateFeatured.slice(0, 2),
       });
     },
   };

@@ -1,4 +1,6 @@
 // 惑梦（Homer） Web App 共享核心 - 在所有 /app/*.html 顶部加载
+import '/assets/js/option-picker.js';
+import { apiText } from '/assets/js/api-transport.js';
 import './notifications.js?v=20260917-r8';
 import { api as baseApi, getToken, setToken, clearAuth, isLoggedIn, getCachedUser, setCachedUser, formatDateTime, ApiError } from '/assets/js/api.js?v=20260917-r8';
 
@@ -16,7 +18,7 @@ async function rawRequest(path, opts = {}) {
   if (opts.body && !(opts.body instanceof FormData)) headers['Content-Type'] = 'application/json';
   const token = getToken();
   if (token && opts.auth !== false) headers['Authorization'] = `Bearer ${token}`;
-  const res = await fetch(path, {
+  const { response: res, text } = await apiText(path, {
     method: opts.method || 'GET',
     headers,
     // 携带 HttpOnly 登录 Cookie
@@ -24,7 +26,6 @@ async function rawRequest(path, opts = {}) {
     body: opts.body ? (opts.body instanceof FormData ? opts.body : JSON.stringify(opts.body)) : undefined,
     signal: opts.signal,
   });
-  const text = await res.text();
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
   if (res.status === 401 && opts.auth !== false) redirectAfterUnauthorized();
@@ -200,6 +201,7 @@ export const api = {
     return rawRequest(`/console/api/web/redemptions?${qs}`);
   },
   rewards: () => rawRequest('/console/api/web/rewards'),
+  earnings: () => rawRequest('/console/api/web/earnings'),
   claimDailyReward: () => rawRequest('/console/api/web/rewards/daily', { method: 'POST', body: {} }),
   farmState: () => rawRequest('/console/api/web/farm/state'),
   farmFriends: () => rawRequest('/console/api/web/farm/friends'),
@@ -382,3 +384,4 @@ export function requireAuth() {
 export { getToken, setToken, clearAuth, isLoggedIn, getCachedUser, setCachedUser, formatDateTime, ApiError };
 
 window.aiXingyueApp = { api, getToken, setToken, clearAuth, isLoggedIn, getCachedUser, setCachedUser, requireAuth, ApiError };
+import '/assets/js/option-picker.js';

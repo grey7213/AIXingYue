@@ -1,16 +1,17 @@
+@import url('./theme.css');
 /* 惑梦（Homer）管理后台：角色卡编辑器参考视觉，仅作用于 /admin.html。 */
 .xy-admin {
-  --admin-primary: #ff2e63;
-  --admin-primary-hover: #e91e55;
-  --admin-primary-soft: #fff0f4;
-  --admin-canvas: #f5f5f7;
-  --admin-panel: #ffffff;
-  --admin-panel-muted: #fafafd;
-  --admin-border: #e6e6ea;
-  --admin-divider: #f0f0f2;
-  --admin-text: rgba(0, 0, 0, .85);
-  --admin-text-soft: rgba(0, 0, 0, .55);
-  --admin-text-mute: rgba(0, 0, 0, .38);
+  --admin-primary: var(--app-accent);
+  --admin-primary-hover: var(--app-accent);
+  --admin-primary-soft: var(--app-tint);
+  --admin-canvas: var(--app-bg);
+  --admin-panel: var(--app-panel);
+  --admin-panel-muted: var(--app-fill);
+  --admin-border: var(--app-line);
+  --admin-divider: var(--app-line);
+  --admin-text: var(--app-text);
+  --admin-text-soft: var(--app-muted);
+  --admin-text-mute: var(--app-muted);
   --admin-shadow: 0 2px 12px rgba(0, 0, 0, .06);
   --admin-shadow-float: 0 14px 38px rgba(21, 24, 35, .12);
   background: var(--admin-canvas) !important;

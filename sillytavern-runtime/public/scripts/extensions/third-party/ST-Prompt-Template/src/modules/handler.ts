@@ -14,6 +14,7 @@ import { updateReasoningUI } from '../../../../../reasoning.js';
 import { handleInjectPrompt } from '../features/inject-prompt';
 import { handleInitialVariables } from '../features/initial-variables';
 import { FunctionSandbox } from '../3rdparty/vm-browserify';
+import { protectPreContent } from '../../../../../homer-ejs-pre.mjs';
 
 let runID = 0;
 let isFakeRun = false; // Avoid recursive processing
@@ -525,7 +526,8 @@ async function handleMessageRender(message_id: string, type?: string, isDryRun?:
 
         const rawContent = container.html() as string;
 
-        content = settings.code_blocks_enabled === false ? escapePreContent(rawContent) : rawContent;
+        const literalCode = settings.code_blocks_enabled === false ? protectPreContent(rawContent) : null;
+        content = literalCode ? literalCode.content : rawContent;
 
         const opts = {
             escaper,
@@ -562,6 +564,9 @@ async function handleMessageRender(message_id: string, type?: string, isDryRun?:
             `chat #${message_idx}.${message.swipe_id}`,
             { ...opts, sandbox }
         );
+
+        // Restore only after all EJS/reasoning preprocessors have finished.
+        newContent = literalCode ? literalCode.restore(newContent) : newContent;
 
         // [RENDER:AFTER] or @@render_after
         const after = settings.render_loader_enabled === false

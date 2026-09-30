@@ -1,9 +1,13 @@
 import { confirmAction, showMessage } from '/assets/js/dialogs.js?v=20260917-r8';
 // 惑梦（Homer） 管理后台 Alpine.js 应用
 import { api, isLoggedIn, formatDateTime, ApiError } from '/assets/js/api.js?v=20260917-r8';
+import { adminDialogue } from './admin-dialogue.js';
+import { adminImages } from './admin-images.js';
 
 function adminPanel() {
   return {
+    ...adminDialogue(),
+    ...adminImages(),
     state: 'loading',
     activeTab: 'stats',
     loading: false,
@@ -12,6 +16,9 @@ function adminPanel() {
     adminInfo: null,
     socialReports: [], socialReportError: '',
     notifications: [],
+    revenueRate:'35',revenueLoaded:false,revenueBusy:false,revenueError:'',
+    async loadCreatorRevenue(){this.revenueBusy=true;this.revenueError='';this.revenueLoaded=false;try{const r=await api.admin.creatorRevenue(),d=r?.data??r;if(!Number.isInteger(d?.rate_bps))throw Error('收益配置服务暂未接入');this.revenueRate=String(d.rate_bps/100);this.revenueLoaded=true;}catch(e){this.revenueError=e.message||'读取失败，请重试';}finally{this.revenueBusy=false;}},
+    async saveCreatorRevenue(){if(!this.revenueLoaded||this.revenueBusy)return;const raw=String(this.revenueRate).trim(),percent=Number(raw);if(!/^\d{1,3}(\.\d{1,2})?$/.test(raw)||percent<0||percent>100){this.revenueError='请输入 0–100 的百分比，最多两位小数';return;}this.revenueBusy=true;this.revenueError='';try{const r=await api.admin.saveCreatorRevenue(Math.round(percent*100));this.revenueRate=String((r?.data??r).rate_bps/100);this.showToast('收益比例已更新，仅影响之后的消费','success');}catch(e){this.revenueError=e.message||'保存失败，原比例保持不变';}finally{this.revenueBusy=false;}},
     notificationForm: null,
     notificationBusy: false,
     notificationError: '',
@@ -19,6 +26,9 @@ function adminPanel() {
     errorDetail: '',
 
     tabs: [
+      { id: 'image-models', label: '生图模型', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="m3 17 6-6 5 5 3-3 4 4"/><circle cx="16" cy="8" r="1"/></svg>' },
+      { id: 'dialogue-preview', label: '会话工作区', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 4h16v12H9l-5 4V4z"/></svg>' },
+      {id:'creator-revenue',label:'创作收益',icon:'<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 20V10m8 10V4m8 16V7"/></svg>'},
       { id: 'community', label: '社区管理', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 3h18v14H9l-6 4V3z"/></svg>' },
       { id: 'notifications', label: '通知管理', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-width="2" d="M6 8a6 6 0 0112 0v8l2 2H4l2-2V8m4 12h4"/></svg>' },
       { id: 'stats', label: '数据总览', icon: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>' },
@@ -606,6 +616,11 @@ function adminPanel() {
     uiNodeId: '',
     uiModelSearch: '',
     uiModelEditor: null,
+    uiModelEditorTarget: null,
+    uiModelSelected: [],
+    uiModelSelecting: false,
+    uiModelBulk: null,
+    uiModelEditError: '',
     uiPresetSearch: '',
     llmSettings: null,
     globalPresets: null,
@@ -686,7 +701,10 @@ function adminPanel() {
       try {
         const result = await api.admin.whoami();
         this.adminInfo = result.data || result;
+        if (!this.adminInfo?.id || this.adminInfo.is_admin !== true)
+          throw new ApiError('服务器未确认管理员权限', 403);
         this.state = 'ready';
+        this.preparePreviewRuntime();
         await this.loadStats();
         this.$nextTick(() => this.installMobileTableLabels());
       } catch (err) {
@@ -847,6 +865,8 @@ function adminPanel() {
     },
     async switchTab(id) {
       this.activeTab = id;
+      if (id === 'image-models' && !this.imageLoaded) await this.loadImageModels();
+      this.$nextTick(() => window.scrollTo({top:0,behavior:'instant'}));
       if (id === 'community') await this.loadSocialReports();
       if (id === 'notifications') await this.loadNotifications();
       if (id === 'stats' && !this.stats) await this.loadStats();
@@ -861,6 +881,7 @@ function adminPanel() {
         if (!this.llmSettings) await this.loadLlmSettings();
       }
       if (id === 'global-presets' && !this.globalPresets) await this.loadGlobalPresets();
+      if (id === 'dialogue-preview' && !this.previewCards.length) await this.loadPreviewCards();
       if (id === 'plugins' && this.tavoPlugins.length === 0) await this.loadTavoPlugins();
       if (id === 'apps' && this.apps.length === 0) await this.loadApps(1);
     },
@@ -1145,6 +1166,17 @@ function adminPanel() {
       this.loading = true;
       try {
         const payload = this.stripGlobalPresetPrivate(this.globalPresetEditor);
+        if (this.globalPresetKind === 'regex') {
+          for (const rule of payload.scripts || []) {
+            if (rule.disabled) continue;
+            try {
+              const text = String(rule.findRegex || '');
+              const match = text.match(/^\/([\s\S]*)\/([dgimsuvy]*)$/);
+              if (!text) throw Error('empty');
+              new RegExp(match ? match[1] : text, match ? match[2] : '');
+            } catch { throw Error(`正则「${rule.scriptName || rule.id}」语法无效，请修正或停用后保存`); }
+          }
+        }
         await api.admin.saveGlobalPreset(this.globalPresetKind, this.globalPresetEditor.id, payload);
         await this.loadGlobalPresets(this.globalPresetEditor.id);
         this.showToast('全局预设已保存', 'success');
@@ -1715,7 +1747,56 @@ function adminPanel() {
       const query = this.uiModelSearch.trim().toLocaleLowerCase();
       return (preset.modelConfigs || []).filter(item => !query || (item.model + ' ' + item.display_name).toLocaleLowerCase().includes(query));
     },
-    openModelEditor(config) { this.uiModelEditor = config; this.$nextTick(() => document.querySelector('.ui-model-dialog input:not(:disabled)')?.focus()); },
+    openModelEditor(config) {
+      this.uiModelEditorTarget = config; this.uiModelEditor = structuredClone(JSON.parse(JSON.stringify(config)));
+      this.uiModelEditError = ''; this.$nextTick(() => document.querySelector('.ui-model-dialog input:not(:disabled)')?.focus());
+    },
+    validModelPrices(value) {
+      return ['input_price','output_price'].every(key => value[key] !== '' && value[key] != null && Number.isFinite(Number(value[key])) && Number(value[key]) >= 0);
+    },
+    applyModelEditor() {
+      if (!this.validModelPrices(this.uiModelEditor.pricing)) { this.uiModelEditError='单价必须是大于或等于 0 的数字'; return; }
+      Object.assign(this.uiModelEditorTarget, this.uiModelEditor);
+      this.uiModelEditor = null; this.uiModelEditorTarget = null;
+    },
+    modelSelectionKey(node, config) { return JSON.stringify([node.id, config.model]); },
+    allModelRows() { return this.llmForm.presets.flatMap(node => (node.modelConfigs || []).map(config => ({node,config,key:this.modelSelectionKey(node,config)}))); },
+    selectedModelRows() { const keys=new Set(this.uiModelSelected);return this.allModelRows().filter(row=>keys.has(row.key)); },
+    toggleModelSelection(node,config) {
+      const key=this.modelSelectionKey(node,config);
+      this.uiModelSelected=this.uiModelSelected.includes(key)?this.uiModelSelected.filter(k=>k!==key):[...this.uiModelSelected,key];
+    },
+    selectFilteredModels(node) {
+      this.uiModelSelected=[...new Set([...this.uiModelSelected,...this.filteredModelConfigs(node).map(config=>this.modelSelectionKey(node,config))])];
+    },
+    selectAllModels() { this.uiModelSelected=this.allModelRows().map(row=>row.key); },
+    openModelBulk() {
+      const rows=this.selectedModelRows();if(!rows.length)return;
+      const common=read=>{const values=rows.map(read);return values.every(v=>v===values[0])?values[0]:'';};
+      this.uiModelEditError='';
+      this.uiModelBulk={keys:rows.map(r=>r.key),groups:[...new Set(rows.map(r=>r.node.name))],applyPreset:false,applyMode:false,applyInput:false,applyOutput:false,
+        preset_id:common(r=>r.config.preset_id),mode:common(r=>r.config.pricing.mode),input_price:common(r=>r.config.pricing.input_price),output_price:common(r=>r.config.pricing.output_price)};
+    },
+    applyModelBulk() {
+      const draft=this.uiModelBulk;if(!draft)return;
+      const rows=this.allModelRows().filter(r=>draft.keys.includes(r.key));
+      const fail=message=>{this.uiModelEditError=message;};
+      if(rows.length!==draft.keys.length)return fail('部分选中模型已改变，请取消后重新选择');
+      if(!draft.applyPreset&&!draft.applyMode&&!draft.applyInput&&!draft.applyOutput)return fail('请勾选需要修改的字段，其余字段保持原值');
+      if(draft.applyPreset&&!this.globalPromptPresetOptions().some(p=>p.id===draft.preset_id))return fail('请选择有效的绑定预设');
+      if(draft.applyMode&&!['per_token','per_request'].includes(draft.mode))return fail('请选择计价方式');
+      if(draft.applyMode&&rows.some(r=>r.config.pricing.mode!==draft.mode)&&(!draft.applyInput||!draft.applyOutput))return fail('改变计价单位时，请同时明确输入和输出单价，避免按次与按量价格混用');
+      for(const [flag,key] of [['applyInput','input_price'],['applyOutput','output_price']]){
+        if(draft[flag]&&(draft[key]===''||draft[key]==null||!Number.isFinite(Number(draft[key]))||Number(draft[key])<0))return fail('单价必须是大于或等于 0 的数字');
+      }
+      for(const {config} of rows){
+        if(draft.applyPreset)config.preset_id=draft.preset_id;
+        if(draft.applyMode)config.pricing.mode=draft.mode;
+        if(draft.applyInput)config.pricing.input_price=Number(draft.input_price);
+        if(draft.applyOutput)config.pricing.output_price=Number(draft.output_price);
+      }
+      this.uiModelBulk=null;this.showToast(`已在本页更新 ${rows.length} 个模型，点击“保存全部节点”后生效`,'success');
+    },
     async confirmRemoveModelNode(preset) {
       if (!await confirmAction('删除节点“' + preset.name + '”？保存全部节点后生效。')) return;
       this.removeModelPreset(this.llmForm.presets.findIndex(p => p.id === preset.id));
@@ -1765,6 +1846,7 @@ function adminPanel() {
         const r = await api.admin.llmSettings();
         const data = r.data || r;
         this.llmSettings = data;
+        this.uiModelSelected=[];
         const presets = (data.presets && data.presets.length ? data.presets : [{
           id: 'default',
           name: '默认模型',

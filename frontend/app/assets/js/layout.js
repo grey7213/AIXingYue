@@ -126,7 +126,7 @@ export function sidebarHtml(active = 'home', settings = null) {
 
 export function bottomNavHtml(active = 'home', settings = null) {
   return MOBILE_ITEMS.map(item => `
-    <a href="${item.href}" ${item.key==='community'?'data-community-nav':''} class="${item.key === active ? 'is-active' : ''}">
+    <a href="${item.href}" ${item.key==='community'?'data-community-nav':''} ${item.key===active?'aria-current="page"':''} class="${item.key === active ? 'is-active' : ''}">
       ${svg(item.icon)}<span>${navLabel(item, settings, true)}</span>
     </a>`).join('');
 }
@@ -203,7 +203,7 @@ function renderAnnouncement(settings) {
 function applyShellPreferences() {
   const theme = localStorage.getItem('ai_xingyue_shell_theme') || '';
   if (theme === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
-  else document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', 'light');
   document.body?.classList.toggle('no-img', localStorage.getItem('ai_xingyue_pictureless') === '1');
 }
 
@@ -219,8 +219,9 @@ function bindShellUtilities(root = document) {
     button.onclick = () => {
       const next = document.documentElement.getAttribute('data-theme') === 'dark' ? '' : 'dark';
       if (next) document.documentElement.setAttribute('data-theme', next);
-      else document.documentElement.removeAttribute('data-theme');
+      else document.documentElement.setAttribute('data-theme', 'light');
       localStorage.setItem('ai_xingyue_shell_theme', next);
+      window.HomerPublishTheme?.();
     };
   });
 }
@@ -355,7 +356,17 @@ export function injectLayout(active = 'home') {
   const sidebar = document.querySelector('[data-app-sidebar]');
   if (sidebar) sidebar.innerHTML = sidebarHtml(active);
   const bottom = document.querySelector('[data-app-bottom-nav]');
-  if (bottom) bottom.innerHTML = bottomNavHtml(active);
+  if (bottom) {
+    bottom.id = 'homer-main-navigation';
+    bottom.setAttribute('aria-label', '主导航');
+    if (!document.querySelector('#homer-navigation-style')) {
+      const style = document.createElement('link');
+      style.id = 'homer-navigation-style'; style.rel = 'stylesheet';
+      style.href = '/assets/css/main-navigation.css?v=20260919-r15';
+      document.head.append(style);
+    }
+    bottom.innerHTML = bottomNavHtml(active);
+  }
   bindShellUtilities(document);
   loadPublicSiteSettings().then(settings => {
     renderAnnouncement(settings);

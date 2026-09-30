@@ -9,10 +9,9 @@ async function openHome() {
     return;
   }
   try {
-    // rawRequest 返回完整信封；本机验收模式直接返回 data，两种形态都要支持。
-    const bootstrap = await api.social('bootstrap');
-    const access = bootstrap?.data ?? bootstrap;
-    if (access?.available) {
+    const response = await api.social('bootstrap');
+    const bootstrap = response?.data ?? response;
+    if (bootstrap?.available === true) {
       go('/app/community.html');
       return;
     }

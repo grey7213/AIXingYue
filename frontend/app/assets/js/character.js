@@ -1,5 +1,6 @@
 import { api, requireAuth, getCachedUser, setCachedUser, formatDateTime, ApiError } from '/app/assets/js/app-core.js?v=20260917-r8';
 import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260917-r8';
+import { installTagFeedback } from './tag-feedback.js';
 
 const FIELD_LABELS = {
   name: '姓名',
@@ -217,6 +218,7 @@ function characterPage() {
 
     async init() {
       injectLayout('explore');
+      installTagFeedback(this.$root, () => getCachedUser());
       this.siteSettings = await loadPublicSiteSettings().catch(() => null);
       if (!requireAuth()) return;
       const cached = getCachedUser();
