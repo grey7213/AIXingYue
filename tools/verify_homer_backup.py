@@ -67,9 +67,9 @@ def check_database(backup: Path, ssh: paramiko.SSHClient, manifest: dict, result
     Against the manifest: must match exactly — the archive has to contain the
     snapshot the server said it took.
 
-    Against live: only a sanity direction check. A snapshot is a point in time;
-    users/conversations/messages keep growing after it, so live >= backup is
-    correct and a nonzero delta is information, not a failure.
+    Against live: record a current census and report drift. Rows may be added
+    or deleted while an online backup is transferred; neither direction proves
+    corruption. The manifest comparison above remains the snapshot invariant.
     """
     tables = ("users", "local_apps", "content_versions", "conversations", "messages",
               "role_card_annotations", "api_settings")
@@ -122,12 +122,15 @@ def check_database(backup: Path, ssh: paramiko.SSHClient, manifest: dict, result
                     f"archive={backup_counts} manifest={manifest_counts}"))
     log(f"  {'ok ' if counts_ok else 'FAIL'} row counts match manifest: {backup_counts}")
 
-    grew = {t: live_counts[t] - backup_counts[t] for t in tables}
-    direction_ok = all(delta >= 0 for delta in grew.values())
-    results.append(("db live >= backup (snapshot is a point in time)", direction_ok, str(grew)))
-    drift = {t: d for t, d in grew.items() if d}
-    log(f"  {'ok ' if direction_ok else 'FAIL'} live >= backup for every table"
-        + (f"; drift since snapshot: {drift}" if drift else "; live unchanged since snapshot"))
+    census_ok = all(type(live_counts.get(t)) is int and live_counts[t] >= 0 for t in tables)
+    results.append(("db live census readable", census_ok, str(live_counts)))
+    if census_ok:
+        drift = {t: live_counts[t] - backup_counts[t] for t in tables
+                 if live_counts[t] != backup_counts[t]}
+        log("  info online changes since snapshot (live minus backup): "
+            + (str(drift) if drift else "none"))
+    else:
+        log("  FAIL invalid live database census")
 
     same_sample = backup_sample == live_sample
     results.append(("db first 5 role cards == live", same_sample, ""))

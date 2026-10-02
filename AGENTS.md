@@ -35,7 +35,8 @@
 ## Codebase Map
 
 - 生产备份使用 `tools/backup_homer_production.py` 和 `tools/verify_homer_backup.py`，本地放仓库外 `E:\homer-backups\`。2026-09-07 DNS/SSH 实测生产机为 `38.76.218.46`，不要沿用旧技能正文里的历史 IP。
-- 2026-09-07 完整恢复点为本地 `E:\homer-backups\homer-prod-20260907-150635\`（另有同名 ZIP）及服务器 `/opt/homer-backups/homer-prod-20260907-150635/`。后端 `backups/` 保留当次 `ai_fengyue-current-*.sqlite3` 和 `frontend-source-current-*.tgz` 各一份；清理旧备份前必须先验证本地完整备份、服务器保留包及精确删除清单。业务库/WAL、用户对话目录、当前 release、其他服务和独有导入/安全材料不属于旧备份清理范围。执行证据见 `specs/homer-backup-cleanup-20260907-tasks.md`。
+- 2026-10-02 整机分项目备份与清理已验证：惑梦新恢复点为本地 `E:\homer-backups\homer-prod-20261002-102454\` 与服务器同名 `/opt/homer-backups/` 子目录；其他项目和公共配置放本地 `E:\server-backups\server-20261002\` 与服务器 `/opt/server-backups/server-20261002/`，各项目附映射和恢复说明。32 个归档共 2.71 GiB，哈希/解压通过，三个 SQL 服务完成隔离恢复。旧备份/旧 release/未用镜像及缓存清理后净释放 18.09 GiB，12 个业务容器身份与启动时间未变。详见 `specs/cloud-backup-cleanup-20261002.md`。这是一次性清理，既有部署/定时任务仍可能生成新恢复点。
+- 2026-09-07 旧恢复点仍保留在本地 `E:\homer-backups\homer-prod-20260907-150635\`（另有同名 ZIP）；该次服务器副本及旧后端/对话备份已由 2026-10-02 新完整恢复点替代并清理。历史证据见 `specs/homer-backup-cleanup-20260907-tasks.md`。再次清理仍必须先验证本地完整备份、服务器保留包和精确清单；业务库/WAL、用户对话、当前 release、独有导入/安全材料不能按垃圾删除。晚于全量快照新生成的数据库备份须保留或补充下载。
 - 原生 Android 源码真源为独立仓库 `E:\homer-android`（`grey7213/homer-android`），入口 `android-app/app/src/main/java/org/nebula/horizon/composeai/ctf/HomerActivity.java`。本仓库提供 Web/backend 真源；原生仓库 `web-base.json` 固定对应的 Web 快照。正式 APK 发布使用 `tools/publish_homer_apk.py`，成品同时放官网与 `grey7213/homer-android-apk` Releases。
 - 1.15.0 起，APK 自动检查更新（6 小时间隔），登录页及“我的”有手动检查入口；`/download/release.json` 必须返回 `Cache-Control: no-cache`，版本化 APK 地址不可覆盖。更新必须保持包名、签名并提高 versionCode。更新说明由发布命令 `--notes-file` 提供。
 - 2026-10-01 正式版本为 1.17.4（282），修复工坊私有作品缓存隔离及 Android 退出登录后重排请求；Web `2cda666`、Android PR #18 / `0f41f3b`。Pixel 6 模拟器 WebView 8 场景与 281→282 覆盖升级通过，官网和 GitHub Releases 包哈希一致。旧 APK 内置 JS 不会随网站文件更新，281 用户需要升级。详见 `specs/workshop-cache-isolation-20261001.md`。
@@ -74,6 +75,21 @@
 - Before committing, check `git status --short` and avoid staging unrelated user changes.
 
 ## Reusable Pitfalls
+
+- Symptom: 在线备份的哈希、SQLite 完整性及快照清单全部正确，独立验证仍因 `live >= backup` 失败。
+  Cause: 原验证器假定业务行数只增不减；备份传输期间用户可删除会话和消息。
+  Fix: 快照大小/行数严格匹配生成清单；活库 census 校验可读性和非负整数，增减差异仅记录，不用其方向判断快照损坏。
+  Verify: `D:\Anconda3\python.exe tools/test_verify_homer_backup.py` 4 项通过（在线增删、清单行数/大小错误、非法活库计数）；2026-10-02 实际备份独立检查 35/35 通过。
+
+- Symptom: 运行中容器的 `.Image` 无法 `docker image inspect`，但 `.Config.Image` 的同名标签仍存在并指向另一 ID。
+  Cause: 镜像标签在容器启动后变化，旧运行镜像元数据已不可用；标签不是运行容器的不可变身份。
+  Fix: 备份同时保存配置镜像、实际运行容器 rootfs、完整容器元数据和数据库逻辑导出；清理同时保护运行 ID 与配置标签解析后的 ID，不直接用 `image prune -a` 猜测可删集合。
+  Verify: 2026-10-02 海运 MySQL 配置镜像/运行 rootfs 本地 SHA-256 一致，SQL 隔离恢复 36 表通过，清理后原容器 ID/启动时间不变。
+
+- Symptom: Sub2API Redis 普通查询能用，`redis-cli --rdb` 却因 AUTH 失败退出。
+  Cause: 当前无密码 Redis 的容器环境中存在空字符串 `REDISCLI_AUTH`；RDB 导出对这次失败认证的处理比普通查询严格。
+  Fix: 仅当该环境变量为空时，在备份命令的子进程里 unset，再导出 RDB；不修改运行服务或非空凭据。
+  Verify: 2026-10-02 RDB 导出成功并收入已校验的 Sub2API 备份。
 
 - Symptom: Android 工坊退出登录后，尚未结束的资料请求又恢复账号/私有作品；旧工坊缓存还会串到另一账号。
   Cause: R25–R33 将 profile 与私有列表重新并发；原生清理账号会触发页面显示事件，刷新合并逻辑又在检查登录状态前排队。
