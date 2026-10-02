@@ -1300,25 +1300,126 @@ def _send_verification_email_resend(to_email: str, sender: str, subject: str, bo
     return str(data.get("id") or "").strip() if isinstance(data, dict) else ""
 
 
+def build_verification_email(code: str, lang: str = "zh-Hans", purpose: str = "register") -> tuple[str, str, str]:
+    """Render the shared email without I/O; keep the code selectable as one string."""
+    reset_purpose = (purpose or "").strip().lower() in ("password_reset", "reset_password", "reset")
+    chinese = (lang or "").lower().startswith("zh")
+    if chinese:
+        subject = f"{APP_BRAND} 密码重置验证码" if reset_purpose else f"{APP_BRAND} 注册验证码"
+        copy = {
+            "eyebrow": "ACCOUNT SECURITY" if reset_purpose else "A LETTER FROM HOMER",
+            "tagline": "让想象 · 照进二次元",
+            "title": "找回你的入梦钥匙" if reset_purpose else "你的故事，即将开始",
+            "intro": "我们收到了你的密码重置请求。请回到密码重置页面，输入下方验证码，设置新密码。" if reset_purpose else "欢迎来到惑梦。在这里，与心仪的角色相遇，让想象中的故事继续。只差一步，验证邮箱即可完成注册。",
+            "label": "密码重置验证码" if reset_purpose else "你的专属入梦验证码",
+            "expiry": "首次申请后 10 分钟内有效",
+            "hint": "请在密码重置页面输入这 6 位数字" if reset_purpose else "请在注册页面输入这 6 位数字",
+            "resend": "重新发送不会延长验证码有效期。",
+            "safety_title": "请保管好这把钥匙",
+            "safety": "请勿将验证码告知或转发给任何人。如果这不是你的操作，忽略本邮件即可；你的密码不会因此改变。" if reset_purpose else "请勿将验证码告知或转发给任何人。如果这不是你的操作，忽略本邮件即可，无需进行验证。",
+            "signoff": "故事还在，等你回来。" if reset_purpose else "下一场相遇，从这里开始。",
+            "link": "前往惑梦官网",
+            "footer": "这是一封系统邮件，请勿直接回复。",
+        }
+    else:
+        subject = f"{APP_BRAND} password reset code" if reset_purpose else f"{APP_BRAND} verification code"
+        copy = {
+            "eyebrow": "ACCOUNT SECURITY" if reset_purpose else "A LETTER FROM HOMER",
+            "tagline": "Where imagination becomes a story",
+            "title": "Find your way back" if reset_purpose else "Your story starts here",
+            "intro": "We received a request to reset your password. Return to the password reset page and enter the code below to choose a new password." if reset_purpose else "Welcome to Homer. Meet your favorite characters and explore the stories you imagine. Verify your email to finish creating your account.",
+            "label": "PASSWORD RESET CODE" if reset_purpose else "YOUR VERIFICATION CODE",
+            "expiry": "Valid for 10 minutes from the first request",
+            "hint": "Enter these 6 digits on the password reset page" if reset_purpose else "Enter these 6 digits on the registration page",
+            "resend": "Resending the code does not extend its validity.",
+            "safety_title": "Keep this code to yourself",
+            "safety": "Never share or forward this code. If you did not request this reset, ignore this email. Your password will stay unchanged." if reset_purpose else "Never share or forward this code. If you did not request an account, ignore this email. No action is needed.",
+            "signoff": "Your stories are waiting for you." if reset_purpose else "A new encounter is just a story away.",
+            "link": "Visit Homer",
+            "footer": "This is an automated email. Please do not reply.",
+        }
+    site_url = "https://patcher.villainy.top/"
+    body = (
+        f"{APP_BRAND}\n{copy['title']}\n\n{copy['intro']}\n\n"
+        f"{copy['label']}: {code}\n{copy['expiry']}\n{copy['hint']}\n{copy['resend']}\n\n"
+        f"{copy['safety_title']}\n{copy['safety']}\n\n{copy['signoff']}\n"
+        f"{copy['link']}: {site_url}\n{copy['footer']}\n"
+    )
+    text = {key: html.escape(value) for key, value in copy.items()}
+    brand = html.escape(APP_BRAND)
+    escaped_code = html.escape(code)
+    document_lang = "zh-CN" if chinese else "en"
+    # Inline styles + presentation tables are the baseline for email clients.
+    # No images, scripts or external fonts; media queries are optional polish.
+    html_body = f'''<!DOCTYPE html>
+<html lang="{document_lang}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="supported-color-schemes" content="light">
+  <title>{html.escape(subject)}</title>
+  <style>
+    body {{ margin:0; padding:0; }}
+    table {{ border-collapse:collapse; mso-table-lspace:0pt; mso-table-rspace:0pt; }}
+    .email-code {{ font-size:42px !important; letter-spacing:8px !important; }}
+    @media screen and (max-width:480px) {{
+      .email-outer {{ padding:20px 12px !important; }}
+      .email-pad {{ padding-left:24px !important; padding-right:24px !important; }}
+      .email-title {{ font-size:26px !important; line-height:1.45 !important; }}
+      .email-code {{ font-size:34px !important; letter-spacing:6px !important; }}
+    }}
+  </style>
+</head>
+<body style="margin:0;padding:0;background-color:#f3f0f8;color:#302b42;font-family:Arial,'Microsoft YaHei','PingFang SC',sans-serif;-webkit-text-size-adjust:100%;">
+  <div style="display:none;font-size:1px;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;mso-hide:all;">{text['hint']} · {text['expiry']}</div>
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#f3f0f8">
+    <tr><td class="email-outer" align="center" style="padding:40px 16px;">
+      <!--[if mso]><table role="presentation" width="560" align="center"><tr><td><![endif]-->
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:560px;">
+        <tr><td height="4" bgcolor="#a78bfa" style="height:4px;font-size:0;line-height:0;">&nbsp;</td></tr>
+        <tr><td class="email-pad" bgcolor="#241b3b" style="padding:32px 40px 34px;background-color:#241b3b;">
+          <p style="margin:0 0 18px;color:#c8b5ed;font-size:10px;font-weight:700;line-height:16px;letter-spacing:3px;">{text['eyebrow']}</p>
+          <p style="margin:0;color:#ffffff;font-size:25px;font-weight:700;line-height:36px;">{brand}</p>
+          <p style="margin:6px 0 0;color:#d2c8e3;font-size:12px;line-height:20px;letter-spacing:1px;">{text['tagline']}</p>
+        </td></tr>
+        <tr><td class="email-pad" bgcolor="#ffffff" style="padding:34px 40px 32px;background-color:#ffffff;border-radius:0 0 16px 16px;">
+          <h1 class="email-title" style="margin:0 0 14px;color:#302442;font-size:30px;font-weight:700;line-height:1.4;">{text['title']}</h1>
+          <p style="margin:0 0 26px;color:#656071;font-size:14px;line-height:26px;">{text['intro']}</p>
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:separate;">
+            <tr><td align="center" bgcolor="#f5f1fd" style="padding:22px 12px;background-color:#f5f1fd;border:1px solid #e7def6;border-radius:12px;">
+              <p style="margin:0 0 12px;color:#706080;font-size:11px;font-weight:700;line-height:18px;letter-spacing:1px;">{text['label']}</p>
+              <p class="email-code" dir="ltr" style="margin:0;color:#6d3bc0;font-family:Consolas,'Courier New',monospace;font-size:38px;font-weight:700;line-height:1.35;letter-spacing:6px;white-space:nowrap;"><span>{escaped_code}</span></p>
+              <p style="margin:12px 0 0;color:#6b567f;font-size:12px;line-height:20px;">{text['expiry']}</p>
+            </td></tr>
+          </table>
+          <p style="margin:14px 0 0;text-align:center;color:#70687d;font-size:12px;line-height:20px;">{text['hint']}<br>{text['resend']}</p>
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:26px;">
+            <tr><td style="padding:20px 0 0;border-top:1px solid #ede8f3;">
+              <p style="margin:0 0 6px;color:#4b405b;font-size:12px;font-weight:700;line-height:20px;">{text['safety_title']}</p>
+              <p style="margin:0;color:#77707f;font-size:12px;line-height:22px;">{text['safety']}</p>
+            </td></tr>
+          </table>
+          <p style="margin:24px 0 0;color:#755194;font-size:13px;line-height:22px;">{text['signoff']}</p>
+        </td></tr>
+        <tr><td align="center" style="padding:22px 16px 0;">
+          <a href="{site_url}" style="color:#73528e;font-size:12px;line-height:22px;text-decoration:underline;">{text['link']} &rarr;</a>
+          <p style="margin:8px 0 0;color:#81778c;font-size:11px;line-height:19px;">{text['footer']}<br>patcher.villainy.top</p>
+        </td></tr>
+      </table>
+      <!--[if mso]></td></tr></table><![endif]-->
+    </td></tr>
+  </table>
+</body>
+</html>'''
+    return subject, body, html_body
+
+
 def send_verification_email(to_email: str, code: str, lang: str = "zh-Hans", purpose: str = "register") -> str:
     host = os.environ.get("SMTP_HOST")
     sender_address = os.environ.get("SMTP_FROM") or f"noreply@patcher.villainy.top"
     sender = sender_address if "<" in sender_address else email.utils.formataddr((APP_BRAND, sender_address))
-    reset_purpose = (purpose or "").strip().lower() in ("password_reset", "reset_password", "reset")
-    subject = f"{APP_BRAND} 密码重置验证码" if reset_purpose else f"{APP_BRAND} 注册验证码"
-    action = "密码重置" if reset_purpose else "注册"
-    body = f"你的 {APP_BRAND} {action}验证码是：{code}\n\n验证码 10 分钟内有效。如果不是你本人操作，请忽略这封邮件。\n"
-    html_body = (
-        '<div style="font-family:Arial,Microsoft YaHei,sans-serif;max-width:520px;margin:auto;padding:28px;color:#241b18;background:#fffaf4;border:1px solid #f0dfcf;border-radius:18px">'
-        f'<h2>{html.escape(APP_BRAND)} {html.escape(action)}验证码</h2><p>请在 10 分钟内输入下方验证码：</p>'
-        f'<div style="font-size:34px;font-weight:800;letter-spacing:8px;padding:18px;text-align:center;color:#ff2e63">{html.escape(code)}</div>'
-        '<p style="font-size:13px;color:#8a7d76">如果不是你本人操作，请忽略这封邮件。请勿将验证码转发给他人。</p></div>'
-    )
-    if not (lang or "").lower().startswith("zh"):
-        subject = f"{APP_BRAND} password reset code" if reset_purpose else f"{APP_BRAND} verification code"
-        action = "password reset" if reset_purpose else "verification"
-        body = f"Your {APP_BRAND} {action} code is: {code}\n\nThis code expires in 10 minutes.\n"
-        html_body = f'<div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;padding:28px"><h2>{html.escape(APP_BRAND)} verification code</h2><p>This code expires in 10 minutes.</p><div style="font-size:34px;font-weight:800;letter-spacing:8px;text-align:center">{html.escape(code)}</div></div>'
+    subject, body, html_body = build_verification_email(code, lang, purpose)
     msg = email.message.EmailMessage()
     msg["From"] = sender
     msg["To"] = to_email

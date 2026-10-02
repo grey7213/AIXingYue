@@ -948,7 +948,7 @@ WantedBy=multi-user.target
 def env_template() -> str:
     return f"""# AI Xingyue backend mail settings.
 # Leave SMTP_HOST empty to use local sendmail/postfix.
-APP_BRAND=AI星月
+APP_BRAND=惑梦（Homer）
 SMTP_HOST=
 SMTP_PORT=587
 SMTP_USER=

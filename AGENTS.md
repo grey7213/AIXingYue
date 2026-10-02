@@ -34,6 +34,8 @@
 
 ## Codebase Map
 
+- 验证码邮件由 `tools/ai_fengyue_local_server.py::build_verification_email` 统一生成中英文注册/重置的 HTML 与纯文本，`send_verification_email` 复用原 Resend/SMTP 链路；本地验证用 `D:\Anconda3\python.exe tools/_selftest_verification_email.py`。品牌以生产 `APP_BRAND` 和 `SMTP_FROM` 的显示名称为准，二者应为“惑梦（Homer）”。说明见 `specs/verification-email-design-20261002.md`。
+
 - 生产备份使用 `tools/backup_homer_production.py` 和 `tools/verify_homer_backup.py`，本地放仓库外 `E:\homer-backups\`。2026-09-07 DNS/SSH 实测生产机为 `38.76.218.46`，不要沿用旧技能正文里的历史 IP。
 - 2026-10-02 整机分项目备份与清理已验证：惑梦新恢复点为本地 `E:\homer-backups\homer-prod-20261002-102454\` 与服务器同名 `/opt/homer-backups/` 子目录；其他项目和公共配置放本地 `E:\server-backups\server-20261002\` 与服务器 `/opt/server-backups/server-20261002/`，各项目附映射和恢复说明。32 个归档共 2.71 GiB，哈希/解压通过，三个 SQL 服务完成隔离恢复。旧备份/旧 release/未用镜像及缓存清理后净释放 18.09 GiB，12 个业务容器身份与启动时间未变。详见 `specs/cloud-backup-cleanup-20261002.md`。这是一次性清理，既有部署/定时任务仍可能生成新恢复点。
 - 2026-09-07 旧恢复点仍保留在本地 `E:\homer-backups\homer-prod-20260907-150635\`（另有同名 ZIP）；该次服务器副本及旧后端/对话备份已由 2026-10-02 新完整恢复点替代并清理。历史证据见 `specs/homer-backup-cleanup-20260907-tasks.md`。再次清理仍必须先验证本地完整备份、服务器保留包和精确清单；业务库/WAL、用户对话、当前 release、独有导入/安全材料不能按垃圾删除。晚于全量快照新生成的数据库备份须保留或补充下载。
@@ -75,6 +77,16 @@
 - Before committing, check `git status --short` and avoid staging unrelated user changes.
 
 ## Reusable Pitfalls
+
+- Symptom: 邮件本地预览为“惑梦”，线上模板和发件人却仍显示“AI星月”。
+  Cause: 生产进程继承旧 `APP_BRAND` 与带显示名称的 `SMTP_FROM`，覆盖代码默认品牌；部署器新环境模板也曾保留旧品牌。
+  Fix: 备份环境文件，仅更新 `APP_BRAND` 和发件人显示名称、保留邮箱地址及所有其他配置；部署默认值同步使用“惑梦（Homer）”。
+  Verify: 2026-10-02 实际服务进程两项显示名称正确，线上四种邮件渲染与本地 SHA-256 一致，backend/dialogue/Nginx active，内外 health OK。
+
+- Symptom: 验证码邮件在普通手机预览正常，邮箱移除 `<style>` 后 320px 窄屏横向溢出。
+  Cause: 内联验证码字号和字距按桌面设定，table 的最小内容宽度撑开了窄屏；媒体查询被移除后无法兜底。
+  Fix: 内联样式采用可容纳 320px 的字号/字距，桌面放大与小屏优化仅作为 style 增强；验证码保留一个连续文本节点。
+  Verify: 2026-10-02 中英文注册/重置 × 1440/390/320px × 完整/仅内联样式共 24 组合均无溢出、无验证码截断，选中文本保留六位及前导零。
 
 - Symptom: 在线备份的哈希、SQLite 完整性及快照清单全部正确，独立验证仍因 `live >= backup` 失败。
   Cause: 原验证器假定业务行数只增不减；备份传输期间用户可删除会话和消息。
