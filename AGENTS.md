@@ -78,6 +78,11 @@
 
 ## Reusable Pitfalls
 
+- Symptom: 已有邮箱点击注册验证码后提示发送成功并倒计时，却始终收不到邮件。
+  Cause: 注册发码接口对已存在账号直接返回 200/accepted 而不发邮件，前端把它当成成功；重复注册的错误又只显示短暂 toast。
+  Fix: 两个注册入口统一使用 `registered_email_error()` 返回 409 与 `email_already_registered`，不生成或投递验证码；网页持久展示错误和登录/找回入口，已有账号冲突时清理残留倒计时，邮箱改变时忽略旧请求结果。
+  Verify: `tools/_selftest_registration_feedback.py` 6 项通过，桌面/390px 共 12 个浏览器场景通过；2026-10-02 线上内外两个注册入口均 409，目标账号密码/积分及验证码行数不变。详见 `specs/registration-feedback-20261002.md`。
+
 - Symptom: 邮件本地预览为“惑梦”，线上模板和发件人却仍显示“AI星月”。
   Cause: 生产进程继承旧 `APP_BRAND` 与带显示名称的 `SMTP_FROM`，覆盖代码默认品牌；部署器新环境模板也曾保留旧品牌。
   Fix: 备份环境文件，仅更新 `APP_BRAND` 和发件人显示名称、保留邮箱地址及所有其他配置；部署默认值同步使用“惑梦（Homer）”。

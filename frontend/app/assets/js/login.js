@@ -59,6 +59,8 @@ function loginPage() {
     view: 'login',
     loading: false,
     loginError: '',
+    registerError: '',
+    registerEmailExists: false,
     localServer: location.hostname.endsWith('.trycloudflare.com') || (location.protocol === 'http:' && /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(location.hostname)),
     serverAddress: location.origin,
     toast: null,
@@ -120,6 +122,37 @@ function loginPage() {
       this.view = 'reset';
     },
 
+    clearRegisterFeedback() {
+      this.registerError = '';
+      this.registerEmailExists = false;
+      this.registerForm.code = '';
+      this.codeCountdown = 0;
+      if (this.countdownTimer) clearInterval(this.countdownTimer);
+      if (this.toastTimer) clearTimeout(this.toastTimer);
+      this.toast = null;
+    },
+
+    showRegisterError(err) {
+      this.registerEmailExists = err.payload?.error_code === 'email_already_registered'
+        || (Number(err.code) === 409 && /email already registered|邮箱.*已注册/i.test(err.message || ''));
+      if (this.registerEmailExists) {
+        this.codeCountdown = 0;
+        if (this.countdownTimer) clearInterval(this.countdownTimer);
+      }
+      this.registerError = this.registerEmailExists
+        ? '该邮箱已注册，请直接登录；忘记密码可通过「找回密码」重置。'
+        : (err.message || this.authText('register_failed_text', '注册失败，请重试'));
+      this.showToast(this.registerError, 'error');
+    },
+
+    useRegisteredEmail(view) {
+      const email = this.registerForm.email.trim();
+      if (view === 'reset') this.resetForm.email = email;
+      else this.loginForm.email = email;
+      this.loginError = '';
+      this.view = view;
+    },
+
     async doLogin() {
       if (this.loading) return;
       sessionProbe?.abort();
@@ -144,23 +177,28 @@ function loginPage() {
     },
 
     async sendCode() {
+      if (this.sendingCode || this.codeCountdown > 0) return;
       const email = this.registerForm.email.trim();
+      this.registerError = '';
+      this.registerEmailExists = false;
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
-        this.showToast(this.authText('invalid_email_text', '请输入正确的邮箱地址'), 'error');
+        this.showRegisterError(new Error(this.authText('invalid_email_text', '请输入正确的邮箱地址')));
         return;
       }
       this.sendingCode = true;
       try {
         const response = await api.sendEmailCode(email);
+        if (email.toLowerCase() !== this.registerForm.email.trim().toLowerCase()) return;
         const retryAfter = Number(response?.data?.retry_after || 60);
         this.showToast(this.authText('code_sent_text', '验证码请求已提交，通常 10–60 秒到达；若未看到，请检查垃圾邮件、广告邮件或 QQ 邮箱拦截。重复发送仍使用同一个验证码。'), 'success');
         this.codeCountdown = retryAfter;
+        if (this.countdownTimer) clearInterval(this.countdownTimer);
         this.countdownTimer = setInterval(() => {
           this.codeCountdown--;
           if (this.codeCountdown <= 0) clearInterval(this.countdownTimer);
         }, 1000);
       } catch (err) {
-        this.showToast(err.message || this.authText('send_failed_text', '发送失败'), 'error');
+        if (email.toLowerCase() === this.registerForm.email.trim().toLowerCase()) this.showRegisterError(err);
       } finally { this.sendingCode = false; }
     },
 
@@ -186,10 +224,14 @@ function loginPage() {
     },
 
     async doRegister() {
+      if (this.loading) return;
+      const email = this.registerForm.email.trim();
+      this.registerError = '';
+      this.registerEmailExists = false;
       this.loading = true;
       try {
         const r = await api.register(
-          this.registerForm.email.trim(),
+          email,
           this.registerForm.password,
           this.registerForm.code.trim(),
           this.registerForm.name.trim()
@@ -200,7 +242,7 @@ function loginPage() {
         this.showToast(this.authText('register_success_text', '注册成功，欢迎来到 惑梦（Homer）'), 'success');
         setTimeout(() => this.goNext(), 700);
       } catch (err) {
-        this.showToast(err.message || this.authText('register_failed_text', '注册失败'), 'error');
+        if (email.toLowerCase() === this.registerForm.email.trim().toLowerCase()) this.showRegisterError(err);
       } finally { this.loading = false; }
     },
 

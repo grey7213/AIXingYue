@@ -1254,6 +1254,12 @@ def error_response(message: str, code: int = 400) -> dict:
     return {"result": "failure", "message": message, "code": str(code), "status": code, "data": message, "msg": message}
 
 
+def registered_email_error() -> dict:
+    result = error_response("该邮箱已注册，请直接登录；忘记密码可通过「找回密码」重置。", 409)
+    result["error_code"] = "email_already_registered"
+    return result
+
+
 def _resend_api_key() -> str:
     explicit = str(os.environ.get("RESEND_API_KEY") or "").strip()
     if explicit:
@@ -20947,7 +20953,7 @@ class Handler(BaseHTTPRequestHandler):
             if not is_valid_email(email_value):
                 return error_response("invalid email")
             if self.store.get_user_by_email(email_value):
-                return ok_response({"status": "accepted", "retry_after": 60, "reused": True})
+                return registered_email_error()
             try:
                 self.store.ensure_beta_registration_available(email_value)
             except ValueError as exc:
@@ -20997,10 +21003,10 @@ class Handler(BaseHTTPRequestHandler):
                 email, name, password, code = "", "", "", ""
             if not is_valid_email(email):
                 return error_response("invalid email")
+            if self.store.get_user_by_email(email):
+                return registered_email_error()
             if not password or len(str(password)) < 8:
                 return error_response("password must be at least 8 characters")
-            if self.store.get_user_by_email(email):
-                return error_response("email already registered", 409)
             try:
                 self.store.ensure_beta_registration_available(email)
             except ValueError as exc:
@@ -21013,6 +21019,8 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 user = self.store.create_registered_user(str(email), str(name), str(password), remote_ip)
             except ValueError as exc:
+                if str(exc) == "email already registered":
+                    return registered_email_error()
                 return error_response(str(exc), 409 if "already" in str(exc) else 400)
             # 方案A改造1：登录凭证写入 HttpOnly Cookie
             token = token_for(user["id"])

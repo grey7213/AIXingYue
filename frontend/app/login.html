@@ -8,7 +8,7 @@
   <link rel="icon" href="/favicon.ico?v=20260901-persistent-pages">
   <link rel="stylesheet" href="/assets/css/utilities.css?v=20260925-r25">
   <link rel="stylesheet" href="/app/assets/css/app.css?v=20260917-r8">
-  <script type="module" src="/app/assets/js/login.js?v=20260917-r8"></script>
+  <script type="module" src="/app/assets/js/login.js?v=20261002-register-feedback-v2"></script>
   <script defer src="/app/assets/vendor/alpine-3.14.1.min.js?v=3.14.1"></script>
   <script type="module" src="/app/assets/js/apk-updates.js?v=20260917-r8"></script>
   <link rel="stylesheet" href="/assets/css/app-design.css?v=20260917-r8">
@@ -69,7 +69,14 @@
         <form @submit.prevent="doRegister" class="space-y-4">
           <div>
             <label class="xy-label" x-text="authText('email_label', '邮箱')">邮箱</label>
-            <input type="email" x-model="registerForm.email" class="xy-input" :placeholder="authText('email_placeholder', 'you@example.com')" required>
+            <input type="email" x-model="registerForm.email" @input="clearRegisterFeedback()" class="xy-input" :placeholder="authText('email_placeholder', 'you@example.com')" :aria-invalid="registerEmailExists ? 'true' : 'false'" aria-describedby="register-feedback" required>
+          </div>
+          <div id="register-feedback" x-show="registerError" role="alert" aria-live="polite" class="text-sm leading-relaxed" style="padding:12px 14px;border:1px solid var(--ui-line,#e7dfe8);border-radius:12px;background:var(--ui-panel-soft,#f7f3f8);color:var(--ui-text,#24262b);overflow-wrap:anywhere;">
+            <p x-text="registerError"></p>
+            <div x-show="registerEmailExists" class="flex flex-wrap gap-3 mt-2">
+              <button type="button" class="xy-link" @click="useRegisteredEmail('login')">去登录</button>
+              <button type="button" class="xy-link" @click="useRegisteredEmail('reset')">找回密码</button>
+            </div>
           </div>
           <div>
             <label class="xy-label" x-text="authText('code_label', '验证码')">验证码</label>
