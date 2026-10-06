@@ -1,5 +1,26 @@
 # Android PR #19 集成与发布门槛
 
+## 最终发布结果（2026-10-07）
+
+本次已完成合并和生产发布；下方等待迁移、未完成验收等段落是此前阶段的历史记录，以本节为最终状态。
+
+- PR #19 已在修复后 CI 通过的 head `5e80a639812431ba28174a354661ff5b9799c07b` 合并，保留贡献者历史与维护者 Git 身份。
+- `160.202.46.157` / `ser0YeymdcIz0pT` 的 456 项 Web/runtime/backend 文件已更新并逐一验哈希。恢复快照的三处差异精确匹配旧提交 `2418241`（登录）和 `4fd00e8`（后端），同步补回品牌邮件及注册反馈修复。运维配置已合入迁移提交 `0915966`。
+- 旧代码及 SQLite 备份：`/root/homer-pr19-backup-20261006-184432/`（UTC 命名），`quick_check=ok`。部署后 backend/dialogue/Nginx active，内外 health OK。
+- Pixel 6 API 33：真实账号冷进入临时对话 15.23 秒；真实生成产生 3 次可见正文更新，3 条消息云端保存通过。一次回复按既有模型定价扣费 300 惑梦币，未修改全站定价。
+- 通过真实历史抽屉三次切换，始终复用同一 iframe，消息数依次 3/1/3，耗时 4.281/2.122/2.232 秒（含测试主动等待 800ms）。早期测试对隐藏抽屉及未完成切换采样过早，修正测试等待后通过，没有因此修改产品代码。
+- 正式包 282→353 覆盖安装通过，首次安装时间仍为 `2026-09-22 11:04:46`；原登录、资料及历史会话可见，进程 FATAL EXCEPTION=0。应用内检查更新显示“已是最新版本 / 当前版本 1.18.0”。
+- 1.18.0（353）正式包为 63,848,240 bytes，SHA-256 `0b9ae044d4fd9429922473bacea9f2e319c5920bdd8df27edf254892f26f4f7d`；原包名/证书、v2/v3、zipalign、1755 项资源清单及源码/产物双哈希通过。
+- 官网 immutable/canonical 均完整下载验哈希一致，release.json 为 353、Cache-Control: no-cache；`/app/open-source.html` 保持 404。GitHub Release 已发布，作者 grey7213，asset digest 与官网/本地一致。
+- 2 个临时会话、1 个私有测试角色经生产 API 删除；debug 包已卸载，正式 353 保留。没有修改已有会话正文。证据/签名包在 `E:\homer-pr19-review\output\pr19-review\`，不进入源码 Git。
+- 此前 1698 项前端、94 项 Android release 单测、49 项 Python 契约、6 项注册回归、8 项设备工坊隔离、两视口呈现及 96 文件语法验证均通过。
+- TAVO 来源/授权未核实的记录仍保留，本次技术验收不作许可证结论。
+
+官网：`https://patcher.villainy.top/download/homer-android-1.18.0-353-release.apk`
+
+GitHub：`https://github.com/grey7213/homer-android-apk/releases/tag/release-1.18.0-353`
+
+
 ## 迁移后恢复执行
 
 用户已明确通知迁移完成并授权将本次最新版上线。2026-10-07 实测 DNS 为 `160.202.46.157`，主机身份 `ser0YeymdcIz0pT`，原 SSH 公钥可用，backend/dialogue/Nginx active；当前仍为 APK 282。按既有计划继续验收与备份发布。旧“等待迁移”段保留为历史记录，不再阻断执行。迁移任务的本地未提交改动单独保留。
@@ -28,9 +49,9 @@
 - [x] APK 1755 项资源清单、521 项前端资源、源码与产物双哈希通过。
 - [x] Pixel 6 API 33 工坊账号隔离 8 场景通过；恢复的模块可导入，Spine 三项资源均返回 `X-Homer-Client-Asset: apk` / 200。
 - [x] 390/1440 APK 资源呈现与设置保存/取消/隔离测试通过，截图已查看。
-- [ ] 真实账号临时会话生成、切换和计费验证。
-- [ ] 282→353 正式包覆盖升级与登录/历史保留。
-- [ ] 合并后部署 Web/backend/runtime，发布官网/GitHub APK，验证公网哈希与更新元数据。
+- [x] 真实账号临时会话生成、切换和计费验证。
+- [x] 282→353 正式包覆盖升级与登录/历史保留。
+- [x] 合并后部署 Web/backend/runtime，发布官网/GitHub APK，验证公网哈希与更新元数据。
 
 ## 未完成与环境阻断
 

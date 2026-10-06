@@ -4,6 +4,8 @@
 
 ## 当前主要入口
 
+- PR #19 / R353 审查修复与 1.18.0 发布：`pr19-integration-20261007.md`（新机部署、真实生成/切换、正式覆盖升级、官网/GitHub 哈希与更新检查）。
+
 - 2026-10-07 全服务器迁移至 `160.202.46.157`：`server-migration-20261007-requirements.md`、`server-migration-20261007-design.md`、`server-migration-20261007-tasks.md`。旧机已弃用，按用户授权从本地备份恢复；非遗样式/Logo 及本地状态单独补齐。
 
 - 已有邮箱重复注册反馈：`registration-feedback-20261002.md`（取消发码假成功响应、注册表单持久错误、登录/找回入口及线上 409 验证）
