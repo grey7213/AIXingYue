@@ -4,6 +4,8 @@
 
 ## 当前主要入口
 
+- 2026-10-07 全服务器迁移至 `160.202.46.157`：`server-migration-20261007-requirements.md`、`server-migration-20261007-design.md`、`server-migration-20261007-tasks.md`。旧机已弃用，按用户授权从本地备份恢复；非遗样式/Logo 及本地状态单独补齐。
+
 - 已有邮箱重复注册反馈：`registration-feedback-20261002.md`（取消发码假成功响应、注册表单持久错误、登录/找回入口及线上 409 验证）
 
 - 注册/重置验证码品牌邮件：`verification-email-design-20261002.md`（入梦邀请函设计、中英文 HTML/纯文本、24 组浏览器预览、生产邮件显示名称修正）

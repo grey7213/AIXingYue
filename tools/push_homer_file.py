@@ -20,10 +20,10 @@ from pathlib import Path
 
 import paramiko
 
-DEFAULT_HOST = "38.76.218.46"
+DEFAULT_HOST = "160.202.46.157"
 DEFAULT_USER = "root"
 DEFAULT_KEY = Path.home() / ".ssh" / "villainy_backup_ed25519"
-EXPECTED_HOSTNAME = "vm-851a1bc4a978a80f"
+EXPECTED_HOSTNAME = "ser0YeymdcIz0pT"
 REPO = Path(__file__).resolve().parent.parent
 
 # name -> (local path, remote path, owner, mode, restart unit or None)

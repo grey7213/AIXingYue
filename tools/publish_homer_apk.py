@@ -37,10 +37,10 @@ from pathlib import Path
 
 import paramiko
 
-DEFAULT_HOST = "38.76.218.46"
+DEFAULT_HOST = "160.202.46.157"
 DEFAULT_USER = "root"
 DEFAULT_KEY = Path.home() / ".ssh" / "villainy_backup_ed25519"
-EXPECTED_HOSTNAME = "vm-851a1bc4a978a80f"
+EXPECTED_HOSTNAME = "ser0YeymdcIz0pT"
 
 DOWNLOAD_DIR = "/var/www/ai-fengyue-frontend/download"
 CANONICAL_NAME = "ai-xingyue-latest.apk"
