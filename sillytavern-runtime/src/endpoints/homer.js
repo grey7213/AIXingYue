@@ -1,6 +1,7 @@
 import express from 'express';
 
 import { getConfigValue } from '../util.js';
+import { withSessionCardTransport } from '../homer-card-transport.js';
 
 const BACKEND_BASE_URL = String(process.env.HOMER_BACKEND_BASE_URL || getConfigValue('homerBridge.backendBaseUrl', 'http://127.0.0.1:8000') || '').replace(/\/+$/, '');
 const AUTH_COOKIE_NAME = String(process.env.HOMER_AUTH_COOKIE_NAME || getConfigValue('homerBridge.authCookieName', 'ai_xingyue_token') || 'ai_xingyue_token');
@@ -23,7 +24,7 @@ function readCookie(cookieHeader, name) {
     return '';
 }
 
-async function forwardToHomer(request, response, pathname, { decorateSession = false } = {}) {
+async function forwardToHomer(request, response, pathname, { decorateSession = false, conditionalCardTransport = false } = {}) {
     const cookieValue = readCookie(request.headers.cookie, AUTH_COOKIE_NAME);
     if (!cookieValue) {
         return response.status(401).json({ error: '请先登录 Homer' });
@@ -34,6 +35,8 @@ async function forwardToHomer(request, response, pathname, { decorateSession = f
     try {
         const url = new URL(`${BACKEND_BASE_URL}${pathname}`);
         for (const [key, value] of Object.entries(request.query || {})) {
+            // These optional fields belong to this transport, not the upstream API.
+            if (conditionalCardTransport && ['card_cache', 'card_sha256'].includes(key)) continue;
             if (Array.isArray(value)) {
                 value.forEach(item => url.searchParams.append(key, String(item)));
             } else if (value !== undefined) {
@@ -57,13 +60,24 @@ async function forwardToHomer(request, response, pathname, { decorateSession = f
         let payload = Buffer.from(await upstream.arrayBuffer());
         if (decorateSession && contentType.includes('application/json')) {
             try {
-                const decoded = JSON.parse(payload.toString('utf8'));
+                let decoded = JSON.parse(payload.toString('utf8'));
                 const data = decoded?.data && typeof decoded.data === 'object' ? decoded.data : decoded;
+                let changed = false;
                 if (data?.runtime && typeof data.runtime === 'object') {
                     data.runtime.bridge_base_url = BACKEND_BASE_URL;
                     data.runtime.dialogue_api_base_url = `${BACKEND_BASE_URL}/console/api/web/dialogue/v1`;
-                    payload = Buffer.from(JSON.stringify(decoded), 'utf8');
+                    changed = true;
                 }
+                if (conditionalCardTransport) {
+                    const transported = withSessionCardTransport(decoded, {
+                        enabled: request.query?.card_cache,
+                        clientSha: request.query?.card_sha256,
+                        status: upstream.status,
+                    });
+                    changed ||= transported !== decoded;
+                    decoded = transported;
+                }
+                if (changed) payload = Buffer.from(JSON.stringify(decoded), 'utf8');
             } catch {
                 // Preserve the upstream payload if it was not valid JSON.
             }
@@ -81,7 +95,7 @@ async function forwardToHomer(request, response, pathname, { decorateSession = f
 }
 
 router.get('/session', (request, response) => {
-    return forwardToHomer(request, response, '/console/api/web/dialogue/session', { decorateSession: true });
+    return forwardToHomer(request, response, '/console/api/web/dialogue/session', { decorateSession: true, conditionalCardTransport: true });
 });
 
 router.get('/admin-preview', (request, response) => {

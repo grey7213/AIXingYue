@@ -14,7 +14,7 @@ import { updateReasoningUI } from '../../../../../reasoning.js';
 import { handleInjectPrompt } from '../features/inject-prompt';
 import { handleInitialVariables } from '../features/initial-variables';
 import { FunctionSandbox } from '../3rdparty/vm-browserify';
-import { protectPreContent } from '../../../../../homer-ejs-pre.mjs';
+import { capturePreContent, hasNonemptyDOMText } from '../../../../../homer-ejs-pre.mjs';
 
 let runID = 0;
 let isFakeRun = false; // Avoid recursive processing
@@ -441,7 +441,7 @@ async function handleMessageRender(message_id: string, type?: string, isDryRun?:
     const parent = $(`div.mes[mesid="${message_id}"]`);
     const container = parent?.find('.mes_text');
     // don't render if the message is swping (with generating)
-    if (!container?.text() || !message.mes || message.mes === '...' || message.mes === message.swipes?.[message.swipe_id! - 1]) {
+    if (!hasNonemptyDOMText(container) || !message.mes || message.mes === '...' || message.mes === message.swipes?.[message.swipe_id! - 1]) {
         console.info(`[Prompt Template] chat message #${message_id}.${message.swipe_id} is generating`);
         return;
     }
@@ -472,6 +472,8 @@ async function handleMessageRender(message_id: string, type?: string, isDryRun?:
     const sandbox = settings.sandbox ? new FunctionSandbox() : null;
     let newContent: string | null = null;
     let content: string | null = null;
+    let rawContent: string | null = null;
+    let unchangedProtectedSnapshot = false;
 
     try {
         // [RENDER:BEFORE] or @@render_before
@@ -520,13 +522,12 @@ async function handleMessageRender(message_id: string, type?: string, isDryRun?:
             if (newContent != null) {
                 // Permanent modification
                 message.mes = newContent;
-                updateMessageBlock(message_idx, message, { rerenderMessage: true });
+                updateMessageBlock(message_idx, message, { rerenderMessage: true, skipUnchangedFormatting: true });
             }
         }
 
-        const rawContent = container.html() as string;
-
-        const literalCode = settings.code_blocks_enabled === false ? protectPreContent(rawContent) : null;
+        const literalCode = settings.code_blocks_enabled === false ? capturePreContent(container[0]) : null;
+        rawContent = literalCode ? null : container.html() as string;
         content = literalCode ? literalCode.content : rawContent;
 
         const opts = {
@@ -565,8 +566,18 @@ async function handleMessageRender(message_id: string, type?: string, isDryRun?:
             { ...opts, sandbox }
         );
 
-        // Restore only after all EJS/reasoning preprocessors have finished.
-        newContent = literalCode ? literalCode.restore(newContent) : newContent;
+        // Keep the captured source, not the live DOM, across asynchronous hooks.
+        // A real render-after candidate must receive the complete restored HTML.
+        const evaluatedContent = newContent;
+        let restoredContent: string | null = null;
+        let restored = false;
+        const resolveContent = () => {
+            if (!restored) {
+                restoredContent = literalCode ? literalCode.restore(evaluatedContent) : evaluatedContent;
+                restored = true;
+            }
+            return restoredContent;
+        };
 
         // [RENDER:AFTER] or @@render_after
         const after = settings.render_loader_enabled === false
@@ -576,13 +587,19 @@ async function handleMessageRender(message_id: string, type?: string, isDryRun?:
                 msgId: message_idx,
                 decorator: '@@render_after',
                 comment: '[RENDER:AFTER]',
-                content: newContent,
+                content: literalCode ? undefined : evaluatedContent,
                 entries: worldEntries,
                 sandbox,
-            });
+            }, literalCode ? resolveContent : undefined);
 
-        if (newContent != null)
-            newContent = before + newContent + after;
+        if (evaluatedContent != null) {
+            unchangedProtectedSnapshot = literalCode?.identityRestoresRaw === true
+                && evaluatedContent === content && before === '' && after === '';
+            if (!unchangedProtectedSnapshot) {
+                newContent = before + resolveContent() + after;
+                rawContent = literalCode ? literalCode.rawHTML : rawContent;
+            }
+        }
     } catch(error) {
         console.error(`Error processing message #${message_idx}:`, error);
         newContent = null;
@@ -591,15 +608,21 @@ async function handleMessageRender(message_id: string, type?: string, isDryRun?:
     }
 
     // update if changed
-    if (newContent && newContent !== content) {
+    // `content` may contain literal-code protection tokens. Compare the final
+    // restored result with the actual DOM input, not those internal tokens;
+    // otherwise every unchanged code block tears down and rebuilds its DOM.
+    const finalMarkupChanged = !unchangedProtectedSnapshot && Boolean(newContent && newContent !== rawContent);
+    if (finalMarkupChanged && newContent !== null) {
         container.html(newContent);
         updateReasoningUI(parent);
         addCopyToCodeBlocks(parent);
         appendMediaToMessage(message, parent);
     }
 
-    // Because the `<pre>` tag has been modified, and other extensions need to access it, a re-rendering is required to display the new content.
-    if (newContent?.includes('<pre>') && isDryRun) {
+    // Only modified code blocks need an additional render notification. The
+    // ordinary render/chatLoaded lifecycle already covers unchanged markup;
+    // duplicate notifications cause iframe renderers to rebuild the same code.
+    if (finalMarkupChanged && newContent?.includes('<pre>') && isDryRun) {
         isFakeRun = true; // Prevent infinite recursion
         console.debug(`[HTML] rendering #${message_idx} message`);
         if (message.is_user) {

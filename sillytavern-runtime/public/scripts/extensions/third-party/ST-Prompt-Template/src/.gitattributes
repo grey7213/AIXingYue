@@ -1,0 +1,2 @@
+# Keep source-map source text byte-identical across Windows and Linux.
+*.ts text eol=lf

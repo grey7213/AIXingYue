@@ -458,6 +458,7 @@ async function callExtensionHook(name, hookName) {
     const url = extensionAssetUrl(`${name}/${manifest.js}`);
     console.debug(`callExtensionHook: Calling hook "${hookName}" (function "${hookFunctionName}") for extension "${name}"`);
 
+    let hookStarted = false;
     try {
         const module = await import(url);
 
@@ -466,6 +467,8 @@ async function callExtensionHook(name, hookName) {
             return;
         }
 
+        performance.mark(`homer-extension-hook-start:${name}:${hookName}`);
+        hookStarted = true;
         const hookCallResult = module[hookFunctionName]();
 
         const HOOK_TIMEOUT = 5000;
@@ -475,16 +478,23 @@ async function callExtensionHook(name, hookName) {
         };
 
         const result = await Promise.race([
-            (hookCallResult instanceof Promise ? hookCallResult : Promise.resolve(hookCallResult)).then(() => HOOK_RESULT.OK),
+            (hookCallResult instanceof Promise ? hookCallResult : Promise.resolve(hookCallResult)).then(() => {
+                // Record actual completion, including a hook that settles after
+                // the existing timeout. Asset "ready" is not hook readiness.
+                performance.mark(`homer-extension-hook-complete:${name}:${hookName}`);
+                return HOOK_RESULT.OK;
+            }),
             delay(HOOK_TIMEOUT).then(() => HOOK_RESULT.TIMEOUT),
         ]);
 
         if (result === HOOK_RESULT.TIMEOUT) {
+            performance.mark(`homer-extension-hook-timeout:${name}:${hookName}`);
             console.warn(`callExtensionHook: Hook "${hookName}" for extension "${name}" timed out after ${HOOK_TIMEOUT}ms`);
         } else {
             console.debug(`callExtensionHook: Hook "${hookName}" completed for extension "${name}"`);
         }
     } catch (error) {
+        if (hookStarted) performance.mark(`homer-extension-hook-error:${name}:${hookName}`);
         console.error(`callExtensionHook: Error calling hook "${hookName}" for extension "${name}":`, error);
     }
 }

@@ -87,13 +87,21 @@ interface EvaluateWorldEntitiesOptions {
  */
 export async function evaluateWIEntities(
     env: Record<string, unknown>,
-    options: EvalTemplateOptions & EvaluateWorldEntitiesOptions = {}) {
+    options: EvalTemplateOptions & EvaluateWorldEntitiesOptions = {},
+    resolveContent?: () => string | null) {
     const allEntries = options.entries ?? await getEnabledWorldInfoEntries();
+    const candidates = allEntries.filter(x => {
+        const hdl = new WorldInfoDecorators(x);
+        return hdl.isEnabled && (hdl.has(options.decorator) || x.comment.startsWith(options.comment ?? x.comment + ' '))
+    });
+    // An empty candidate set cannot inspect message content. Any candidate,
+    // including one later rejected by keywords/probability/conditions, must see
+    // the original complete restored snapshot before the existing selector.
+    if (resolveContent && candidates.length > 0) {
+        options = { ...options, content: resolveContent() };
+    }
     const worldInfoData = selectActivatedEntries(
-        allEntries.filter(x => {
-            const hdl = new WorldInfoDecorators(x);
-            return hdl.isEnabled && (hdl.has(options.decorator) || x.comment.startsWith(options.comment ?? x.comment + ' '))
-        }),
+        candidates,
         options.content ?? '',
         { vectorized: false }
     );

@@ -188,7 +188,7 @@ body.homer-runtime:is(.homer-generating,.homer-switching-chat) .homer-continuati
 body.homer-runtime:is(.homer-selecting-messages,.homer-card-stage-active) .homer-continuation-trigger{display:none!important}
 body.homer-runtime .homer-generation-options{display:grid;gap:10px}
 body.homer-runtime:not(.homer-card-stage-active) #send_textarea::placeholder{text-align:left!important;font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif!important}
-body.homer-runtime:not(.homer-card-stage-active) #chat .mes:not(:has(iframe,.homer-card-component,.homer-roleplayhub-documents)) .mes_text :is(p,span,em,strong){font-family:inherit!important;text-shadow:none!important;-webkit-text-stroke:0!important}
+body.homer-runtime:not(.homer-card-stage-active) #chat .mes:not(.homer-author-message):not(:has(iframe,.homer-card-component,.homer-roleplayhub-documents)) .mes_text :is(p,span,em,strong):not([data-message-tone]){font-family:inherit!important;text-shadow:none!important;-webkit-text-stroke:0!important}
 .homer-generation-options>button{display:grid;text-align:left;gap:5px;padding:12px!important;background:var(--app-fill)!important;color:var(--app-text)!important;border:1px solid var(--app-line)!important;border-radius:12px!important;min-height:44px;font:14px/1.6 system-ui;text-shadow:none!important}
 .homer-generation-options small{color:var(--app-muted)!important;font-size:12px}
 
@@ -256,8 +256,8 @@ body.homer-runtime:not(.homer-card-stage-active) #chat .mes:not(:has(iframe,.hom
 body.homer-runtime:not(.homer-card-stage-active) #chat .mes .mes_text p:last-child{margin-bottom:0!important}
 
 /* Session model controls: compact rows, strong text contrast, sticky actions. */
-body.homer-runtime #stmb-memory-boundary-jump{width:116px!important;min-width:116px!important;max-width:none!important;height:44px!important;min-height:44px!important;border-radius:22px!important;padding:8px 12px!important;gap:6px;color:#fff!important;background:#29485f!important;font-size:12px!important;white-space:nowrap}
-body.homer-runtime #stmb-memory-boundary-jump::after{content:"未整理记忆";font-family:system-ui;white-space:nowrap}
+/* The right settings drawer remains the entry to Long Memory. */
+body.homer-runtime #stmb-memory-boundary-jump{display:none!important;visibility:hidden!important;pointer-events:none!important}
 body.homer-runtime .homer-preset-panel{max-height:calc(100dvh - 120px);overflow-y:auto}
 body.homer-runtime .homer-preset-panel .homer-status-grid{display:none}
 body.homer-runtime .homer-preset-notice{font-size:12px;line-height:1.5;margin:8px 0}
@@ -265,7 +265,6 @@ body.homer-runtime .homer-preset-row__name{white-space:normal!important;overflow
 /* The composer is app-owned; card documents and saved bubble colors are not. */
 body.has-preview .preview-composer :is(textarea,#preview-add),body.homer-runtime :is(#send_textarea,#options_button,#leftSendForm){color:#fff!important;caret-color:#fff!important}
 body.has-preview .preview-composer textarea::placeholder,body.homer-runtime #send_textarea::placeholder{color:#c4c4c4!important}
-body.homer-runtime #stmb-memory-boundary-jump{background:var(--chat-accent)!important;color:#fff!important}
 body.homer-runtime .homer-memory-layout>h2{font-size:20px!important;margin:0 0 8px!important}
 body.homer-runtime .homer-memory-layout .info-block{padding:10px!important;margin:6px 0!important;font-size:13px!important;line-height:1.45!important}
 .homer-memory-progress{margin-top:6px;font-size:13px}.homer-memory-progress summary{min-height:44px;display:flex;align-items:center;cursor:pointer}

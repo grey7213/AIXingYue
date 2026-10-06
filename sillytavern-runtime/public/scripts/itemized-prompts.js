@@ -19,24 +19,32 @@ export let itemizedPrompts = [];
  * Gets the itemized prompts for a chat.
  * @param {string} chatId Chat ID to load
  */
-export async function loadItemizedPrompts(chatId) {
+export function prepareItemizedPrompts(chatId) {
+    const pending = (async () => {
+        if (!chatId) return { prompts: [], loaded: false };
+        const prompts = await promptStorage.getItem(chatId);
+        return { prompts: prompts || [], loaded: true };
+    })().catch(() => ({ prompts: [], loaded: false, failed: true }));
+    // Preparing a different chat does not replace the active array or emit
+    // events. Settle failures even if an old-chat save later rejects first.
+    return { chatId, pending };
+}
+
+export async function applyPreparedItemizedPrompts(preparation) {
+    const chatId = preparation.chatId;
     try {
-        if (!chatId) {
-            itemizedPrompts = [];
-            return;
-        }
-
-        itemizedPrompts = await promptStorage.getItem(chatId);
-
-        if (!itemizedPrompts) {
-            itemizedPrompts = [];
-        }
-
-        await eventSource.emit(event_types.ITEMIZED_PROMPTS_LOADED, { chatId: chatId });
+        const outcome = await preparation.pending;
+        itemizedPrompts = outcome.prompts;
+        if (outcome.failed) console.log('Error loading itemized prompts for chat', chatId);
+        if (outcome.loaded) await eventSource.emit(event_types.ITEMIZED_PROMPTS_LOADED, { chatId: chatId });
     } catch {
         console.log('Error loading itemized prompts for chat', chatId);
         itemizedPrompts = [];
     }
+}
+
+export async function loadItemizedPrompts(chatId) {
+    await applyPreparedItemizedPrompts(prepareItemizedPrompts(chatId));
 }
 
 /**

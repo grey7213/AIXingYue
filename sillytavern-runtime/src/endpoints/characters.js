@@ -25,6 +25,7 @@ import { getChatInfo } from './chats.js';
 import { ByafParser } from '../byaf.js';
 import { CharXParser, persistCharXAssets } from '../charx.js';
 import cacheBuster from '../middleware/cacheBuster.js';
+import { withCharacterCardTransport } from '../homer-card-transport.js';
 
 // With 100 MB limit it would take roughly 3000 characters to reach this limit
 const memoryCacheCapacity = getConfigValue('performance.memoryCacheCapacity', '100mb');
@@ -363,6 +364,36 @@ const calculateDataSize = (data) => {
 };
 
 /**
+ * Keep the imported card revision in a shallow catalog without exposing its
+ * authoring extensions. This marker is revision metadata, not authorization.
+ * @param {object} character Character with its actual persisted avatar
+ * @returns {object} Bounded Homer metadata, or no additional fields
+ */
+function getHomerShallowMarker(character) {
+    const marker = _.get(character, 'data.extensions.homer_bridge');
+    if (!marker || typeof marker !== 'object' || Array.isArray(marker)
+        || marker.source !== 'homer-cloud') {
+        return {};
+    }
+    if (typeof marker.app_id !== 'string'
+        && !(typeof marker.app_id === 'number' && Number.isFinite(marker.app_id))) {
+        return {};
+    }
+    const appId = String(marker.app_id);
+    const signature = marker.card_signature;
+    if (!appId || appId.length > 160 || typeof signature !== 'string'
+        || !signature || signature.length > 160) {
+        return {};
+    }
+    // Match the existing importer, including its numeric-zero fallback.
+    const safeKey = String(marker.app_id || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80) || 'character';
+    if (character.avatar !== `homer-${safeKey}.png`) {
+        return {};
+    }
+    return { homer_bridge: { app_id: appId, card_signature: signature } };
+}
+
+/**
  * Only get fields that are used to display the character list.
  * @param {object} character Character object
  * @returns {{shallow: true, [key: string]: any}} Shallow character
@@ -389,6 +420,7 @@ const toShallow = (character) => {
             extensions: {
                 fav: _.get(character, 'data.extensions.fav', false),
                 world: _.get(character, 'data.extensions.world', ''),
+                ...getHomerShallowMarker(character),
             },
         },
     };
@@ -1487,7 +1519,10 @@ router.post('/get', validateAvatarUrlMiddleware, async function (request, respon
 
         const data = await processCharacter(item, request.user.directories, { shallow: false });
 
-        return response.send(data);
+        return response.send(withCharacterCardTransport(data, {
+            enabled: request.body.card_cache,
+            clientSha: request.body.card_sha256,
+        }));
     } catch (err) {
         console.error(err);
         response.sendStatus(500);

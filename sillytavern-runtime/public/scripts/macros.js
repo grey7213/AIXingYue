@@ -517,7 +517,10 @@ function getPickReplaceMacro(rawContent) {
     // We need to have a consistent chat hash, otherwise we'll lose rolls on chat file rename or branch switches
     // No need to save metadata here - branching and renaming will implicitly do the save for us, and until then loading it like this is consistent
     const chatIdHash = getChatIdHash();
-    const rawContentHash = getStringHash(rawContent);
+    // Keep the eager chat-ID initialization, but hash the possibly multi-MB
+    // raw template only if a pick actually matches (also when an earlier macro
+    // introduces it). No macro result or chat-dependent seed is cached.
+    let rawContentHash;
 
     const pickPattern = /{{pick\s?::?([^}]+)}}/gi;
     const pickReplace = (match, listString, offset) => {
@@ -533,7 +536,7 @@ function getPickReplaceMacro(rawContent) {
 
         // We build a hash seed based on: unique chat file, raw content, and the placement inside this content
         // This allows us to get unique but repeatable picks in nearly all cases
-        const combinedSeedString = `${chatIdHash}-${rawContentHash}-${offset}`;
+        const combinedSeedString = `${chatIdHash}-${rawContentHash ??= getStringHash(rawContent)}-${offset}`;
         const finalSeed = getStringHash(combinedSeedString);
         // @ts-ignore - have to use numbers for legacy picks
         const rng = seedrandom(finalSeed);

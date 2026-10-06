@@ -78,6 +78,11 @@
 
 ## Reusable Pitfalls
 
+- Symptom: R353 累计补丁构建与资源枚举通过，但角色体验模块依赖缺失。
+  Cause: 累计补丁误删仍被静态 import 的 `spine-portrait.mjs` 及其运行库/许可证；枚举当前目录无法检测源文件也被删除。
+  Fix: 移除三项删除补丁，原生 APK 校验器新增独立必需依赖清单；累计三方合并还需检查重复函数/路由和生成文件一致性。
+  Verify: 原 APK 在新校验器下失败；修复后的 APK 1755 项校验通过，Pixel 6 真实 WebView 导入成功，三项资源均从 APK 返回 200。发布状态见 `specs/pr19-integration-20261007.md`。
+
 - Symptom: 已有邮箱点击注册验证码后提示发送成功并倒计时，却始终收不到邮件。
   Cause: 注册发码接口对已存在账号直接返回 200/accepted 而不发邮件，前端把它当成成功；重复注册的错误又只显示短暂 toast。
   Fix: 两个注册入口统一使用 `registered_email_error()` 返回 409 与 `email_already_registered`，不生成或投递验证码；网页持久展示错误和登录/找回入口，已有账号冲突时清理残留倒计时，邮箱改变时忽略旧请求结果。

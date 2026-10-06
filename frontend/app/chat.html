@@ -706,6 +706,7 @@
   </style>
   <link rel="stylesheet" href="/assets/css/app-design.css?v=20260917-r8">
   <link rel="stylesheet" href="/assets/css/chat-design.css?v=20260917-r8">
+  <link rel="stylesheet" href="/assets/css/chat-shared-host.css?v=20261001-r34">
   <script defer src="/assets/js/option-picker.js?v=20260917-r8"></script>
 </head>
 <body class="has-preview">
@@ -752,7 +753,8 @@
         </aside>
         <div id="preview-messages" class="preview-messages"></div>
         <div class="preview-generation-row"><button type="button" aria-label="生成操作" data-runtime-section="generation"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 8 5 4-5 4Zm6 0 5 4-5 4Z" fill="currentColor" stroke="none"/></svg></button></div>
-        <form id="preview-composer" class="preview-composer">
+        <div id="shared-composer" aria-label="消息输入"></div>
+        <form id="preview-composer" class="preview-composer" hidden aria-hidden="true">
           <button id="preview-add" type="button" aria-label="添加内容" data-runtime-section="attachments">+</button>
           <textarea id="preview-input" rows="1" maxlength="10000" placeholder="随便聊聊..."></textarea>
           <button id="preview-send" type="submit">发送</button>

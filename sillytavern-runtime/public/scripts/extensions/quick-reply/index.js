@@ -11,6 +11,7 @@ import { ButtonUi } from './src/ui/ButtonUi.js';
 import { SettingsUi } from './src/ui/SettingsUi.js';
 import { debounceAsync } from '../../utils.js';
 import { selected_group } from '../../group-chats.js';
+import { takeQuickReplySettingsPresets } from '../../extension-settings-handoff.mjs';
 export { debounceAsync };
 
 
@@ -53,14 +54,18 @@ export let quickReplyApi;
 
 
 const loadSets = async () => {
-    const response = await fetch('/api/settings/get', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({}),
-    });
+    let setList = takeQuickReplySettingsPresets();
+    if (setList === null) {
+        const response = await fetch('/api/settings/get', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({}),
+        });
+        if (!response.ok) return;
+        setList = (await response.json()).quickReplyPresets ?? [];
+    }
 
-    if (response.ok) {
-        const setList = (await response.json()).quickReplyPresets ?? [];
+    {
         for (const set of setList) {
             if (set.version !== 2) {
                 // migrate old QR set

@@ -3,6 +3,7 @@ import { api, requireAuth, isLoggedIn, getCachedUser, setCachedUser, clearAuth, 
 import { injectLayout, loadPublicSiteSettings } from '/app/assets/js/layout.js?v=20260917-r8';
 import { readPageCache, writePageCache, clearPageCacheScope } from './page-cache.js?v=20261001-workshop-auth';
 import { messagePreview } from '/assets/js/message-preview.js';
+import { historyPreparationOwner, selectFreshHistoryTargets } from '/assets/js/history-dialogue-preparation.mjs';
 
 async function loadUser(ctx) {
   if (!requireAuth()) return false;
@@ -201,6 +202,17 @@ export function historiesPage() {
         if (epoch !== this._listEpoch || String(owner?.id || owner?.user_id || '') !== String(getCachedUser()?.id || getCachedUser()?.user_id || '')) return;
         this.conversations = (r?.data?.list || []).map(item => this.normalizeConversation(item));
         writePageCache('histories', owner, { list: this.conversations.slice(0, 100) });
+        // Only this successful fresh API result is eligible. Page-cache paint
+        // never causes a role read, and the native bridge rechecks this source
+        // document and owner before passing IDs to its unused retained host.
+        const strictOwner = historyPreparationOwner(owner);
+        const targets = selectFreshHistoryTargets(this.filteredConversations);
+        if (strictOwner && targets.length && epoch === this._listEpoch
+            && strictOwner === historyPreparationOwner(getCachedUser())) {
+          try {
+            window.HomerNative?.prepareHistoryConversations?.(location.href, strictOwner, JSON.stringify(targets));
+          } catch { /* Optional preparation cannot break the history list. */ }
+        }
       } finally { if (epoch === this._listEpoch) this.loading = false; }
     },
     async toggleLike(c, event) {

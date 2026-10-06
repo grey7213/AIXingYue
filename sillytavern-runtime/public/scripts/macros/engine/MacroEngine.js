@@ -41,10 +41,25 @@ class MacroEngine {
     #preProcessors = [];
     /** @type {RegisteredProcessor[]} */
     #postProcessors = [];
+    /** @type {Readonly<RegisteredProcessor>[]} */
+    #corePreProcessors = [];
+    /** @type {Readonly<RegisteredProcessor>[]} */
+    #corePostProcessors = [];
 
     constructor() {
         this.#registerCorePreProcessors();
         this.#registerCorePostProcessors();
+        this.#corePreProcessors = this.#preProcessors.map(entry => Object.freeze({ ...entry }));
+        this.#corePostProcessors = this.#postProcessors.map(entry => Object.freeze({ ...entry }));
+    }
+
+    /** Reads processor identities without executing or changing the pipeline. */
+    hasOnlyCoreProcessors() {
+        const same = (current, core) => current.length === core.length && current.every((entry, index) =>
+            entry.handler === core[index].handler && entry.priority === core[index].priority
+            && entry.source === core[index].source);
+        return same(this.#preProcessors, this.#corePreProcessors)
+            && same(this.#postProcessors, this.#corePostProcessors);
     }
 
     /**

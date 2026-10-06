@@ -722,6 +722,17 @@ export async function forwardFetchResponse(from, to) {
     to.statusCode = statusCode;
     to.statusMessage = statusText;
 
+    // Preserve the stream boundary for reverse proxies and clients. Forward
+    // only representation metadata, never provider cookies or auth headers.
+    const contentType = from.headers.get('content-type');
+    if (contentType) {
+        to.setHeader('Content-Type', contentType);
+    }
+    if (/^text\/event-stream(?:\s*;|\s*$)/i.test(contentType || '')) {
+        to.setHeader('Cache-Control', 'no-cache, no-store, no-transform');
+        to.setHeader('X-Accel-Buffering', 'no');
+    }
+
     if (!from.ok) {
         try {
             const rawErrorText = await from.text();

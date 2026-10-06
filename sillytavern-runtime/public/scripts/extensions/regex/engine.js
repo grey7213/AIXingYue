@@ -1,8 +1,13 @@
-import { characters, saveSettingsDebounced, substituteParams, substituteParamsExtended, this_chid } from '../../../script.js';
+import { characters, name1, name2, saveSettingsDebounced, substituteParams, substituteParamsExtended, this_chid } from '../../../script.js';
 import { extension_settings, writeExtensionField } from '../../extensions.js';
 import { getPresetManager } from '../../preset-manager.js';
 import { regexFromString } from '../../utils.js';
 import { lodash } from '../../../lib.js';
+import { createRegexTemplateCache, fillRegexTemplate } from '../../homer-stable-template.mjs';
+import { assertDeterministicMacroReplayEligible } from '../../homer-macro-replay-eligibility.mjs';
+import { createFrontendRuleBoundary } from '../../homer-html-fences.mjs';
+
+const replacementTemplates = createRegexTemplateCache();
 
 /**
  * @readonly
@@ -329,9 +334,9 @@ function sanitizeRegexMacro(x) {
  * @param {regex_placement} placement The placement of the string
  * @param {RegexParams} params The parameters to use for the regex script
  * @returns {string} The regexed string
- * @typedef {{characterOverride?: string, isMarkdown?: boolean, isPrompt?: boolean, isEdit?: boolean, depth?: number }} RegexParams The parameters to use for the regex script
+ * @typedef {{characterOverride?: string, isMarkdown?: boolean, isPrompt?: boolean, isEdit?: boolean, depth?: number, deterministicReplay?: boolean }} RegexParams The parameters to use for the regex script
  */
-export function getRegexedString(rawString, placement, { characterOverride, isMarkdown, isPrompt, isEdit, depth } = {}) {
+export function getRegexedString(rawString, placement, { characterOverride, isMarkdown, isPrompt, isEdit, depth, deterministicReplay = false } = {}) {
     // WTF have you passed me?
     if (typeof rawString !== 'string') {
         console.warn('getRegexedString: rawString is not a string. Returning empty string.');
@@ -344,6 +349,8 @@ export function getRegexedString(rawString, placement, { characterOverride, isMa
     }
 
     const allRegex = getRegexScripts({ allowedOnly: true });
+    const official = isMarkdown && !isPrompt ? new Set(officialDisplayRules()) : null;
+    let officialBoundary;
     allRegex.forEach((script) => {
         if (
             // Script applies to Markdown and input is Markdown
@@ -372,7 +379,13 @@ export function getRegexedString(rawString, placement, { characterOverride, isMa
             }
 
             if (script.placement.includes(placement)) {
-                finalString = runRegexScript(script, finalString, { characterOverride });
+                const run = value => runRegexScript(script, value, { characterOverride, deterministicReplay });
+                if (official?.has(script)) {
+                    officialBoundary ||= createFrontendRuleBoundary(finalString);
+                    finalString = officialBoundary.apply(run);
+                } else {
+                    finalString = run(finalString);
+                }
             }
         }
     });
@@ -386,9 +399,9 @@ export function getRegexedString(rawString, placement, { characterOverride, isMa
  * @param {string} rawString The string to run the regex script on
  * @param {RegexScriptParams} params The parameters to use for the regex script
  * @returns {string} The new string
- * @typedef {{characterOverride?: string}} RegexScriptParams The parameters to use for the regex script
+ * @typedef {{characterOverride?: string, deterministicReplay?: boolean}} RegexScriptParams The parameters to use for the regex script
  */
-export function runRegexScript(regexScript, rawString, { characterOverride } = {}) {
+export function runRegexScript(regexScript, rawString, { characterOverride, deterministicReplay = false } = {}) {
     let newString = rawString;
     if (!regexScript || !!(regexScript.disabled) || !regexScript?.findRegex || !rawString) {
         return newString;
@@ -399,9 +412,10 @@ export function runRegexScript(regexScript, rawString, { characterOverride } = {
             case substitute_find_regex.NONE:
                 return regexScript.findRegex;
             case substitute_find_regex.RAW:
-                return substituteParamsExtended(regexScript.findRegex);
+                return deterministicReplay ? replayRegexParams(regexScript.findRegex) : substituteParamsExtended(regexScript.findRegex);
             case substitute_find_regex.ESCAPED:
-                return substituteParamsExtended(regexScript.findRegex, {}, sanitizeRegexMacro);
+                return deterministicReplay ? replayRegexParams(regexScript.findRegex, { escaped: true })
+                    : substituteParamsExtended(regexScript.findRegex, {}, sanitizeRegexMacro);
             default:
                 console.warn(`runRegexScript: Unknown substituteRegex value ${regexScript.substituteRegex}. Using raw regex.`);
                 return regexScript.findRegex;
@@ -418,30 +432,18 @@ export function runRegexScript(regexScript, rawString, { characterOverride } = {
     // Run replacement. Currently does not support the Overlay strategy
     newString = rawString.replace(findRegex, function (match) {
         const args = [...arguments];
-        const replaceString = regexScript.replaceString.replace(/{{match}}/gi, '$0');
-        const replaceWithGroups = replaceString.replaceAll(/\$(\d+)|\$<([^>]+)>/g, (_, num, groupName) => {
-            if (num) {
-                // Handle numbered capture groups ($1, $2, etc.)
-                match = args[Number(num)];
-            } else if (groupName) {
-                // Handle named capture groups ($<name>)
-                const groups = args[args.length - 1];
-                match = groups && typeof groups === 'object' && groups[groupName];
-            }
-
-            // No match found - return the empty string
-            if (!match) {
-                return '';
-            }
-
-            // Remove trim strings from the match
-            const filteredMatch = filterString(match, regexScript.trimStrings, { characterOverride });
-
-            return filteredMatch;
-        });
+        // Legacy-source identification is not a real message render. Do not
+        // invoke macro processors or eagerly evaluate unrelated card fields.
+        // Validate only matched rules: an unrelated dynamic rule is harmless.
+        if (deterministicReplay) {
+            replayRegexParams(regexScript.replaceString);
+            (regexScript.trimStrings || []).forEach(value => replayRegexParams(value, { characterOverride }));
+        }
+        const replaceWithGroups = fillRegexTemplate(replacementTemplates.get(regexScript), args,
+            value => filterString(value, regexScript.trimStrings, { characterOverride, deterministicReplay }));
 
         // Substitute at the end
-        return substituteParams(replaceWithGroups);
+        return deterministicReplay ? replayRegexParams(replaceWithGroups) : substituteParams(replaceWithGroups);
     });
 
     return newString;
@@ -454,13 +456,35 @@ export function runRegexScript(regexScript, rawString, { characterOverride } = {
  * @param {RegexScriptParams} params The parameters to use for the regex filter
  * @returns {string} The filtered string
  */
-function filterString(rawString, trimStrings, { characterOverride } = {}) {
+function filterString(rawString, trimStrings, { characterOverride, deterministicReplay = false } = {}) {
     let finalString = rawString;
+    if (deterministicReplay) replayRegexParams(rawString);
     trimStrings.forEach((trimString) => {
-        const subTrimString = substituteParams(trimString, { name2Override: characterOverride });
+        const subTrimString = deterministicReplay ? replayRegexParams(trimString, { characterOverride })
+            : substituteParams(trimString, { name2Override: characterOverride });
         finalString = finalString.replaceAll(subTrimString, '');
     });
 
     return finalString;
+}
+
+// Pure, fail-closed substitutions for identifying old greeting display output.
+// Never use substituteParams here: even plain text can run macro processors and
+// macros in other card fields. Live display/generation keep the normal engine.
+function replayRegexParams(value, { characterOverride, escaped = false } = {}) {
+    const text = String(value || '');
+    assertDeterministicMacroReplayEligible(text);
+    // Angle aliases and spaced macros depend on the selected macro engine.
+    // Unknown syntax must never manufacture a false reverse-output match.
+    const unsafe = /{{(?!(?:char|user|match)}})|<(?:USER|BOT|CHAR|CHARIFNOTGROUP|GROUP)>/i;
+    if (unsafe.test(text)) throw new Error('Unsafe deterministic regex replay');
+    const result = text.replace(/{{(char|user)}}/gi, (_match, kind) => {
+        const name = String(kind.toLowerCase() === 'user' ? name1 : (characterOverride ?? name2));
+        if (/{{|<(?:USER|BOT|CHAR|CHARIFNOTGROUP|GROUP)>/i.test(name)) throw new Error('Unsafe deterministic regex replay');
+        return escaped ? sanitizeRegexMacro(name) : name;
+    });
+    if (unsafe.test(result)) throw new Error('Unsafe deterministic regex replay');
+    assertDeterministicMacroReplayEligible(result);
+    return result;
 }
 import { officialDisplayRules } from '../../homer-official-regex.mjs';

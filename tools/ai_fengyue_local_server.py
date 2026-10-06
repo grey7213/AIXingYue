@@ -27,6 +27,7 @@ import zipfile
 import zlib
 from homer_generation import display_regex, execute_prompt_regex, generation_error, preset_fingerprint, validate_upstream_event, require_generated_text, settle_delivered_generation
 from homer_images import route as image_route, ImageError
+from homer_session_cards import convert_session_card
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
@@ -8333,8 +8334,27 @@ class Store:
 
     def resolve_local_app_id(self, app_id: str) -> str:
         clean = unquote(str(app_id or "").strip())
-        row = self.get_local_app(clean)
-        return str(row["id"]) if row else clean
+        # Keep get_local_app's second normalization and exact-id precedence,
+        # but resolve only the identifier, not megabytes of card extensions.
+        # This is a fresh DB read, never a permission or cross-request cache.
+        lookup_clean = unquote(str(clean or "").strip())
+        if not lookup_clean:
+            return clean
+        with self.lock:
+            row = self.conn.execute(
+                "select id from local_apps where id=?", (lookup_clean,),
+            ).fetchone()
+            if row:
+                return str(row["id"])
+            lookup = lookup_clean[1:] if lookup_clean.startswith("#") else lookup_clean
+            if lookup.lower().startswith("id:"):
+                lookup = lookup[3:].strip()
+            if not lookup:
+                return clean
+            row = self.conn.execute(
+                "select id from local_apps where display_id=? and display_id<>''", (lookup,),
+            ).fetchone()
+            return str(row["id"]) if row else clean
 
     def resolve_social_cards(self, public_ids: list[str], request_user: dict) -> dict[str, dict]:
         """Resolve community card references without exposing card source data."""
@@ -20704,7 +20724,8 @@ class Handler(BaseHTTPRequestHandler):
             )
             card = local_app_to_card(app_data)
             silly_card = silly_card_with_homer_cover(
-                local_app_to_silly_card(app_data, card),
+                convert_session_card(local_app_to_silly_card, app_data, card,
+                                     owner_id=user_id, conversation_id=conversation_id),
                 str(app_data.get("cover_url") or card.get("cover_url") or card.get("cover") or ""),
             )
             messages = self.store.list_messages(conversation_id, user_id, limit=500)

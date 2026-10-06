@@ -601,6 +601,32 @@ input[type='checkbox']:focus-visible {
     padding: 1em;
 }
 
+/* Full source stays scrollable/copyable while a frontend renderer prepares.
+   The class belongs to PRE only, never to the subsequently rendered iframe. */
+pre.homer-large-code-block {
+    max-height: 480px;
+    max-height: min(40vh, 480px);
+    max-width: 100%;
+    overflow: auto;
+}
+
+pre.homer-large-code-block > code {
+    white-space: pre;
+    overflow-wrap: normal;
+    word-break: normal;
+}
+
+/* Only during complete saved-chat hydration, before the HTML renderer replaces
+   its literal source. All source remains in the DOM. finally removes the hold,
+   including on failure or when rendering is disabled; real iframes, ordinary
+   messages, small code blocks and subsequent generation are never targeted.
+   HTML source need not have a Markdown language label. Large ordinary code
+   is also fully restored at the end, not permanently collapsed or hidden. */
+#chat.homer-preparing-source-layout pre.homer-large-code-block > code {
+    content-visibility: hidden;
+    contain-intrinsic-size: auto 160px;
+}
+
 .mes_text img:not(.mes_img),
 .mes_reasoning img:not(.mes_img) {
     max-width: 100%;

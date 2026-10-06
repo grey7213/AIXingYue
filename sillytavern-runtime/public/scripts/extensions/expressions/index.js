@@ -18,6 +18,7 @@ import { generateWebLlmChatPrompt, isWebLlmSupported } from '../shared.js';
 import { Popup, POPUP_RESULT } from '../../popup.js';
 import { t } from '../../i18n.js';
 import { removeReasoningFromString } from '../../reasoning.js';
+import { isHostChromeInlineHidden, setHostChromeDisplay, setHostExpressionWrapperDisplay } from '../../homer-known-display.mjs';
 export { MODULE_NAME };
 
 /**
@@ -75,6 +76,17 @@ const DEFAULT_EXPRESSIONS = [
 const OPTION_NO_FALLBACK = '#none';
 const OPTION_EMOJI_FALLBACK = '#emoji';
 const RESET_SPRITE_LABEL = '#reset';
+
+function setExpressionPanelVisibility(hasChat) {
+    const open = $('#open_chat_expressions');
+    const empty = $('#no_chat_expressions');
+    if (!setHostChromeDisplay(open, hasChat, 'block')) {
+        if (hasChat) open.show(); else open.hide();
+    }
+    if (!setHostChromeDisplay(empty, !hasChat, 'block')) {
+        if (hasChat) empty.hide(); else empty.show();
+    }
+}
 
 
 /** @enum {number} */
@@ -484,14 +496,16 @@ async function moduleWorker({ newChat = false } = {}) {
     }
 
     const vnMode = isVisualNovelMode();
-    const vnWrapperVisible = $('#visual-novel-wrapper').is(':visible');
+    const vnWrapper = $('#visual-novel-wrapper');
+    const expressionWrapper = $('#expression-wrapper');
+    const vnWrapperVisible = !isHostChromeInlineHidden(vnWrapper) && vnWrapper.is(':visible');
 
     if (vnMode) {
-        $('#expression-wrapper').hide();
-        $('#visual-novel-wrapper').show();
+        if (!setHostExpressionWrapperDisplay(expressionWrapper, false)) expressionWrapper.hide();
+        if (!setHostExpressionWrapperDisplay(vnWrapper, true)) vnWrapper.show();
     } else {
-        $('#expression-wrapper').show();
-        $('#visual-novel-wrapper').hide();
+        if (!setHostExpressionWrapperDisplay(expressionWrapper, true)) expressionWrapper.show();
+        if (!setHostExpressionWrapperDisplay(vnWrapper, false)) vnWrapper.hide();
     }
 
     const vnStateChanged = vnMode !== vnWrapperVisible;
@@ -513,8 +527,7 @@ async function moduleWorker({ newChat = false } = {}) {
 
     const offlineMode = $('.expression_settings .offline_mode');
     if (!modules.includes('classify') && extension_settings.expressions.api == EXPRESSION_API.extras) {
-        $('#open_chat_expressions').show();
-        $('#no_chat_expressions').hide();
+        setExpressionPanelVisibility(true);
         offlineMode.css('display', 'block');
         lastCharacter = context.groupId || context.characterId;
 
@@ -1171,8 +1184,7 @@ function removeExpression() {
     $('img.expression').off('error');
     $('img.expression').prop('src', '');
     $('img.expression').removeClass('default');
-    $('#open_chat_expressions').hide();
-    $('#no_chat_expressions').show();
+    setExpressionPanelVisibility(false);
 }
 
 /**
@@ -1230,8 +1242,7 @@ async function drawSpritesList(spriteFolderName, labels, sprites) {
     /** @type {Expression[]} */
     let validExpressions = [];
 
-    $('#no_chat_expressions').hide();
-    $('#open_chat_expressions').show();
+    setExpressionPanelVisibility(true);
     $('#image_list').empty();
     $('#image_list').data('name', spriteFolderName);
     $('#image_list_header_name').text(spriteFolderName);
@@ -2183,7 +2194,7 @@ export async function init() {
         <div id="visual-novel-wrapper">
         </div>`;
         const element = $(html);
-        element.hide();
+        if (!setHostExpressionWrapperDisplay(element, false)) element.hide();
         $('body').append(element);
     }
     async function addSettings() {

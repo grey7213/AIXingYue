@@ -298,6 +298,10 @@ export class PromptCollection {
 }
 
 class PromptManager {
+    // Presentation requests only; never cache a character, chat, or generation.
+    #parkedRenderRequest = null;
+    #parkedRenderObserver = null;
+    #parkedRenderNode = null;
     get promptSources() {
         return {
             charDescription: t`Character Description`,
@@ -755,48 +759,48 @@ class PromptManager {
         }
 
         // Re-render when chat history changes.
-        eventSource.on(event_types.MESSAGE_DELETED, () => this.renderDebounced());
-        eventSource.on(event_types.MESSAGE_EDITED, () => this.renderDebounced());
-        eventSource.on(event_types.MESSAGE_RECEIVED, () => this.renderDebounced());
+        eventSource.on(event_types.MESSAGE_DELETED, () => this.renderDebounced(undefined, false));
+        eventSource.on(event_types.MESSAGE_EDITED, () => this.renderDebounced(undefined, false));
+        eventSource.on(event_types.MESSAGE_RECEIVED, () => this.renderDebounced(undefined, false));
 
         // Re-render when chatcompletion settings change
-        eventSource.on(event_types.CHATCOMPLETION_SOURCE_CHANGED, () => this.renderDebounced());
+        eventSource.on(event_types.CHATCOMPLETION_SOURCE_CHANGED, () => this.renderDebounced(undefined, false));
 
-        eventSource.on(event_types.CHATCOMPLETION_MODEL_CHANGED, () => this.renderDebounced());
+        eventSource.on(event_types.CHATCOMPLETION_MODEL_CHANGED, () => this.renderDebounced(undefined, false));
 
         // Re-render when the character changes.
         eventSource.on(event_types.CHAT_LOADED, (event) => {
             this.handleCharacterSelected(event);
-            this.saveServiceSettings().then(() => this.renderDebounced());
+            this.saveServiceSettings().then(() => this.renderDebounced(undefined, false));
         });
 
         // Re-render when the character gets edited.
         eventSource.on(event_types.CHARACTER_EDITED, (event) => {
             this.handleCharacterUpdated(event);
-            this.saveServiceSettings().then(() => this.renderDebounced());
+            this.saveServiceSettings().then(() => this.renderDebounced(undefined, false));
         });
 
         // Re-render when the group changes.
         eventSource.on('groupSelected', (event) => {
             this.handleGroupSelected(event);
-            this.saveServiceSettings().then(() => this.renderDebounced());
+            this.saveServiceSettings().then(() => this.renderDebounced(undefined, false));
         });
 
         // Sanitize settings after character has been deleted.
         eventSource.on(event_types.CHARACTER_DELETED, (event) => {
             this.handleCharacterDeleted(event);
-            this.saveServiceSettings().then(() => this.renderDebounced());
+            this.saveServiceSettings().then(() => this.renderDebounced(undefined, false));
         });
 
         // Trigger re-render when token settings are changed
         document.getElementById('openai_max_context').addEventListener('change', (event) => {
             if (!(event.target instanceof HTMLInputElement)) return;
             this.serviceSettings.openai_max_context = event.target.value;
-            if (this.activeCharacter) this.renderDebounced();
+            if (this.activeCharacter) this.renderDebounced(undefined, false);
         });
 
         document.getElementById('openai_max_tokens').addEventListener('change', (event) => {
-            if (this.activeCharacter) this.renderDebounced();
+            if (this.activeCharacter) this.renderDebounced(undefined, false);
         });
 
         // Prepare prompt edit form buttons
@@ -828,11 +832,11 @@ class PromptManager {
 
             this.hidePopup();
             this.clearEditForm();
-            this.renderDebounced();
+            this.renderDebounced(undefined, false);
         });
 
         // Re-render prompt manager on world settings update
-        eventSource.on(event_types.WORLDINFO_SETTINGS_UPDATED, () => this.renderDebounced());
+        eventSource.on(event_types.WORLDINFO_SETTINGS_UPDATED, () => this.renderDebounced(undefined, false));
 
         this.log('Initialized');
     }
@@ -854,23 +858,73 @@ class PromptManager {
         document.getElementById(this.configuration.prefix + 'prompt_manager')?.closest('.scrollableInner')?.scrollTo(0, scrollPosition);
     }
 
+    #takeParkedRenderRequest() {
+        const request = this.#parkedRenderRequest;
+        this.#parkedRenderRequest = null;
+        this.#parkedRenderObserver?.disconnect();
+        this.#parkedRenderObserver = null;
+        this.#parkedRenderNode = null;
+        return request;
+    }
+
+    #deferParkedRender(afterTryGenerate) {
+        const parking = this.containerElement?.closest('.homer-internal-parking');
+        if (parking?.hidden !== true || parking.inert !== true) return false;
+
+        // A hidden token preview is not a prerequisite for a conversation.
+        // Do not run it later on a timer: Generate(dryRun) mutates shared state
+        // and could race a real send or a subsequent character selection.
+        this.#parkedRenderRequest = this.#parkedRenderRequest === true || afterTryGenerate === true;
+        if (this.#parkedRenderNode !== parking) {
+            this.#parkedRenderObserver?.disconnect();
+            this.#parkedRenderNode = parking;
+            this.#parkedRenderObserver = new MutationObserver(() => {
+                const current = this.containerElement?.closest('.homer-internal-parking');
+                if (current?.hidden === true && current.inert === true) {
+                    // A panel can move between two owned parking containers.
+                    // Follow its current parent rather than watch a retired one.
+                    this.#deferParkedRender(this.#parkedRenderRequest);
+                    return;
+                }
+                const request = this.#takeParkedRenderRequest();
+                if (request !== null) this.render(request, false);
+            });
+            this.#parkedRenderObserver.observe(parking, {
+                attributes: true, attributeFilter: ['hidden', 'inert'], childList: true, subtree: true,
+            });
+        }
+        return true;
+    }
+
     /**
      * Main rendering function
      *
      * @param afterTryGenerate - Whether a dry run should be attempted before rendering
+     * @param force - Explicit public refreshes retain the original behavior,
+     * including /pm-render and the Tavern Helper render APIs. Only automatic
+     * presentation refreshes opt out while their editor is physically parked.
      */
-    render(afterTryGenerate = true) {
+    render(afterTryGenerate = true, force = true) {
         if (main_api !== 'openai') return;
 
         if ('character' === this.configuration.promptOrder.strategy && null === this.activeCharacter) return;
+        if (!force && this.#deferParkedRender(afterTryGenerate)) return;
+        // The caller's explicit preview flag wins. Only the unpark observer
+        // above resumes its dirty flag; a real completion's render(false,
+        // false) must never be promoted into another generation.
+        this.#takeParkedRenderRequest();
         this.error = null;
 
         waitUntilCondition(() => !is_send_press && !is_group_generating, 1024 * 1024, 100).then(async () => {
+            if (!force && this.#deferParkedRender(afterTryGenerate)) return;
             if (true === afterTryGenerate) {
                 // Executed during dry-run for determining context composition
                 this.profileStart('filling context');
                 this.tryGenerate().finally(async () => {
                     this.profileEnd('filling context');
+                    // Never cancel an already-started generation/hook chain.
+                    // If the editor was parked meanwhile, only defer its DOM.
+                    if (!force && this.#deferParkedRender(false)) return;
                     this.profileStart('render');
                     const scrollPosition = this.#getScrollPosition();
                     await this.renderPromptManager();

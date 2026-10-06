@@ -1,0 +1,61 @@
+/* Homer layout integration only; chrome and composer are built by the APK code. */
+#homer-tavo-scaffold{position:fixed!important;left:-10000px!important;top:0!important;width:1px!important;height:1px!important;overflow:hidden!important;pointer-events:none!important}
+#homer-tavo-scaffold>.tav-chat-container{width:1px!important;height:1px!important;overflow:hidden!important}
+body.homer-tavo-ui .tav-action-bar,body.homer-tavo-ui .tav-action-bar-button-inspire{display:none!important}
+body.homer-tavo-ui #chat .mes.homer-tavo-message.homer-tavo-message{display:block!important;width:100%!important;max-width:none!important;padding:0!important;border:0!important;background:transparent!important;box-shadow:none!important;margin:0 0 10px!important;border-radius:0!important;align-self:stretch!important;box-sizing:border-box!important}
+body.homer-tavo-ui #chat .mes.homer-tavo-message>.mes_block{display:block;width:100%;padding:0!important;margin:0!important;max-width:none!important}
+.homer-tavo-chrome{width:100%;margin:0!important;padding:0!important}
+.homer-tavo-chrome .tav-message{width:fit-content!important;max-width:calc(100% - 12px)!important;margin:0!important;padding:0!important}
+.homer-tavo-chrome.tav-item-user-message{justify-content:flex-end!important}
+.homer-tavo-chrome .tav-bubble-wrapper{min-width:0;max-width:100%!important}
+.homer-tavo-chrome .tav-bubble{width:fit-content!important;max-width:100%!important;animation:none!important}
+body.homer-tavo-ui #chat .mes[is_user="false"]:not(.homer-author-message) .homer-tavo-chrome .tav-bubble,body.homer-tavo-ui #chat .mes[is_user="false"] .mes_text.homer-tavo-live-content:not(.homer-author-content){background:var(--tavo-assistant-bubble,#29485f)!important;color:var(--homer-assistant-text,#fff)!important}
+body.homer-tavo-ui #chat .mes[is_user="true"] .homer-tavo-chrome .tav-bubble,body.homer-tavo-ui #chat .mes[is_user="true"] .mes_text.homer-tavo-live-content{background:var(--tavo-user-bubble,#4c4c4c)!important;color:var(--homer-user-text,#fff)!important}
+.homer-tavo-chrome .tav-bubble-content{width:auto!important;max-width:none!important;min-width:0!important}
+.homer-tavo-chrome .tav-bubble-content-body{min-width:0;overflow-wrap:anywhere}
+body.homer-tavo-ui #chat .homer-tavo-chrome .mes_text{padding:0!important;margin:0!important;font-size:15px!important;line-height:1.45!important;min-height:0!important;color:inherit!important;text-shadow:none!important}
+.homer-tavo-chrome iframe{max-width:100%}
+.homer-tavo-chrome.homer-tavo-hidden .mes_text{opacity:.38}
+.homer-tavo-chrome.homer-tavo-collapsed .mes_text{max-height:3.2em;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+body.homer-tavo-ui #chat .mes.homer-tavo-live-message>.mes_block{max-width:calc(100% - 12px)!important;width:auto!important}
+body.homer-tavo-ui #chat .mes.homer-tavo-live-message[is_user="true"]>.mes_block{margin-left:auto!important}
+body.homer-tavo-ui #chat .mes .mes_text.homer-tavo-live-content{padding:8px 12px!important;margin:0!important;max-width:100%!important;width:auto!important;min-width:0!important;box-sizing:border-box}
+/* Strip only Homer chrome; never target the author's descendants or iframe document. */
+body.homer-tavo-ui #chat .mes.homer-author-message :is(.homer-tavo-chrome,.tav-message,.tav-bubble-wrapper,.tav-bubble,.tav-bubble-content,.tav-bubble-content-body,.mes_text.homer-author-content){background:transparent!important;border:0!important;box-shadow:none!important;border-radius:0!important;padding:0!important;width:100%!important;max-width:100%!important;min-width:0!important}
+body.homer-tavo-ui #chat .mes.homer-author-message>.mes_block{width:100%!important;max-width:100%!important}
+body.homer-tavo-ui #chat .mes_text.homer-author-content>.homer-prose-region{background:var(--tavo-assistant-bubble,#29485f)!important;color:var(--homer-assistant-text,#fff)!important;padding:8px 12px!important;border-radius:16px!important;margin:8px 0!important;box-sizing:border-box}
+.homer-tavo-live-content.homer-tavo-hidden{opacity:.38}
+.homer-tavo-live-content.homer-tavo-collapsed{max-height:3.2em;overflow:hidden}
+body.homer-tavo-ui #form_sheld{position:relative!important;flex:0 0 auto!important;visibility:visible!important;min-height:72px!important;z-index:4;padding:8px 10px max(12px,env(safe-area-inset-bottom))!important;background:transparent!important}
+body.homer-tavo-ui #form_sheld>#send_form{position:absolute!important;left:-10000px!important;top:0!important;width:1px!important;height:1px!important;min-height:0!important;overflow:hidden!important;opacity:0!important;pointer-events:none!important}
+.homer-tavo-composer{position:relative!important;inset:auto!important;bottom:auto!important;margin:0!important;padding:0!important;width:100%!important;transform:none!important;z-index:1!important;box-sizing:border-box}
+.homer-tavo-composer .tav-composer-shell{margin:0!important}
+.homer-tavo-composer .tav-composer-input{font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif!important;letter-spacing:0!important}
+.homer-tavo-composer [data-tav-role="trailing-icon"],.homer-tavo-composer [data-tav-role="plus-icon"]{flex-shrink:0}
+body.homer-tavo-ui.homer-selecting-messages .homer-tavo-composer{visibility:hidden!important}
+body.homer-tavo-ui #chat .mes.homer-message-editing>.mes_block,body.homer-tavo-ui #chat .mes.homer-message-editing .homer-tavo-chrome,body.homer-tavo-ui #chat .mes.homer-message-editing .homer-tavo-chrome :is(.tav-message,.tav-bubble-wrapper,.tav-bubble,.tav-bubble-content){width:100%!important;max-width:100%!important;min-width:0!important}
+body.homer-tavo-ui #chat .mes.homer-message-editing .mes_text{display:block!important;max-height:none!important;overflow:visible!important;opacity:1!important;-webkit-line-clamp:unset!important}
+body.homer-tavo-ui #chat .mes.homer-message-editing #curEditTextarea{display:block!important;width:100%!important;min-width:0!important;min-height:96px!important;max-height:48vh!important;max-height:min(48vh,360px)!important;box-sizing:border-box!important;margin:0!important;padding:10px 12px!important;border:1px solid var(--chat-line,#d6d0df)!important;border-radius:12px!important;background:var(--chat-panel,#fff)!important;color:var(--chat-text,#292432)!important;font:15px/1.45 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif!important;resize:vertical!important;opacity:1!important}
+body.homer-tavo-ui #chat .mes.homer-message-editing #curEditTextarea:focus-visible{outline:2px solid var(--chat-accent,#9c81c8);outline-offset:2px}
+body.homer-tavo-ui #homer-message-menu-dialog[data-action-count="10"],body.homer-tavo-ui #preview-message-actions[data-action-count="10"]{width:290px!important;width:min(290px,calc(100vw - 16px))!important;max-width:calc(100vw - 16px)!important}
+body.homer-tavo-ui #homer-message-menu-dialog[data-action-count="10"] .homer-message-menu__shell{width:100%!important;box-sizing:border-box!important}
+body.homer-tavo-ui #homer-message-menu-dialog[data-action-count="10"] .homer-message-menu__actions,body.homer-tavo-ui #preview-message-actions[data-action-count="10"][open]{grid-template-columns:repeat(5,minmax(0,1fr))!important;gap:11px 8px!important}
+body.homer-tavo-ui #homer-message-menu-dialog[data-action-count="10"] .homer-message-menu__action,body.homer-tavo-ui #preview-message-actions[data-action-count="10"] button{min-width:44px!important;min-height:61px!important;white-space:nowrap}
+body.homer-tavo-ui.homer-card-stage-active #form_sheld{background:transparent!important}
+html.homer-host-chrome .homer-chat-header,html.homer-host-chrome #homer-runtime-gate{display:none!important}
+html.homer-host-chrome{--homer-host-top:calc(48px + env(safe-area-inset-top));--homer-host-bottom:calc(72px + env(safe-area-inset-bottom))}
+/* The embedded document is a viewport, not a second page scroll surface.
+   Upstream focus/scrollIntoView must never move its body away from host chrome. */
+html.homer-host-chrome{position:fixed!important;inset:0!important;width:100%!important;height:100%!important;min-height:0!important;margin:0!important;padding:0!important;overflow:hidden!important;overflow:clip!important;-webkit-transform:none!important;transform:none!important;-webkit-perspective:none!important;perspective:none!important}
+html.homer-host-chrome body{position:fixed!important;inset:0!important;width:100%!important;height:100%!important;min-height:0!important;max-height:100%!important;margin:0!important;padding:0!important;overflow:hidden!important;overflow:clip!important}
+html.homer-host-chrome body #sheld#sheld{position:fixed!important;top:var(--homer-host-top)!important;bottom:var(--homer-host-bottom)!important;height:calc(100vh - var(--homer-host-top) - var(--homer-host-bottom))!important;height:max(1px,calc(100dvh - var(--homer-host-top) - var(--homer-host-bottom)))!important;max-height:calc(100vh - var(--homer-host-top) - var(--homer-host-bottom))!important;max-height:max(1px,calc(100dvh - var(--homer-host-top) - var(--homer-host-bottom)))!important;min-height:0!important;left:0!important;right:0!important;width:100%!important;margin:0!important;transition:none!important;overflow:hidden!important}
+html.homer-host-chrome body #sheld #chat#chat{flex:1 1 auto!important;height:100%!important;min-height:0!important;max-height:100%!important;padding:10px 10px 20px!important;box-sizing:border-box!important;scroll-padding:10px 0 20px!important;clip-path:none!important;overflow-y:auto!important;overflow-x:hidden!important}
+html.homer-host-chrome body #form_sheld#form_sheld{position:absolute!important;left:-10000px!important;top:0!important;right:auto!important;bottom:auto!important;width:1px!important;height:1px!important;min-height:0!important;max-height:1px!important;padding:0!important;margin:0!important;overflow:hidden!important;opacity:0!important;pointer-events:none!important}
+html.homer-host-chrome.homer-runtime-pending body>#sheld,html.homer-host-chrome.homer-runtime-pending body>#homer-runtime-root{visibility:visible!important;opacity:1!important;pointer-events:auto!important}
+html.homer-host-chrome #homer-preset-panel{max-height:calc(100vh - var(--homer-host-top) - var(--homer-host-bottom) - 16px)!important;max-height:min(720px,calc(100dvh - var(--homer-host-top) - var(--homer-host-bottom) - 16px))!important}
+@media(max-width:760px){html.homer-host-chrome #homer-preset-panel{bottom:calc(var(--homer-host-bottom) + 8px)!important}}
+.homer-composer-fullscreen{width:100vw;max-width:100vw!important;height:100dvh;max-height:100dvh!important;margin:0;padding:max(12px,env(safe-area-inset-top)) 14px max(14px,env(safe-area-inset-bottom));border:0!important;border-radius:0!important;background:var(--chat-panel,#fff);color:var(--chat-text,#292432);box-sizing:border-box}
+.homer-composer-fullscreen[open]{display:flex;flex-direction:column;gap:14px}
+.homer-composer-fullscreen header{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:44px}
+.homer-composer-fullscreen header button{min-width:60px;min-height:44px;border:0;border-radius:12px;background:var(--chat-soft,#edf2f5);color:var(--chat-text,#292432);font-size:15px}
+.homer-composer-fullscreen textarea{width:100%;flex:1;min-height:0;resize:none;border:0;outline:none;padding:14px 6px;background:transparent;color:inherit;font:15px/1.45 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif}

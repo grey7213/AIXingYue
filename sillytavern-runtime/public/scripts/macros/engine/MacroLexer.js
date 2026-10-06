@@ -40,12 +40,27 @@ const modes = Object.freeze({
 });
 
 /**
+ * Match the same maximal nonempty plaintext prefix as the original regular
+ * expression, without testing that expression over megabytes of HTML source.
+ * Chevrotain still owns UTF-16 offsets, line tracking and lexer modes. At an
+ * opener return null so Plaintext.OpenBrace retains triple-brace precedence.
+ * @param {string} text Complete input, not a substring or cached render result.
+ * @param {number} offset Current UTF-16 offset supplied by Chevrotain.
+ * @returns {string[]|null} A custom matcher result with its original text.
+ */
+function matchPlaintextByOpener(text, offset) {
+    const opener = text.indexOf('{{', offset);
+    if (opener === offset || offset >= text.length) return null;
+    return [text.slice(offset, opener === -1 ? text.length : opener)];
+}
+
+/**
  * All lexer tokens used by the macro parser.
  * @readonly
  */
 const Tokens = Object.freeze({
 /** General capture-all plaintext without macros. Consumes any character that is not the first '{' of a macro opener '{{'. */
-    Plaintext: createToken({ name: 'Plaintext', pattern: /(?:[^{]|\{(?!\{))+/u, line_breaks: true }),
+    Plaintext: createToken({ name: 'Plaintext', pattern: matchPlaintextByOpener, line_breaks: true }),
     /** Single literal '{' that appears immediately before a macro opener '{{' */
     PlaintextOpenBrace: createToken({ name: 'Plaintext.OpenBrace', pattern: /\{(?=\{\{)/ }),
 

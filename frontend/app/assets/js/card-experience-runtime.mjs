@@ -388,6 +388,7 @@ class CardExperienceRuntime {
     this.bindBaseEvents();
     this.renderSidebarTriggers();
     this.setupGalgame();
+    this.syncOverlayState();
     if (this.config.bgm.enabled && this.config.bgm.default_asset_id) this.switchBgm(this.config.bgm.default_asset_id, false);
     void this.loadAssetBundle();
   }
@@ -629,12 +630,36 @@ class CardExperienceRuntime {
     const form = this.shadow?.querySelector('.ce-composer');
     if (!form) return;
     form.hidden = false;
+    this.syncOverlayState();
     window.setTimeout(() => form.querySelector('textarea')?.focus(), 0);
   }
 
   closeComposer() {
     const form = this.shadow?.querySelector('.ce-composer');
     if (form) form.hidden = true;
+    this.syncOverlayState();
+  }
+
+  syncOverlayState() {
+    if (!this.host || !this.shadow) return;
+    const active = Boolean(this.shadow.querySelector('.ce-sidebar.is-open,.ce-backdrop.is-open,.ce-composer:not([hidden])'));
+    const value = String(active);
+    if (this.host.getAttribute('data-homer-overlay-active') !== value) this.host.setAttribute('data-homer-overlay-active', value);
+  }
+
+  closeSidebar(panel) {
+    if (!panel || !this.shadow?.contains(panel)) return;
+    panel.classList.remove('is-open');
+    this.syncOverlayState();
+  }
+
+  closeTopOverlay() {
+    if (!this.host?.isConnected || !this.shadow) return false;
+    if (this.shadow.querySelector('.ce-composer:not([hidden])')) { this.closeComposer(); return true; }
+    if (this.shadow.querySelector('.ce-backdrop.is-open')) { this.closePopup(); return true; }
+    const panel = this.shadow.querySelector('.ce-sidebar.is-open');
+    if (panel) { this.closeSidebar(panel); return true; }
+    return false;
   }
 
   // 用媒体库里的全部 bgm 资源填充悬浮播放器的曲目下拉框。单曲时隐藏下拉。
@@ -754,11 +779,13 @@ class CardExperienceRuntime {
     this.bindDeclarativeActions(content);
     this.syncLiveElements(content);
     backdrop.classList.add('is-open');
+    this.syncOverlayState();
   }
 
 
   closePopup() {
     this.shadow?.querySelector('.ce-backdrop')?.classList.remove('is-open');
+    this.syncOverlayState();
   }
 
   showFloating(rule, context) {
@@ -936,11 +963,17 @@ class CardExperienceRuntime {
       tabButtons.set(item, button);
       tabs.append(button);
     }
-    close.addEventListener('click', () => panel.classList.remove('is-open'));
+    close.addEventListener('click', () => this.closeSidebar(panel));
     this.bindDeclarativeActions(panel, { panel });
     slot.append(panel);
     renderTab(sidebar);
-    requestAnimationFrame(() => panel.classList.add('is-open'));
+    this.syncOverlayState();
+    const host = this.host, shadow = this.shadow;
+    requestAnimationFrame(() => {
+      if (this.host !== host || this.shadow !== shadow || !host?.isConnected || !panel.isConnected || !shadow.contains(panel)) return;
+      panel.classList.add('is-open');
+      this.syncOverlayState();
+    });
   }
 
   // 声明式「实时数据同步」（mmd 架构思路）：把最新一条 AI 回复同步到独立界面
@@ -1022,7 +1055,7 @@ class CardExperienceRuntime {
       } else if (action === 'close-popup') {
         this.closePopup();
       } else if (action === 'close-sidebar') {
-        options.panel?.classList.remove('is-open');
+        this.closeSidebar(options.panel);
       }
     });
     this.bindCardSearchFilter(container);
@@ -1128,6 +1161,7 @@ class CardExperienceRuntime {
   }
 
   destroy() {
+    this.host?.removeAttribute('data-homer-overlay-active');
     document.removeEventListener('pointerdown', this.userGestureHandler);
     for (const timer of this.floatTimers) clearTimeout(timer);
     this.floatTimers.clear();

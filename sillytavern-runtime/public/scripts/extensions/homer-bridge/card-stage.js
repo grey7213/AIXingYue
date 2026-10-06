@@ -27,6 +27,7 @@ let installed = false;
 let legacyRuntimePromise = null;
 let legacyRuntimeModule = null;
 let refreshEpoch = 0;
+let fullRefreshTimer = null;
 
 function currentCharacter() {
     const context = getContext();
@@ -742,10 +743,24 @@ async function refreshStage() {
     publishPresentationMode(config);
 }
 
+export function closeCardStageOverlay() {
+    return legacyRuntimeModule?.cardExperienceRuntime?.closeTopOverlay?.() === true;
+}
+
 function scheduleRefresh(messageId = null) {
+    if (messageId === null || messageId === undefined || typeof messageId === 'object') {
+        // Lifecycle listeners read the latest context when this callback runs.
+        // Merge only callbacks not yet started; an in-flight refresh must not
+        // swallow the next scope's refresh or bypass its epoch invalidation.
+        if (fullRefreshTimer !== null) return;
+        fullRefreshTimer = window.setTimeout(() => {
+            fullRefreshTimer = null;
+            void refreshStage();
+        }, 0);
+        return;
+    }
     window.setTimeout(() => {
-        if (messageId === null || messageId === undefined || typeof messageId === 'object') void refreshStage();
-        else void renderMessage(messageId);
+        void renderMessage(messageId);
     }, 0);
 }
 

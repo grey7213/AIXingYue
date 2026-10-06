@@ -872,12 +872,19 @@ async function refinePrompt(prompt, args = null) {
 }
 
 async function onChatChanged() {
-    if (this_chid === undefined || selected_group) {
-        $('#sd_character_prompt_block').hide();
-        return;
+    const promptBlock = $('#sd_character_prompt_block');
+    const hasCharacter = this_chid !== undefined && !selected_group;
+    if (isHomerParkedSettingsElement(promptBlock[0])) {
+        // The native settings remain synchronized, but jQuery show/:visible
+        // would force style/layout while their hidden, inert host is parked.
+        // Preserve the div's natural display for an eventual unpark.
+        promptBlock[0].style.display = hasCharacter ? '' : 'none';
+    } else if (hasCharacter) {
+        promptBlock.show();
+    } else {
+        promptBlock.hide();
     }
-
-    $('#sd_character_prompt_block').show();
+    if (!hasCharacter) return;
 
     const key = getCharaFilename(this_chid);
     let characterPrompt = key ? (extension_settings.sd.character_prompts[key] || '') : '';
@@ -902,8 +909,14 @@ async function onChatChanged() {
     await adjustElementScrollHeight();
 }
 
+function isHomerParkedSettingsElement(element) {
+    const parking = element?.closest('.homer-internal-parking');
+    return parking?.hidden === true && parking.inert === true;
+}
+
 async function adjustElementScrollHeight() {
-    if (CSS.supports('field-sizing', 'content') || !$('.sd_settings').is(':visible')) {
+    const settings = $('.sd_settings');
+    if (CSS.supports('field-sizing', 'content') || isHomerParkedSettingsElement(settings[0]) || !settings.is(':visible')) {
         return;
     }
 

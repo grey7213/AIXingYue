@@ -132,30 +132,89 @@ function enhance(popup) {
 }
 let installed=false;
 const boundaryButtons=new WeakSet();
+function hideBoundaryButton(button) {
+    let disposed=false;
+    const cleanup=()=>{
+        if(disposed)return;disposed=true;
+        observer.disconnect();removalObserver.disconnect();boundaryButtons.delete(button);
+    };
+    const hide=()=>{
+        if(!button.isConnected){cleanup();return;}
+        if(!button.hidden)button.hidden=true;
+        if(button.getAttribute('aria-hidden')!=='true')button.setAttribute('aria-hidden','true');
+        if(button.tabIndex!==-1)button.tabIndex=-1;
+        // Plugin refreshes may replace display, including inline !important.
+        // Keep only this jump control hidden; its settings and memory API stay active.
+        if(button.style.getPropertyValue('display')!=='none'||button.style.getPropertyPriority('display')!=='important')button.style.setProperty('display','none','important');
+    };
+    const observer=new MutationObserver(hide);
+    observer.observe(button,{attributes:true,attributeFilter:['style','hidden','aria-hidden','tabindex']});
+    const removalObserver=new MutationObserver(()=>{if(!button.isConnected)cleanup();});
+    if(button.parentNode)removalObserver.observe(button.parentNode,{childList:true});
+    hide();
+}
 function enhanceBoundaryButton(button) {
     if(boundaryButtons.has(button))return;
     boundaryButtons.add(button);
+    if(document.body.classList.contains('homer-runtime')){hideBoundaryButton(button);return;}
     button.setAttribute('aria-label','跳转到尚未整理记忆的对话');
-    const clamp=()=>{
-        if(!button.isConnected)return;
-        const rect=button.getBoundingClientRect();
-        if(!rect.width||!rect.height)return;
-        const left=Math.max(8,Math.min(rect.left,innerWidth-rect.width-8));
-        const top=Math.max(56,Math.min(rect.top,innerHeight-rect.height-80));
-        // The upstream draggable button assumes a 36px square. Use its actual
-        // rendered size after Homer adds a label, without replacing drag handlers.
-        if(Math.abs(left-rect.left)>1)button.style.left=`${left}px`;
-        if(Math.abs(top-rect.top)>1)button.style.top=`${top}px`;
+    let size=null,frame=0,disposed=false;
+    const pixels=value=>/^[-+]?(?:\d+(?:\.\d*)?|\.\d+)px$/.test(value.trim())?Number.parseFloat(value):NaN;
+    const viewport=window.visualViewport;
+    const cleanup=()=>{
+        if(disposed)return;disposed=true;
+        if(frame)cancelAnimationFrame(frame);
+        observer.disconnect();resizeObserver?.disconnect();removalObserver.disconnect();
+        window.removeEventListener('resize',schedule);
+        viewport?.removeEventListener('resize',schedule);viewport?.removeEventListener('scroll',schedule);
+        boundaryButtons.delete(button);
     };
-    // Dragging can change several style properties in one frame. Measure once
-    // before painting, not synchronously after every plugin DOM mutation.
-    let scheduled=false;
-    const schedule=()=>{if(scheduled)return;scheduled=true;requestAnimationFrame(()=>{scheduled=false;clamp();});};
+    const clamp=()=>{
+        if(!button.isConnected){cleanup();return;}
+        if(!size)return;
+        const currentLeft=pixels(button.style.left),currentTop=pixels(button.style.top);
+        if(!Number.isFinite(currentLeft)||!Number.isFinite(currentTop))return;
+        const x=viewport?.offsetLeft||0,y=viewport?.offsetTop||0;
+        const width=viewport?.width??innerWidth,height=viewport?.height??innerHeight;
+        const left=Math.max(x+8,Math.min(currentLeft,x+width-size.width-8));
+        const top=Math.max(y+56,Math.min(currentTop,y+height-size.height-80));
+        // Upstream drag handlers write fixed-position px coordinates. The real
+        // border size arrives after layout via RO: never flush chat layout here.
+        if(Math.abs(left-currentLeft)>1)button.style.left=`${left}px`;
+        if(Math.abs(top-currentTop)>1)button.style.top=`${top}px`;
+    };
+    const schedule=()=>{if(disposed||frame)return;frame=requestAnimationFrame(()=>{frame=0;clamp();});};
     const observer=new MutationObserver(schedule);
     observer.observe(button,{attributes:true,attributeFilter:['style']});
-    new ResizeObserver(schedule).observe(button);
+    const resizeObserver=typeof ResizeObserver==='function'?new ResizeObserver(entries=>{
+        if(!button.isConnected){cleanup();return;}
+        const entry=entries.find(value=>value.target===button);if(!entry)return;
+        const box=entry.borderBoxSize?.[0]||entry.borderBoxSize;
+        let width=box?.inlineSize,height=box?.blockSize;
+        // Chrome 89+ supplies borderBoxSize (array or legacy single object).
+        // Older implementations may measure only in this post-layout delivery;
+        // they still never read geometry on startup, drag, or viewport events.
+        let rect;
+        if(!Number.isFinite(width)||!Number.isFinite(height)){
+            rect=button.getBoundingClientRect();width=rect.width;height=rect.height;
+        }
+        size=width>0&&height>0?{width,height}:null;
+        if(!size)return;
+        // Custom non-px initial positions need one post-layout normalization.
+        // The shipped plugin never takes this compatibility path.
+        if(!Number.isFinite(pixels(button.style.left))||!Number.isFinite(pixels(button.style.top))){
+            rect??=button.getBoundingClientRect();button.style.left=`${rect.left}px`;button.style.top=`${rect.top}px`;
+        }
+        schedule();
+    }):null;
+    resizeObserver?.observe(button);
+    // The plugin appends this fixed button directly to body. Watching only its
+    // parent (not the chat subtree) releases listeners when it is disabled.
+    const removalObserver=new MutationObserver(()=>{if(!button.isConnected)cleanup();});
+    if(button.parentNode)removalObserver.observe(button.parentNode,{childList:true});
     window.addEventListener('resize',schedule);
-    schedule();
+    viewport?.addEventListener('resize',schedule);viewport?.addEventListener('scroll',schedule);
+    // No eager clamp: before the first RO delivery the actual size is unknown.
 }
 function refreshMemoryLabels(popup){
     // Preserve actual plugin nodes/listeners, including DIV-based controls.

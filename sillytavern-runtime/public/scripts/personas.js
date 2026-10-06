@@ -12,10 +12,12 @@ import {
     getRequestHeaders,
     getThumbnailUrl,
     groupToEntity,
+    is_send_press,
     menu_type,
     name1,
     name2,
     reloadCurrentChat,
+    redisplayChat,
     saveChatConditional,
     saveMetadata,
     saveSettingsDebounced,
@@ -67,6 +69,7 @@ import { SlashCommandEnumValue, enumTypes } from './slash-commands/SlashCommandE
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
 import { isFirefox } from './browser-fixes.js';
 import { slashCommandReturnHelper } from './slash-commands/SlashCommandReturnHelper.js';
+import { getRegexedString, regex_placement } from './extensions/regex/engine.js';
 
 /**
  * @typedef {object} PersonaConnection A connection between a character and a character or group entity
@@ -112,6 +115,108 @@ export const personasFilter = new FilterHelper(debounce(getUserAvatars, debounce
 
 /** @type {string} The last loaded chat id to remember for persona loading */
 let personaLastLoadedChatId = null;
+
+// One fresh server read, started alongside a verified target's configuration.
+// It is consumed once by the same verified Homer scope, not a TTL list cache.
+let personaAvatarPrefetch = null;
+let personaAccountEpoch = 0;
+let personaAvatarListEpoch = 0;
+
+function invalidatePersonaAvatarPrefetch({ account = false } = {}) {
+    personaAvatarPrefetch = null;
+    personaAvatarListEpoch++;
+    if (account) {
+        personaAccountEpoch++;
+        personaLastLoadedChatId = null;
+    }
+}
+
+function homerPersonaLoadScope() {
+    const owner = String(chat_metadata.homer_bridge?.user_id || '').trim();
+    const greeting = homerGreetingScope();
+    if (!owner || !greeting) return null;
+    return {
+        key: JSON.stringify([owner, String(chat_metadata.homer_bridge.app_id), String(chat_metadata.homer_bridge.conversation_id)]),
+        canonicalKey: greeting.key,
+        chatId: getCurrentChatId(), accountEpoch: personaAccountEpoch,
+    };
+}
+
+/**
+ * Start one fresh filename-only request for an authenticated target session.
+ * Starting it does not activate a card or choose/render/update any persona.
+ * The canonical card/mirror is checked only at consumption, after activation.
+ */
+export function prefetchPersonaAvatarsForConversation({ userId, appId, conversationId } = {}) {
+    const owner = String(userId || '').trim();
+    const app = String(appId || '').trim();
+    const conversation = String(conversationId || '').trim();
+    if (!owner || !app || !conversation) return null;
+    // Every explicit target start is a new read, even for A -> B -> A. This
+    // also fences a consumed old read whose scope could later look equal again.
+    invalidatePersonaAvatarPrefetch();
+    const ticket = {
+        key: JSON.stringify([owner, app, conversation]),
+        chatId: `Homer-${conversation.replace(/[^a-zA-Z0-9_-]/g, '')}`,
+        accountEpoch: personaAccountEpoch,
+        listEpoch: personaAvatarListEpoch,
+        promise: getUserAvatars(false),
+    };
+    personaAvatarPrefetch = ticket;
+    // A late failed old request must not discard a newer target's ticket.
+    ticket.promise.catch(() => { if (personaAvatarPrefetch === ticket) personaAvatarPrefetch = null; });
+    return ticket.promise;
+}
+
+/** Start the fresh filename list before the current card's large HTML paint. */
+export function prefetchPersonaAvatarsForCurrentChat() {
+    const scope = homerPersonaLoadScope();
+    if (!scope) return null;
+    if (personaAvatarPrefetch?.key === scope.key
+        && personaAvatarPrefetch.chatId === scope.chatId
+        && personaAvatarPrefetch.accountEpoch === scope.accountEpoch
+        && personaAvatarPrefetch.listEpoch === personaAvatarListEpoch) return personaAvatarPrefetch.promise;
+    return prefetchPersonaAvatarsForConversation({
+        userId: chat_metadata.homer_bridge.user_id,
+        appId: chat_metadata.homer_bridge.app_id,
+        conversationId: chat_metadata.homer_bridge.conversation_id,
+    });
+}
+
+function takePersonaAvatarPrefetch(scope) {
+    const ticket = personaAvatarPrefetch;
+    if (!scope || ticket?.key !== scope.key || ticket.chatId !== scope.chatId
+        || ticket.accountEpoch !== personaAccountEpoch
+        || ticket.listEpoch !== personaAvatarListEpoch) return null;
+    personaAvatarPrefetch = null;
+    return ticket.promise;
+}
+
+window.addEventListener('homer-account-cleared', () => invalidatePersonaAvatarPrefetch({ account: true }));
+window.addEventListener('storage', event => {
+    if (isPersonaAccountStorageChange(event)) {
+        invalidatePersonaAvatarPrefetch({ account: true });
+    }
+});
+
+function isPersonaAccountStorageChange(event) {
+    if (!event.key) return true;
+    if (event.key === 'ai_xingyue_logged_in') return event.newValue !== '1' || event.oldValue !== '1';
+    if (event.key !== 'ai_xingyue_user') return false;
+    const ownerOf = value => {
+        try {
+            const user = JSON.parse(value || 'null');
+            return String(user?.id || user?.user_id || '').trim();
+        } catch { return ''; }
+    };
+    const previous = ownerOf(event.oldValue);
+    const next = ownerOf(event.newValue);
+    const current = String(chat_metadata.homer_bridge?.user_id || '').trim();
+    // A display name, balance, or other profile update is not a logout. A
+    // real owner transition/clear still invalidates, even if it later returns
+    // to this same owner (ABA), so old pending reads cannot become valid again.
+    return !next || next !== current || Boolean(previous && previous !== next);
+}
 
 /** @type {function(string): void} */
 let navigateToAvatar = () => { };
@@ -273,6 +378,7 @@ async function addMissingPersonas(avatarsList) {
  * @returns {Promise<string[]>} List of avatar file names
  */
 export async function getUserAvatars(doRender = true, openPageAt = '') {
+    if (doRender) invalidatePersonaAvatarPrefetch();
     const response = await fetch('/api/avatars/get', {
         method: 'POST',
         headers: getRequestHeaders({ omitContentType: true }),
@@ -1545,13 +1651,28 @@ async function loadPersonaForCurrentChat({ doRender = false } = {}) {
     if (currentChatId === personaLastLoadedChatId) return;
     personaLastLoadedChatId = currentChatId;
 
-    // Cache persona list to check if they exist
-    const userAvatars = await getUserAvatars(doRender);
+    const scope = homerPersonaLoadScope();
+    const wasHomerChat = Boolean(chat_metadata.homer_bridge);
+    const accountEpoch = personaAccountEpoch;
+    const listPromise = (!doRender && takePersonaAvatarPrefetch(scope)) || getUserAvatars(doRender);
+    const listEpoch = personaAvatarListEpoch;
+    const stillCurrent = () => {
+        const currentScope = wasHomerChat ? homerPersonaLoadScope() : null;
+        return getCurrentChatId() === currentChatId
+            && accountEpoch === personaAccountEpoch && listEpoch === personaAvatarListEpoch
+            && (!wasHomerChat || Boolean(scope && currentScope?.key === scope.key
+                && currentScope.canonicalKey === scope.canonicalKey));
+    };
+    const userAvatars = await listPromise;
+    // A late filename response is never permission to change the new chat's
+    // persona lock, current avatar, or missing-avatar settings.
+    if (!stillCurrent()) return false;
 
     // Check if the user avatar is set and exists in the list of user avatars
     if (userAvatars.length && !userAvatars.includes(user_avatar)) {
         console.log(`User avatar ${user_avatar} not found in user avatars list, pick the first available one`);
         await setUserAvatar(userAvatars[0], { toastPersonaNameChange: false, navigateToCurrent: true });
+        if (!stillCurrent()) return false;
     }
 
     // Define a persona for this chat
@@ -1616,6 +1737,7 @@ async function loadPersonaForCurrentChat({ doRender = false } = {}) {
                 chatPersona = await askForPersonaSelection(t`Select Persona`,
                     t`Multiple personas are connected to this character.\nSelect a persona to use for this chat.`,
                     connectedPersonas, { highlightPersonas: true, targetedChar: getCurrentConnectionObj() });
+                if (!stillCurrent()) return false;
             }
         }
 
@@ -1647,6 +1769,7 @@ async function loadPersonaForCurrentChat({ doRender = false } = {}) {
     if (chatPersona && user_avatar !== chatPersona) {
         const willAutoLock = power_user.persona_auto_lock && user_avatar !== chat_metadata.persona;
         await setUserAvatar(chatPersona, { toastPersonaNameChange: false, navigateToCurrent: true });
+        if (!stillCurrent()) return false;
 
         if (power_user.persona_show_notifications) {
             let message = t`Auto-selected persona based on ${connectType} connection.<br />Your messages will now be sent as ${power_user.personas[chatPersona]}.`;
@@ -1658,6 +1781,7 @@ async function loadPersonaForCurrentChat({ doRender = false } = {}) {
     } else if (chatPersona && power_user.persona_auto_lock && !chat_metadata.persona) {
         // Even if it's the same persona, we still might need to auto-lock to chat if that's enabled
         await lockPersona('chat');
+        if (!stillCurrent()) return false;
     }
 
     updatePersonaUIStates();
@@ -1870,6 +1994,59 @@ async function syncUserNameToPersona({ start = 0, end = chat.length - 1, quiet =
 }
 
 /**
+ * The cloud-backed chat deliberately has no bound character-edit form. Its
+ * persona refresh must never serialize that stale form to edit a character.
+ */
+function homerGreetingScope() {
+    const scope = chat_metadata.homer_bridge;
+    const character = characters[this_chid];
+    const appId = String(scope?.app_id || '');
+    const conversationId = String(scope?.conversation_id || '');
+    if (!appId || !conversationId || scope?.runtime !== 'dialogue' || !character) return null;
+    if (String(character.data?.extensions?.homer_bridge?.app_id || '') !== appId) return null;
+    const mirrorName = `Homer-${conversationId.replace(/[^a-zA-Z0-9_-]/g, '')}`;
+    if (getCurrentChatId() !== mirrorName) return null;
+    return { character, key: JSON.stringify([appId, conversationId, String(this_chid), mirrorName]) };
+}
+
+async function redrawHomerGreeting(scope) {
+    const message = chat[0];
+    if (is_send_press || !message || message.is_user || message.is_system) return;
+    const primary = scope.character.first_mes || scope.character.data?.first_mes || '';
+    const alternate = scope.character.data?.alternate_greetings;
+    const sources = [primary, ...(Array.isArray(alternate) ? alternate : [])];
+    const swipes = sources.map(text => getRegexedString(text, regex_placement.AI_OUTPUT));
+    if (!swipes[0]) swipes.shift();
+    if (!swipes.length) return;
+    const swipeId = Math.max(0, Math.min(Number(message.swipe_id) || 0, swipes.length - 1));
+    if (!swipes[swipeId]) return;
+
+    // Keep the persisted message identity/date and the user's selected opening.
+    // Rendering substitutes the new persona's macros through the original
+    // messageFormatting pipeline, with normal card/preset/display regex.
+    message.name = scope.character.name || name2;
+    message.mes = swipes[swipeId];
+    if (Array.isArray(message.swipes) || Array.isArray(alternate)) {
+        message.swipes = swipes;
+        message.swipe_id = swipeId;
+        message.swipe_info = swipes.map((_, index) => {
+            const previous = message.swipe_info?.[index] || {};
+            const extra = { ...(previous.extra || {}) };
+            delete extra.display_text;
+            return { send_date: message.send_date, gen_started: undefined, gen_finished: undefined, ...previous, extra };
+        });
+    }
+    if (message.extra) delete message.extra.display_text;
+    await redisplayChat({ startIndex: 0, fade: false });
+    const stillCurrent = () => chat.length === 1 && chat[0] === message && homerGreetingScope()?.key === scope.key;
+    if (!stillCurrent()) return;
+    await eventSource.emit(event_types.MESSAGE_RECEIVED, 0, 'first_message');
+    if (!stillCurrent()) return;
+    await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, 0, 'first_message');
+    if (stillCurrent()) await saveChatConditional();
+}
+
+/**
  * Retriggers the first message to reload it from the char definition.
  */
 export async function retriggerFirstMessageOnEmptyChat() {
@@ -1880,6 +2057,13 @@ export async function retriggerFirstMessageOnEmptyChat() {
         await reloadCurrentChat();
     }
     if (!selected_group && Number(this_chid) >= 0 && chat.length === 1) {
+        if (chat_metadata.homer_bridge) {
+            const scope = homerGreetingScope();
+            if (scope) await redrawHomerGreeting(scope);
+            // A stale/mismatched bridge marker is not permission to fall back
+            // to submitting the unbound editor either.
+            return;
+        }
         await createOrEditCharacter();
     }
 }

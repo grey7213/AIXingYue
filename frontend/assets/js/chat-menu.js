@@ -8,6 +8,8 @@ const paths = {
   hide: 'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12 M9 12a3 3 0 1 0 6 0 3 3 0 1 0-6 0',
   select: 'M3 5h18 M3 12h7 M3 19h7 M13 15l3 3 6-7',
   collapse: 'm7 9 5-5 5 5 M7 15l5 5 5-5',
+  regenerate: 'M20 7V3l-3 3 M20 7a9 9 0 1 0 1 5 M20 7h-4',
+  continue: 'M3 3h18v18H3z M7 8l5 4-5 4 M13 8l5 4-5 4',
 };
 export function messageActionIcon(action) {
   const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');

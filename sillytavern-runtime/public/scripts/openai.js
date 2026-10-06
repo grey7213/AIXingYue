@@ -665,7 +665,7 @@ function setOpenAIMessageExamples(mesExamplesArray) {
 function setupChatCompletionPromptManager(openAiSettings) {
     // Do not set up prompt manager more than once
     if (promptManager) {
-        promptManager.render(false);
+        promptManager.render(false, false);
         return promptManager;
     }
 
@@ -705,7 +705,7 @@ function setupChatCompletionPromptManager(openAiSettings) {
     promptManager.tokenHandler = tokenHandler;
 
     promptManager.init(configuration, openAiSettings);
-    promptManager.render(false);
+    promptManager.render(false, false);
 
     return promptManager;
 }
@@ -1600,7 +1600,7 @@ export async function prepareOpenAIMessages({
         }
 
         // All information is up-to-date, render.
-        if (false === dryRun) promptManager.render(false);
+        if (false === dryRun) promptManager.render(false, false);
     }
 
     const chat = chatCompletion.getChat();

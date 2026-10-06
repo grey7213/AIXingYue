@@ -283,6 +283,8 @@ router.post('/get', (request, response) => {
         context,
         sysprompt,
         reasoning,
+        // Server capability, not a user setting: paired with /api/chats/get.
+        homer_capabilities: { readonly_chat_header: true },
         enable_extensions: ENABLE_EXTENSIONS,
         enable_extensions_auto_update: ENABLE_EXTENSIONS_AUTO_UPDATE,
         enable_accounts: ENABLE_ACCOUNTS,

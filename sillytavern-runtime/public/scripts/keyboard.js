@@ -40,12 +40,35 @@ export const CUSTOM_INTERACTABLE_CONTROL_CLASS = 'custom_interactable';
 export const NOT_FOCUSABLE_CONTROL_CLASS = 'not_focusable';
 export const DISABLED_CONTROL_CLASS = 'disabled';
 
+// The built-in selectors only depend on these class tokens. A theme/launch
+// class on body cannot affect their focusability, so it need not rescan every
+// descendant. Custom selectors may have arbitrary dependencies: keep their
+// original conservative subtree handling, rather than interpreting CSS.
+const keyboardClassDependencies = new Set([
+    ...interactableSelectors.flatMap(selector => Array.from(selector.matchAll(/\.([\w-]+)/g), match => match[1])),
+    NOT_FOCUSABLE_CONTROL_CLASS, DISABLED_CONTROL_CLASS, 'scroll-reset-container',
+]);
+let hasCustomInteractableType = false;
+
+function classMutationAffectsKeyboard(mutation) {
+    if (hasCustomInteractableType || !('oldValue' in mutation)
+        || (mutation.oldValue !== null && typeof mutation.oldValue !== 'string')) return true;
+    // DOM class tokens use ASCII whitespace, not JavaScript's broader \s.
+    const previous = new Set((mutation.oldValue || '').split(/[\t\n\f\r ]+/).filter(Boolean));
+    const current = new Set((mutation.target.getAttribute('class') || '').split(/[\t\n\f\r ]+/).filter(Boolean));
+    for (const token of keyboardClassDependencies) {
+        if (previous.has(token) !== current.has(token)) return true;
+    }
+    return false;
+}
+
 /**
  * An observer that will check if any new interactables or scroll reset containers are added to the body
  * @type {MutationObserver}
  */
 const observer = new MutationObserver(mutations => {
     const pending = new Set();
+    const localOnly = new Set();
     mutations.forEach(mutation => {
         if (mutation.type === 'childList') {
             mutation.addedNodes.forEach(node => { if (node instanceof Element) pending.add(node); });
@@ -53,7 +76,8 @@ const observer = new MutationObserver(mutations => {
         if (mutation.type === 'attributes') {
             const target = mutation.target;
             if (mutation.attributeName === 'class' && target instanceof Element) {
-                pending.add(target);
+                if (classMutationAffectsKeyboard(mutation)) pending.add(target);
+                else localOnly.add(target);
             }
         }
     });
@@ -65,6 +89,16 @@ const observer = new MutationObserver(mutations => {
         let parent = node.parentElement;
         while (parent && !pending.has(parent)) parent = parent.parentElement;
         if (!parent) handleNodeChange(node);
+    }
+    for (const node of localOnly) {
+        if (!node.isConnected || pending.has(node)) continue;
+        let parent = node.parentElement;
+        while (parent && !pending.has(parent)) parent = parent.parentElement;
+        if (parent) continue;
+        // Preserve repair of the changed control itself (for example a
+        // caller removed its tabindex), without revisiting unchanged children.
+        if (isKeyboardInteractable(node)) makeKeyboardInteractable(node);
+        if (node.classList.contains('scroll-reset-container')) applyScrollResetBehavior(node);
     }
 });
 
@@ -98,6 +132,7 @@ function handleNodeChange(node) {
  * @param {boolean} [options.notFocusableByDefault=false] - Whether interactables of this class should not be focusable by default
  */
 export function registerInteractableType(interactableSelector, { disabledByDefault = false, notFocusableByDefault = false } = {}) {
+    hasCustomInteractableType = true;
     interactableSelectors.push(interactableSelector);
     interactableQuery = interactableSelectors.join(',');
 
@@ -259,6 +294,7 @@ export function initKeyboard() {
         subtree: true,
         attributes: true,
         attributeFilter: ['class'],
+        attributeOldValue: true,
     });
 
     // Initialize already existing controls

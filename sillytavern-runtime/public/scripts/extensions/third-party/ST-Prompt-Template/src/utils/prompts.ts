@@ -20,6 +20,8 @@ export function removeHtmlTagsInsideBlock(html: string) {
  * @returns processed content
  */
 export function unescapeHtmlEntities(html: string): string {
+    if (!html.includes('&lt;%')) return html;
+    const tokens = /&lt;%|%&gt;/g;
     return splitNested(html, (s: string, i: number) => {
         if (s.startsWith("&lt;%", i)) {
             return { type: "open", value: "&lt;%", len: 5 };
@@ -28,6 +30,9 @@ export function unescapeHtmlEntities(html: string): string {
             return { type: "close", value: "%&gt;", len: 5 };
         }
         return null;
+    }, (s, i) => {
+        tokens.lastIndex = i;
+        return tokens.exec(s)?.index ?? s.length;
     }).map(s => {
         if (!s.startsWith('&lt;%') || !s.endsWith('%&gt;') || s.startsWith('&lt;% __append(`'))
             return s;
@@ -101,6 +106,10 @@ export function updateTokens(prompts: string, type: 'send' | 'receive') {
                     extension_settings.variables.global.LAST_RECEIVE_CHARS = prompts.length;
                     break;
             }
+        }).catch(() => {
+            // Token statistics are supplementary; a failed background read must
+            // not reject the message render or replace valid counts with zero.
+            console.warn('[Prompt Template] token statistics unavailable; previous counters retained.');
         });
     });
 }
@@ -129,7 +138,12 @@ export function wrapEscapeBlocks(content: string, blocks: string[], opts: EjsOpt
     const d = opts.delimiter || '%';
 
     const openTags = blocks.map(t => `${od}${t}${cd}`);
+    if (!openTags.some(tag => content.includes(tag))) return content;
     const closeTags = blocks.map(t => `${od}/${t}${cd}`);
+    // Keep the original opening-before-closing and within-list precedence.
+    // Each exec advances from i; literal body text is never scanned per code unit.
+    const tokens = new RegExp([...openTags, ...closeTags]
+        .map(tag => tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g');
 
     type Frame = { tag: string; start: number };
 
@@ -139,6 +153,10 @@ export function wrapEscapeBlocks(content: string, blocks: string[], opts: EjsOpt
     let i = 0;
 
     while (i < content.length) {
+        tokens.lastIndex = i;
+        const next = tokens.exec(content);
+        if (!next) break;
+        i = next.index;
         let matched = false;
 
         // open tag
@@ -205,7 +223,8 @@ export function wrapEscapeBlocks(content: string, blocks: string[], opts: EjsOpt
  */
 function splitNested(
     input: string, 
-    matchToken: (input: string, index: number) => { type: 'open' | 'close', value: string, len: number } | null
+    matchToken: (input: string, index: number) => { type: 'open' | 'close', value: string, len: number } | null,
+    nextLiteralToken?: (input: string, index: number) => number
 ) {
     const result: string[] = [];
     const stack: string[] = [];
@@ -214,6 +233,14 @@ function splitNested(
     let i = 0;
 
     while (i < input.length) {
+        // Only callers with known literal tokens opt in. Generic/stateful
+        // matchers retain their original call at every code-unit position.
+        if (nextLiteralToken) {
+            const next = nextLiteralToken(input, i);
+            buffer += input.slice(i, next);
+            i = next;
+            if (i >= input.length) break;
+        }
         const match = matchToken(input, i);
 
         if (!match) {

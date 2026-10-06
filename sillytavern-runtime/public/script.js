@@ -13,6 +13,11 @@ import {
 
 import { humanizedDateTime, favsToHotswap, getMessageTimeStamp, dragElement, isMobile, initRossMods } from './scripts/RossAscends-mods.js';
 import { protectFrontendFences } from './scripts/homer-html-fences.mjs';
+import { requestCachedCharacter } from './scripts/homer-card-transport.mjs';
+import { containsLegacyMacroSyntax, createMessageDepthBatch, getMessageDepth } from './scripts/homer-message-depth.mjs';
+import { readCopyableCodeText, shouldHighlightCode } from './scripts/homer-code-budget.mjs';
+import { setHostChromeDisplay } from './scripts/homer-known-display.mjs';
+import { deferScrollUntilSourceLayoutRelease } from './scripts/homer-source-layout.mjs';
 import { userStatsHandler, statMesProcess, initStats } from './scripts/stats.js';
 import {
     generateKoboldWithStreaming,
@@ -189,6 +194,7 @@ import {
 import { debounce_timeout, extension_prompt_roles, extension_prompt_types, GENERATION_TYPE_TRIGGERS, IGNORE_SYMBOL, inject_ids, MEDIA_DISPLAY, MEDIA_SOURCE, MEDIA_TYPE, OVERSWIPE_BEHAVIOR, SCROLL_BEHAVIOR, SWIPE_DIRECTION, SWIPE_SOURCE, SWIPE_STATE } from './scripts/constants.js';
 
 import { cancelDebouncedMetadataSave, doDailyExtensionUpdatesCheck, extension_settings, initExtensions, loadExtensionSettings, prefetchExtensionDiscovery, runGenerationInterceptors } from './scripts/extensions.js';
+import { withQuickReplySettingsHandoff } from './scripts/extension-settings-handoff.mjs';
 import { COMMENT_NAME_DEFAULT, CONNECT_API_MAP, executeSlashCommandsOnChatInput, initDefaultSlashCommands, initSlashCommandAutoComplete, isExecutingCommandsFromChatInput, pauseScriptExecution, stopScriptExecution, UNIQUE_APIS } from './scripts/slash-commands.js';
 import { initMacroAutoComplete } from './scripts/autocomplete/MacroAutoComplete.js';
 import {
@@ -253,7 +259,7 @@ import { getPresetManager, initPresetManager } from './scripts/preset-manager.js
 import { evaluateMacros, getLastMessageId, initMacros } from './scripts/macros.js';
 import { currentUser, setUserControls } from './scripts/user.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup, callGenericPopup, fixToastrForDialogs } from './scripts/popup.js';
-import { renderTemplate, renderTemplateAsync } from './scripts/templates.js';
+import { renderTemplate, renderTemplateAsync, prefetchStartupTemplates } from './scripts/templates.js';
 import { initScrapers } from './scripts/scrapers.js';
 import { initCustomSelectedSamplers, validateDisabledSamplers } from './scripts/samplerSelect.js';
 import { DragAndDropHandler } from './scripts/dragdrop.js';
@@ -274,7 +280,7 @@ import { extractReasoningFromData, extractReasoningSignatureFromData, initReason
 import { accountStorage } from './scripts/util/AccountStorage.js';
 import { initWelcomeScreen, openPermanentAssistantChat, openPermanentAssistantCard, getPermanentAssistantAvatar } from './scripts/welcome-screen.js';
 import { initDataMaid } from './scripts/data-maid.js';
-import { clearItemizedPrompts, deleteItemizedPromptForMessage, deleteItemizedPrompts, findItemizedPromptSet, initItemizedPrompts, itemizedParams, itemizedPrompts, loadItemizedPrompts, promptItemize, replaceItemizedPromptText, saveItemizedPrompts, swapItemizedPrompts } from './scripts/itemized-prompts.js';
+import { applyPreparedItemizedPrompts, clearItemizedPrompts, deleteItemizedPromptForMessage, deleteItemizedPrompts, findItemizedPromptSet, initItemizedPrompts, itemizedParams, itemizedPrompts, loadItemizedPrompts, prepareItemizedPrompts, promptItemize, replaceItemizedPromptText, saveItemizedPrompts, swapItemizedPrompts } from './scripts/itemized-prompts.js';
 import { getSystemMessageByType, initSystemMessages, SAFETY_CHAT, sendSystemMessage, system_message_types, system_messages } from './scripts/system-messages.js';
 import { event_types, eventSource } from './scripts/events.js';
 import { initAccessibility } from './scripts/a11y.js';
@@ -612,6 +618,7 @@ export let extension_prompts = {};
 
 export let main_api;// = "kobold";
 let abortController = new AbortController();
+let userStopGenerationSerial = 0;
 
 //css
 var css_send_form_display = $('<div id=send_form></div>').css('display');
@@ -687,7 +694,12 @@ async function firstLoadInit() {
         throw new Error('Initialization failed');
     }
 
-    if (isHomerEmbedded) prefetchExtensionDiscovery();
+    if (isHomerEmbedded) {
+        prefetchExtensionDiscovery();
+        // Read stable built-in template bytes alongside startup requests. The
+        // actual hooks still render, bind, and complete in their original order.
+        void prefetchStartupTemplates();
+    }
     // Read only after CSRF is available, but overlap transfer with native UI
     // setup. Consumption and SETTINGS_* events stay at the original point.
     const startupSettings = isHomerEmbedded ? fetchSettingsResponse() : null;
@@ -750,7 +762,9 @@ async function firstLoadInit() {
     initExtensionSlashCommands();
     ToolManager.initToolSlashCommands();
     await initPresetManager();
+    performance.mark('homer-native-presets');
     await initSystemMessages();
+    performance.mark('homer-native-system-messages');
     await getSettings(initLoaderHandle, startupSettings);
     performance.mark('homer-native-settings');
     await checkOpenRouterAuth();
@@ -760,7 +774,11 @@ async function firstLoadInit() {
     initBookmarks();
     await getUserAvatars(true, user_avatar);
     performance.mark('homer-native-avatars');
-    await getCharacters();
+    // The embedded host resolves one authenticated cloud target. Enumerating
+    // every mirrored card (and its chat files) before that bind makes startup
+    // grow with the entire library. The bridge loads the exact target below;
+    // standalone library UI and explicit getCharacters() calls stay intact.
+    if (!isHomerEmbedded) await getCharacters();
     performance.mark('homer-native-characters');
     // The embedded product only needs settings, extensions and characters
     // before it can bind the requested cloud conversation. Let that work run
@@ -786,7 +804,9 @@ async function firstLoadInit() {
     initMacroAutoComplete();
     initWorldInfo();
     initHorde();
-    initRossMods();
+    // The embedded host binds its explicit cloud conversation. Restoring the
+    // standalone last chat here can clear/replace it a second time mid-boot.
+    initRossMods({ autoLoadChat: !isHomerEmbedded });
     initStats();
     initCfg();
     initLogprobs();
@@ -1246,17 +1266,69 @@ export function getEntitiesList({ doFilter = false, doSort = true } = {}) {
     return entities;
 }
 
-export async function getOneCharacter(avatarUrl, { addIfMissing = false } = {}) {
-    const response = await fetch('/api/characters/get', {
+const preparedCharacterReads = new WeakMap();
+
+/** Read one authenticated target without publishing it to the character list. */
+export function prepareCharacterRead(avatarUrl, { isCurrent = null, cacheOwner = '' } = {}) {
+    const assertCurrent = () => {
+        if (isCurrent && !isCurrent()) throw new Error('当前账号或会话已变化，请重新打开');
+    };
+    const pending = (async () => {
+        assertCurrent();
+        const response = cacheOwner ? await requestCachedCharacter(avatarUrl, {
+            owner: cacheOwner, fetcher: fetch, headers: getRequestHeaders(), isCurrent,
+        }) : await fetch('/api/characters/get', {
+            method: 'POST', headers: getRequestHeaders(),
+            body: JSON.stringify({ avatar_url: avatarUrl }),
+        });
+        assertCurrent();
+        const getData = response.ok ? await response.json() : null;
+        assertCurrent();
+        return { ok: response.ok, status: response.status, getData };
+    })().then(value => ({ value }), error => ({ error }));
+    // Failures settle even when an unrelated hydration step fails first.
+    // Opaque tickets are single-use and cannot be substituted across targets.
+    const ticket = Object.freeze({ pending });
+    preparedCharacterReads.set(ticket, { avatarUrl, cacheOwner, assertCurrent });
+    return ticket;
+}
+
+export async function getOneCharacter(avatarUrl, { addIfMissing = false, missingOk = false, isCurrent = null, cacheOwner = '', preparedRead = null } = {}) {
+    const assertCurrent = () => {
+        if (isCurrent && !isCurrent()) throw new Error('当前账号或会话已变化，请重新打开');
+    };
+    assertCurrent();
+    let preparedOutcome = null;
+    if (preparedRead) {
+        const metadata = preparedCharacterReads.get(preparedRead);
+        if (!metadata || metadata.avatarUrl !== avatarUrl || metadata.cacheOwner !== cacheOwner) {
+            throw new Error('角色读取票据与当前会话不一致');
+        }
+        preparedCharacterReads.delete(preparedRead);
+        metadata.assertCurrent();
+        const outcome = await preparedRead.pending;
+        assertCurrent();
+        metadata.assertCurrent();
+        if (outcome.error) throw outcome.error;
+        preparedOutcome = outcome.value;
+    }
+    const response = preparedOutcome || (cacheOwner ? await requestCachedCharacter(avatarUrl, {
+        owner: cacheOwner, fetcher: fetch, headers: getRequestHeaders(), isCurrent,
+    }) : await fetch('/api/characters/get', {
         method: 'POST',
         headers: getRequestHeaders(),
         body: JSON.stringify({
             avatar_url: avatarUrl,
         }),
-    });
+    }));
+    assertCurrent();
 
     if (response.ok) {
-        const getData = await response.json();
+        const getData = preparedOutcome ? preparedOutcome.getData : await response.json();
+        assertCurrent();
+        if (missingOk && getData?.avatar !== avatarUrl) {
+            throw new Error('角色资料与请求不一致，请重新打开会话');
+        }
         getData.name = DOMPurify.sanitize(getData.name);
         getData.chat = String(getData.chat);
 
@@ -1273,6 +1345,9 @@ export async function getOneCharacter(avatarUrl, { addIfMissing = false } = {}) 
         } else {
             toastr.error(t`Character ${avatarUrl} not found in the list`, t`Error`, { timeOut: 5000, preventDuplicates: true });
         }
+    }
+    if (missingOk && !response.ok && response.status !== 404) {
+        throw new Error(`读取角色资料失败（HTTP ${response.status}），请重试`);
     }
     return -1;
 }
@@ -1507,7 +1582,7 @@ export async function showMoreMessages(messagesToLoad = null) {
     await eventSource.emit(event_types.MORE_MESSAGES_LOADED);
 }
 
-export async function printMessages() {
+export async function printMessages({ scroll = true } = {}) {
     let startIndex = 0;
     let count = power_user.chat_truncation || Number.MAX_SAFE_INTEGER;
 
@@ -1518,8 +1593,10 @@ export async function printMessages() {
 
     await redisplayChat({ startIndex, fade: false });
 
-    scrollChatToBottom({ waitForFrame: true });
-    delay(debounce_timeout.short).then(() => scrollOnMediaLoad());
+    if (scroll) {
+        scrollChatToBottom({ waitForFrame: true });
+        delay(debounce_timeout.short).then(() => scrollOnMediaLoad());
+    }
 }
 
 /**
@@ -1541,12 +1618,22 @@ export async function redisplayChat({ targetChat = chat, startIndex = 0, fade = 
     const messages = targetChat.slice(startIndex);
 
     if (messages.length > 0) {
-        const newMessageElements = messages.map((message, offset) => {
-            const i = startIndex + offset;
-            const messageElement = updateMessageElement(message, { messageId: i });
+        // Regex depth used to rebuild a filtered copy of the entire chat for
+        // every message. Index it once, only during this synchronous map. No
+        // formatted content or macro result is retained across messages/chats.
+        const previousDepthBatch = messageDepthBatch;
+        messageDepthBatch = targetChat === chat ? createMessageDepthBatch(chat) : null;
+        let newMessageElements;
+        try {
+            newMessageElements = messages.map((message, offset) => {
+                const i = startIndex + offset;
+                const messageElement = updateMessageElement(message, { messageId: i });
 
-            return messageElement[0];
-        });
+                return messageElement[0];
+            });
+        } finally {
+            messageDepthBatch = previousDepthBatch;
+        }
 
         //The last_mes has been removed, add it to the new last message.
         newMessageElements.at(-1).classList.add('last_mes');
@@ -1774,6 +1861,12 @@ export async function sendTextareaMessage() {
     return generation;
 }
 
+let messageDepthBatch = null;
+
+function invalidateMessageDepthBatch() {
+    messageDepthBatch?.invalidate();
+}
+
 /**
  * Formats the message text into an HTML string using Markdown and other formatting.
  * @param {string} mes Message text
@@ -1836,9 +1929,9 @@ export function messageFormatting(mes, ch_name, isSystem, isUser, messageId, san
         }
 
         const regexPlacement = getRegexPlacement();
-        const usableMessages = chat.map((x, index) => ({ message: x, index: index })).filter(x => !x.message.is_system);
-        const indexOf = usableMessages.findIndex(x => x.index === Number(messageId));
-        const depth = messageId >= 0 && indexOf !== -1 ? (usableMessages.length - indexOf - 1) : undefined;
+        const depth = messageDepthBatch
+            ? messageDepthBatch.depth(messageId)
+            : getMessageDepth(chat, messageId);
 
         // Always override the character name
         mes = getRegexedString(mes, regexPlacement, {
@@ -2008,12 +2101,21 @@ function insertSVGIcon(mes, extra) {
  * @param {object} message Message object
  * @param {object} [options={}] Optional arguments
  * @param {boolean} [options.rerenderMessage=true] Whether to re-render the message content (inside <c>.mes_text</c>)
+ * @param {boolean} [options.skipUnchangedFormatting=false] Preserve current children only when current-context formatting exactly matches their HTML
  */
-export function updateMessageBlock(messageId, message, { rerenderMessage = true } = {}) {
+export function updateMessageBlock(messageId, message, { rerenderMessage = true, skipUnchangedFormatting = false } = {}) {
     const messageElement = chatElement.find(`[mesid="${messageId}"]`);
     if (rerenderMessage) {
         const text = message?.extra?.display_text ?? message.mes;
-        messageElement.find('.mes_text').html(messageFormatting(text, message.name, message.is_system, message.is_user, messageId, {}, false));
+        // Formatting must still run with the current variables and regexes;
+        // unchanged raw text does not imply unchanged display output. Only
+        // opt-in callers may preserve the live children when the actual final
+        // formatting is exactly equal. Default callers retain their redraw.
+        const formatted = messageFormatting(text, message.name, message.is_system, message.is_user, messageId, {}, false);
+        const textElement = messageElement.find('.mes_text');
+        if (!skipUnchangedFormatting || formatted !== textElement.html()) {
+            textElement.html(formatted);
+        }
     }
 
     updateReasoningUI(messageElement);
@@ -2458,17 +2560,36 @@ export function appendMediaToMessage(mes, messageElement, scrollBehavior = SCROL
 export function addCopyToCodeBlocks(messageElement) {
     const codeBlocks = $(messageElement).find('pre code');
     for (let i = 0; i < codeBlocks.length; i++) {
-        hljs.highlightElement(codeBlocks.get(i));
+        const code = codeBlocks.get(i);
+        const copyButtons = [...code.children].filter(node => node.classList.contains('code-copy'));
+        const text = readCopyableCodeText(code);
+        const highlightWithinBudget = shouldHighlightCode(text);
+        if (code.parentElement?.tagName === 'PRE') {
+            code.parentElement.classList.toggle('homer-large-code-block', !highlightWithinBudget);
+        }
+        if (!highlightWithinBudget) {
+            // Large HTML frontends are still complete, copyable code until
+            // TavernHelper handles the normal message-rendered lifecycle.
+            // Do not build megabytes of temporary syntax-colour spans first.
+            code.classList.add('hljs');
+        } else if (!copyButtons.length && !code.dataset.highlighted) {
+            hljs.highlightElement(code);
+        }
+        // A repeated render hook must not feed our icon into the highlighter
+        // or append another copy control. Keep the original live handler.
+        if (copyButtons.length) {
+            copyButtons.slice(1).forEach(button => button.remove());
+            continue;
+        }
         const copyButton = document.createElement('i');
         copyButton.classList.add('fa-solid', 'fa-copy', 'code-copy', 'interactable');
         copyButton.title = 'Copy code';
-        codeBlocks.get(i).appendChild(copyButton);
+        code.appendChild(copyButton);
         copyButton.addEventListener('click', function (e) {
             e.stopPropagation();
         });
         copyButton.addEventListener('pointerup', async function () {
-            const text = codeBlocks.get(i).textContent;
-            await copyText(text);
+            await copyText(readCopyableCodeText(code));
             toastr.info(t`Copied!`, '', { timeOut: 2000 });
         });
     }
@@ -2743,6 +2864,7 @@ function formatGenerationTimer(gen_started, gen_finished, tokenCount, reasoningD
 }
 
 let requestId = null;
+let scrollRequestSequence = 0;
 
 /**
  * Scrolls the chat to the bottom if configured to do so.
@@ -2750,12 +2872,33 @@ let requestId = null;
  * @param {boolean} [options.waitForFrame] If true, waits for the animation frame before scrolling
  */
 export function scrollChatToBottom({ waitForFrame } = {}) {
-    if (!power_user.auto_scroll_chat_to_bottom) {
+    const root = chatElement?.[0];
+    const sequence = ++scrollRequestSequence;
+
+    // Do not check truthiness. requestId can loop to zero.
+    if (requestId !== null) {
+        cancelAnimationFrame(requestId);
+        requestId = null;
+    }
+
+    if (!power_user.auto_scroll_chat_to_bottom || !root || root.isConnected === false) {
         return;
     }
 
+    const deferScroll = () => deferScrollUntilSourceLayoutRelease(root, () => {
+        if (sequence !== scrollRequestSequence || chatElement?.[0] !== root || root.isConnected === false) return;
+        scrollChatToBottom({ waitForFrame });
+    });
+
     const doScroll = () => {
-        let position = chatElement[0].scrollHeight;
+        if (sequence !== scrollRequestSequence) return;
+        requestId = null;
+        if (!power_user.auto_scroll_chat_to_bottom || chatElement?.[0] !== root || root.isConnected === false) return;
+        // A lease can begin after the RAF was queued. Guard the callback too,
+        // before any scrollHeight or waifu position read forces layout.
+        if (deferScroll()) return;
+
+        let position = root.scrollHeight;
 
         if (power_user.waifuMode) {
             const lastMessage = chatElement.find('.mes').last();
@@ -2766,13 +2909,9 @@ export function scrollChatToBottom({ waitForFrame } = {}) {
         }
 
         chatElement.scrollTop(position);
-        requestId = null;
     };
 
-    // Do not check truthiness. requestId can loop to zero.
-    if (requestId !== null) {
-        cancelAnimationFrame(requestId);
-    }
+    if (deferScroll()) return;
 
     if (!waitForFrame) {
         doScroll();
@@ -2811,6 +2950,12 @@ export function substituteParamsLegacy(content, _name1, _name2, _original, _grou
     if (!content) {
         return '';
     }
+
+    // Keep every eager character-field evaluation and its side effects. If a
+    // field contains a macro, its recursive substituteParams call invalidates
+    // before the handler runs. Plain legacy text invokes no macro handlers;
+    // experimental processors can run on arbitrary text and always invalidate.
+    if (messageDepthBatch && (power_user?.experimental_macro_engine || containsLegacyMacroSyntax(content))) invalidateMessageDepthBatch();
 
     // If experimental macro engine is enabled, use it. This code will be cleaned up in the future.
     if (power_user?.experimental_macro_engine) {
@@ -2959,6 +3104,8 @@ export function substituteParamsLegacy(content, _name1, _name2, _original, _grou
  */
 export function substituteParams(content, options = {}) {
     if (!content) return '';
+
+    if (messageDepthBatch && (power_user?.experimental_macro_engine || containsLegacyMacroSyntax(content))) invalidateMessageDepthBatch();
 
     if (typeof content !== 'string') {
         console.warn('substituteParams: content will be coerced to string', content);
@@ -5594,6 +5741,7 @@ export function stopGeneration() {
         hideStopButton();
         stopped = true;
     }
+    if (stopped) userStopGenerationSerial += 1;
     eventSource.emit(event_types.GENERATION_STOPPED);
     return stopped;
 }
@@ -7395,6 +7543,9 @@ export async function saveChat({ chatName, withMetadata, mesId, force = false, c
         return;
     }
 
+    // A save may start and finish while an optional header read is pending.
+    // Invalidate those tickets even when isChatSaving is false at consumption.
+    invalidatePreparedChatMirrorHeaders();
     characters[this_chid].date_last_chat = Date.now();
 
     const trimmedChat = Array.isArray(chatData)
@@ -7739,36 +7890,182 @@ export async function openCharacterChat(file_name, { persistCharacter = true } =
 }
 
 /**
+ * Activates a complete character and its cloud-backed local mirror without
+ * binding the hidden character editor or loading/rendering a provisional chat.
+ * The caller installs the authoritative cloud messages and then emits the
+ * normal CHAT_CHANGED/CHAT_LOADED lifecycle. Real character editing continues
+ * to use selectCharacterById/select_selected_character unchanged.
+ * @param {number|string} characterId Character array index.
+ * @param {{chatName: string, ephemeral?: boolean}} options Mirror to bind.
+ * @returns {Promise<{characterId: string, chatId: string}>}
+ */
+export async function activateCharacterForChat(characterId, { chatName, ephemeral = false, preparedHeader = null } = {}) {
+    const targetId = String(characterId);
+    if (!Number.isInteger(Number(targetId)) || !characters[targetId]) {
+        throw new Error('当前角色不存在，请重新打开会话');
+    }
+    if (typeof chatName !== 'string' || !chatName.trim()) {
+        throw new Error('当前会话标识无效，请重新打开会话');
+    }
+    if (is_send_press || (selected_group && is_group_generating)) {
+        throw new Error('当前会话正在生成，请停止生成后再切换');
+    }
+    if (isChatSaving) await waitUntilCondition(() => !isChatSaving, debounce_timeout.extended, 10);
+    await unshallowCharacter(targetId);
+    // A shallow-card read may yield long enough for a local save to start.
+    // Never clear its source chat while that save is still in flight.
+    if (isChatSaving) await waitUntilCondition(() => !isChatSaving, debounce_timeout.extended, 10);
+    // The character request replaces its array entry. Do not retain a shallow
+    // object or silently continue with the old active character on failure.
+    if (!characters[targetId] || characters[targetId].shallow) {
+        throw new Error('当前角色资料未能完整读取，请重新打开会话');
+    }
+    if (is_send_press || (selected_group && is_group_generating)) {
+        throw new Error('当前会话正在生成，请停止生成后再切换');
+    }
+
+    // This read is scoped to this activation only. It can overlap saving the
+    // old itemized prompts, but must not change the live target or metadata.
+    const preparedMirror = ephemeral ? null
+        : prepareCharacterChatMirror(characters[targetId].avatar, chatName,
+            { preparePrompts: getCurrentChatId() !== chatName, preparedHeader });
+    cancelTtsPlay();
+    // Save itemized prompts while the old character/chat ID is still active.
+    // The mirror binder below skips only this already completed clear.
+    await clearChat({ clearData: true, preserveItemizedPrompts: !ephemeral });
+    if (preparedMirror) {
+        // A same-ID read must start after its own old prompt save. Different
+        // IDs can read immediately without observing the old unsaved values.
+        preparedMirror.prompts ||= prepareItemizedPrompts(chatName);
+        let [outcome] = await Promise.all([preparedMirror.pending, preparedMirror.prompts.pending]);
+        if (outcome.preparedCurrent && !outcome.preparedCurrent()) {
+            outcome = await readCharacterChatMirrorHeader(preparedMirror.avatar, preparedMirror.fileName);
+        }
+        if (outcome.error) throw outcome.error;
+        // This is the final pre-publication check. The binder receives only
+        // this validated header, not an active-target predicate to reconsume.
+        preparedMirror.pending = Promise.resolve({ header: outcome.header });
+    }
+    resetSelectedGroup();
+    this_edit_mes_id = undefined;
+    selected_button = 'character_edit';
+    setCharacterId(targetId);
+    setCharacterName(characters[targetId].name);
+    chat_metadata = {};
+    await bindCharacterChatWithoutLoad(chatName, { ephemeral, skipClear: true, preparedMirror });
+    return { characterId: String(this_chid), chatId: getCurrentChatId() };
+}
+
+/**
  * Binds a character chat name without reading/rendering its local JSONL file.
  * Embedded cloud-backed clients replace the in-memory chat immediately after
  * this call, so the normal local read is redundant during same-card history
  * switching. The caller remains responsible for printing messages and
  * emitting CHAT_CHANGED after the cloud payload has been installed.
  * @param {string} file_name Chat file name without the JSONL suffix.
+ * @param {{ephemeral?: boolean, skipClear?: boolean, preparedMirror?: object}} options skipClear is only
+ * for activateCharacterForChat, which has cleared the previous chat once.
  */
-export async function bindCharacterChatWithoutLoad(file_name, { ephemeral = false } = {}) {
-    await waitUntilCondition(() => !isChatSaving, debounce_timeout.extended, 10);
-    await clearChat({ clearData: true, preserveItemizedPrompts: !ephemeral });
+export async function bindCharacterChatWithoutLoad(file_name, { ephemeral = false, skipClear = false, preparedMirror = null, preparedHeader = null } = {}) {
+    if (isChatSaving) await waitUntilCondition(() => !isChatSaving, debounce_timeout.extended, 10);
+    const avatar = characters[this_chid].avatar;
+    const preparation = ephemeral ? null
+        : preparedMirror?.avatar === avatar && preparedMirror?.fileName === file_name
+            ? preparedMirror : prepareCharacterChatMirror(avatar, file_name,
+                { preparePrompts: getCurrentChatId() !== file_name, preparedHeader });
+    if (!skipClear) await clearChat({ clearData: true, preserveItemizedPrompts: !ephemeral });
+    let outcome = null;
+    if (preparation) {
+        preparation.prompts ||= prepareItemizedPrompts(file_name);
+        [outcome] = await Promise.all([preparation.pending, preparation.prompts.pending]);
+        if (outcome.preparedCurrent && !outcome.preparedCurrent()) {
+            outcome = await readCharacterChatMirrorHeader(avatar, file_name);
+        }
+    }
+    if (outcome?.error) throw outcome.error;
     characters[this_chid].chat = file_name;
     name2 = characters[this_chid].name;
-    chat_metadata = { integrity: uuidv4() };
+    const header = outcome?.header;
+    chat_metadata = { ...(header?.chat_metadata || {}),
+        integrity: header?.chat_metadata?.integrity || uuidv4() };
     $('#selected_chat_pole').val(file_name);
     if (!ephemeral) {
-        await Promise.all([
-            (async () => {
-                const response = await fetch('/api/chats/get', {
-                    method: 'POST', headers: getRequestHeaders(), cache: 'no-cache',
-                    body: JSON.stringify({ avatar_url: characters[this_chid].avatar,
-                        file_name, metadata_only: true }),
-                });
-                if (!response.ok) throw new Error('无法读取会话存档标识，请重新打开会话');
-                const header = await response.json();
-                chat_metadata = { ...(header?.chat_metadata || {}),
-                    integrity: header?.chat_metadata?.integrity || chat_metadata.integrity };
-            })(),
-            loadItemizedPrompts(getCurrentChatId()),
-        ]);
+        // Applying mutates global state and emits extension events. Unlike
+        // preparation, it stays after the durable clear and target binding.
+        await applyPreparedItemizedPrompts(preparation.prompts);
     }
+}
+
+const preparedChatMirrorHeaders = new WeakMap();
+let chatMirrorPreparationEpoch = {};
+let readonlyChatHeaderSupported = false;
+
+function invalidatePreparedChatMirrorHeaders() {
+    chatMirrorPreparationEpoch = {};
+}
+
+function isActiveChatMirror(avatar, fileName) {
+    return isChatSaving || (characters[this_chid]?.avatar === avatar && getCurrentChatId() === fileName);
+}
+
+/** Prepare only a private header read; never bind a character or apply prompts. */
+export function prepareCharacterChatMirrorRead(avatar, fileName, { owner, scope, expiresAt, isCurrent } = {}) {
+    if (!readonlyChatHeaderSupported || !owner || !scope || typeof isCurrent !== 'function' || !avatar || !fileName
+        || !Number.isFinite(expiresAt) || expiresAt <= Date.now() || expiresAt > Date.now() + 30_000
+        || isActiveChatMirror(avatar, fileName)) return null;
+    try { if (!isCurrent()) return null; } catch { return null; }
+    const ticket = Object.freeze({});
+    preparedChatMirrorHeaders.set(ticket, { avatar, fileName, owner, scope, expiresAt, isCurrent, epoch: chatMirrorPreparationEpoch,
+        pending: readCharacterChatMirrorHeader(avatar, fileName) });
+    return ticket;
+}
+
+async function consumePreparedChatMirrorHeader(avatar, fileName, preparation) {
+    const stored = preparation?.ticket && preparedChatMirrorHeaders.get(preparation.ticket);
+    if (!stored) return null;
+    // Invalid/expired attempts also exhaust the ticket. None can be replayed.
+    preparedChatMirrorHeaders.delete(preparation.ticket);
+    const current = () => {
+        try { return stored.avatar === avatar && stored.fileName === fileName
+            && stored.epoch === chatMirrorPreparationEpoch
+            && stored.owner === preparation.owner && stored.scope === preparation.scope
+            && Date.now() < stored.expiresAt && !isActiveChatMirror(avatar, fileName)
+            && stored.isCurrent() && typeof preparation.isCurrent === 'function' && preparation.isCurrent(); }
+        catch { return false; }
+    };
+    let timer;
+    try {
+        if (!current()) return null;
+        const outcome = await Promise.race([stored.pending, new Promise(resolve => {
+            timer = setTimeout(() => resolve(null), Math.max(0, stored.expiresAt - Date.now()));
+        })]);
+        return current() && outcome && !outcome.error ? { header: outcome.header, preparedCurrent: current } : null;
+    } catch { return null; }
+    finally { clearTimeout(timer); }
+}
+
+function readCharacterChatMirrorHeader(avatar, fileName) {
+    return (async () => {
+        const response = await fetch('/api/chats/get', {
+            method: 'POST', headers: getRequestHeaders(), cache: 'no-cache',
+            body: JSON.stringify({ avatar_url: avatar, file_name: fileName, metadata_only: true }),
+        });
+        if (!response.ok) throw new Error('无法读取会话存档标识，请重新打开会话');
+        const payload = await response.json();
+        // Older servers ignore metadata_only and return the full JSONL array.
+        return Array.isArray(payload) ? payload[0] : payload;
+    })().then(header => ({ header }), error => ({ error }));
+}
+
+function prepareCharacterChatMirror(avatar, fileName, { preparePrompts = false, preparedHeader = null } = {}) {
+    const pending = preparedHeader
+        ? consumePreparedChatMirrorHeader(avatar, fileName, preparedHeader)
+            .then(outcome => outcome || readCharacterChatMirrorHeader(avatar, fileName))
+        : readCharacterChatMirrorHeader(avatar, fileName);
+    // Always settle: clearing the old chat can fail before this read is taken.
+    // Do not retain this promise beyond the single activation/bind operation.
+    return { avatar, fileName, pending,
+        prompts: preparePrompts ? prepareItemizedPrompts(fileName) : null };
 }
 
 ////////// OPTIMZED MAIN API CHANGE FUNCTION ////////////
@@ -7940,6 +8237,8 @@ function fetchSettingsResponse() {
 }
 
 export async function getSettings(initLoaderHandle = null, preparedResponse = null) {
+    readonlyChatHeaderSupported = false;
+    performance.mark('homer-settings-start');
     const response = await (preparedResponse || fetchSettingsResponse());
 
     if (!response.ok) {
@@ -7949,6 +8248,8 @@ export async function getSettings(initLoaderHandle = null, preparedResponse = nu
     }
 
     const data = await response.json();
+    readonlyChatHeaderSupported = data?.homer_capabilities?.readonly_chat_header === true;
+    performance.mark('homer-settings-response');
     if (data.result != 'file not find' && data.settings) {
         settings = JSON.parse(data.settings);
         if (settings.username !== undefined && settings.username !== '') {
@@ -7962,6 +8263,7 @@ export async function getSettings(initLoaderHandle = null, preparedResponse = nu
 
         // Allow subscribers to mutate settings
         await eventSource.emit(event_types.SETTINGS_LOADED_BEFORE, settings);
+        performance.mark('homer-settings-before');
 
         //Load AI model config settings
         amount_gen = settings.amount_gen;
@@ -7986,9 +8288,11 @@ export async function getSettings(initLoaderHandle = null, preparedResponse = nu
 
         // Horde
         loadHordeSettings(settings);
+        performance.mark('homer-settings-models');
 
         // Load power user settings
         await loadPowerUserSettings(settings, data);
+        performance.mark('homer-settings-power-user');
 
         // Apply theme toggles from power user settings
         applyPowerUserSettings();
@@ -8004,6 +8308,7 @@ export async function getSettings(initLoaderHandle = null, preparedResponse = nu
 
         // Allow subscribers to mutate settings
         await eventSource.emit(event_types.SETTINGS_LOADED_AFTER, settings);
+        performance.mark('homer-settings-after');
 
         // Set context size after loading power user (may override the max value)
         $('#max_context').val(max_context);
@@ -8041,12 +8346,15 @@ export async function getSettings(initLoaderHandle = null, preparedResponse = nu
         // TODO: Move me into firstLoadInit when experimental toggle is removed
         // power_user.experimental_macro_engine
         initMacros();
+        performance.mark('homer-settings-macros');
 
         if (data.enable_extensions) {
             const enableAutoUpdate = Boolean(data.enable_extensions_auto_update);
             const isVersionChanged = settings.currentVersion !== currentVersion;
-            await loadExtensionSettings(settings, isVersionChanged, enableAutoUpdate);
+            await withQuickReplySettingsHandoff(data, () => loadExtensionSettings(settings, isVersionChanged, enableAutoUpdate));
+            performance.mark('homer-settings-extensions-loaded');
             await eventSource.emit(event_types.EXTENSION_SETTINGS_LOADED);
+            performance.mark('homer-settings-extensions-event');
         } else {
             Object.assign(extension_settings, (settings.extension_settings ?? {}));
             $('#third_party_extension_button').addClass('disabled');
@@ -8137,6 +8445,11 @@ export async function saveSettings(loopCounter = 0) {
         if (!result.ok) {
             throw new Error(`Failed to save settings: ${result.statusText}`);
         }
+
+        // A successful status only confirms receipt of the response headers.
+        // Finish the small ACK transfer before marking this payload saved.
+        // Discard its bytes; keep the existing API and error/retry semantics.
+        await result.arrayBuffer();
 
         settings = payload;
         lastSavedSettingsSignature = payloadJson;
@@ -9183,7 +9496,9 @@ export async function updateSwipeCounter(mesId, { message = undefined, messageEl
         .toggleClass(INTERACTABLE_CONTROL_CLASS, canOpenSwipePicker)
         .attr('role', canOpenSwipePicker ? 'button' : null)
         .attr('title', canJumpToSwipe ? t`Click to jump to a swipe` : canOpenSwipePicker ? t`Click to view swipe history` : null);
-    swipePickerButton.toggle(canOpenSwipePicker);
+    if (!setHostChromeDisplay(swipePickerButton, canOpenSwipePicker, 'var(--fa-display, inline-block)')) {
+        swipePickerButton.toggle(canOpenSwipePicker);
+    }
 
     if (!canOpenSwipePicker) {
         swipeCounter.removeAttr('tabindex');
@@ -9331,14 +9646,20 @@ export function refreshSwipeButtons(updateCounters = false, fade = true) {
 
             //If there's only one swipe, the left arrow should not be shown.
             div.classList.toggle('swipes_visible', hasSwipes || pristineGreeting);
-            swipePickerButton.toggle(canOpenSwipePicker);
+            if (!setHostChromeDisplay(swipePickerButton, canOpenSwipePicker, 'var(--fa-display, inline-block)')) {
+                swipePickerButton.toggle(canOpenSwipePicker);
+            }
 
             //updateSwipeCounter does not need to be awaited, It can run a bit later.
             if (updateCounters) updateSwipeCounter(messageId, { message, messageElement: $(div) });
         } else {
             //Hide all messages that are not swipeable.
             div.classList.remove('swipes_visible', 'last_swipe');
-            $(div).find('.mes_swipe_picker').toggle(canOpenSwipePickerForMessage(messageId));
+            const swipePickerButton = $(div).find('.mes_swipe_picker');
+            const canOpenSwipePicker = canOpenSwipePickerForMessage(messageId);
+            if (!setHostChromeDisplay(swipePickerButton, canOpenSwipePicker, 'var(--fa-display, inline-block)')) {
+                swipePickerButton.toggle(canOpenSwipePicker);
+            }
         }
     });
 }
@@ -11193,7 +11514,16 @@ jQuery(async function () {
 
     const userInputGenerateMutex = new SimpleMutex(sendTextareaMessage);
     $('#send_but').on('click', async function () {
-        await userInputGenerateMutex.update();
+        const stopSerial = userStopGenerationSerial;
+        try {
+            await userInputGenerateMutex.update();
+        } catch (error) {
+            // An explicitly stopped stream has already followed the normal
+            // diagnostic/recovery path. Do not leak that expected cancellation
+            // as an unhandled jQuery-handler Promise; real failures still throw.
+            if (error?.name === 'AbortError' && userStopGenerationSerial !== stopSerial) return;
+            throw error;
+        }
     });
 
     //menu buttons setup

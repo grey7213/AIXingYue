@@ -201,9 +201,12 @@ function renderAnnouncement(settings) {
 }
 
 function applyShellPreferences() {
-  const theme = localStorage.getItem('ai_xingyue_shell_theme') || '';
-  if (theme === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
-  else document.documentElement.setAttribute('data-theme', 'light');
+  if (window.HomerApplyTheme) window.HomerApplyTheme();
+  else {
+    const theme = localStorage.getItem('ai_xingyue_shell_theme');
+    document.documentElement.setAttribute('data-theme', theme === 'dark' ||
+      (theme === null && matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light');
+  }
   document.body?.classList.toggle('no-img', localStorage.getItem('ai_xingyue_pictureless') === '1');
 }
 

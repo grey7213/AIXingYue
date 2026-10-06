@@ -1,10 +1,11 @@
 /* Designed option windows, retaining the original control's binding and value. */
 (() => {
   if (window.HomerOptionPicker) return;
+  const previousCloseOverlay = window.HomerCloseOverlay;
   document.documentElement.dataset.homerInput='pointer';
   document.addEventListener('pointerdown',()=>document.documentElement.dataset.homerInput='pointer',true);
   document.addEventListener('keydown',()=>document.documentElement.dataset.homerInput='keyboard',true);
-  function applyTheme(){try{const saved=localStorage.getItem('ai_xingyue_shell_theme');const theme=saved==='dark'?'dark':saved!==null?'light':(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');document.documentElement.dataset.theme=theme;window.HomerNative?.setAppTheme?.(theme);}catch{}}
+  const applyTheme=window.HomerApplyTheme||(()=>{let saved=null;try{saved=localStorage.getItem('ai_xingyue_shell_theme');}catch{}const theme=saved==='dark'?'dark':saved!==null?'light':(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');document.documentElement.dataset.theme=theme;try{window.HomerNative?.setAppTheme?.(theme);}catch{}return theme;});
   applyTheme();window.HomerApplyTheme=applyTheme;
   window.addEventListener('storage',event=>{if(event.key==='ai_xingyue_shell_theme')applyTheme();});
   for(const name of ['homer:page-visible','pageshow','homer:theme-changed'])window.addEventListener(name,applyTheme);
@@ -15,7 +16,7 @@
   css.rel = 'stylesheet';
   css.href = new URL('../css/option-picker.css?v=20260917-r8', source).href;
   document.head.append(css);
-  const surfaces=document.createElement('link');surfaces.rel='stylesheet';surfaces.href=new URL('../css/surface-controls.css',source).href;document.head.append(surfaces);
+  if(!document.querySelector('link[data-homer-surface-controls]')){const surfaces=document.createElement('link');surfaces.rel='stylesheet';surfaces.href=new URL('../css/surface-controls.css',source).href;surfaces.dataset.homerSurfaceControls='';document.head.append(surfaces);}
   const overlays=document.createElement('link');overlays.rel='stylesheet';overlays.href=new URL('../css/overlay-system.css',source).href;document.head.append(overlays);
   const refinements=document.createElement('link');refinements.rel='stylesheet';refinements.href=new URL('../css/dialog-refinement.css',source).href;document.head.append(refinements);
   let active = null;
@@ -179,7 +180,7 @@
     if (!overlay) {
       const selection = document.querySelector('[data-homer-cancel-selection]');
       if (selection?.getClientRects().length) { selection.click(); return true; }
-      return false;
+      return typeof previousCloseOverlay === 'function' && previousCloseOverlay() === true;
     }
     if (overlay instanceof HTMLDialogElement) {
       // Match Escape's cancel event, so a form can retain an in-flight write.

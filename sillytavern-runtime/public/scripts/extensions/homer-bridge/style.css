@@ -3522,8 +3522,7 @@ body.homer-runtime:not(.homer-card-stage-active) #chat .mes_text {
     line-height: 1.55;
 }
 
-body.homer-runtime:not(.homer-card-stage-active) #chat .mes_text,
-body.homer-runtime:not(.homer-card-stage-active) #chat .mes_text * {
+body.homer-runtime:not(.homer-card-stage-active) #chat .mes_text {
     color: inherit;
     text-shadow: none;
 }
@@ -4439,10 +4438,117 @@ body:has(.homer-preset-dialog[open]) .homer-keyword-injector {
 /* TavernHelper marks source only after taking ownership. Keep that contract
    even when its utility stylesheet is late/unsupported; never hide normal code. */
 body.homer-runtime #chat .mes_text pre[class~="hidden!"] { display: none !important; }
-body.homer-runtime #chat .homer-opening-nav { display:flex;align-items:center;justify-content:center;gap:8px;width:max-content;max-width:100%;margin:8px 0 0;color:var(--homer-assistant-text,#fff);font:13px/1.5 system-ui; }
-body.homer-runtime #chat .homer-opening-nav button { min-width:48px;min-height:48px;margin:0;padding:4px 12px;border:0;border-radius:12px;background:var(--tavo-assistant-bubble,#29485f);color:inherit;font:26px/1 system-ui;cursor:pointer; }
-body.homer-runtime #chat .homer-opening-nav button:disabled { opacity:.35;cursor:default; }
-body.homer-runtime #chat .homer-opening-nav button:focus-visible { outline:2px solid currentColor;outline-offset:2px; }
+/* Opening navigation belongs to the message, with a quiet 28px visual inside
+   each 44px touch target. Keep text chevrons as the fallback for older WebViews. */
+body.homer-runtime #chat .homer-opening-nav {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    width: max-content;
+    max-width: 100%;
+    margin: 4px 0 0;
+    color: var(--homer-assistant-text, #fff);
+    font: 13px/1.5 system-ui;
+}
+
+body.homer-runtime #chat .homer-opening-nav > span {
+    min-width: 76px;
+    text-align: center;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+    opacity: .78;
+}
+
+body.homer-runtime #chat .homer-opening-nav > button {
+    position: relative;
+    display: inline-grid;
+    place-items: center;
+    flex: 0 0 44px;
+    box-sizing: border-box;
+    width: 44px !important;
+    min-width: 44px !important;
+    max-width: 44px !important;
+    height: 44px !important;
+    min-height: 44px !important;
+    max-height: 44px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    border-radius: 12px;
+    background: transparent !important;
+    box-shadow: none !important;
+    color: inherit;
+    font: 22px/1 system-ui;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+
+body.homer-runtime #chat .homer-opening-nav > button::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 28px !important;
+    height: 28px !important;
+    border-radius: 9px;
+    background: currentColor;
+    opacity: .08;
+    transform: translate(-50%, -50%);
+    transition: opacity 120ms ease, transform 120ms ease;
+    pointer-events: none;
+}
+
+@supports ((mask-image: url('')) or (-webkit-mask-image: url(''))) {
+    body.homer-runtime #chat .homer-opening-nav > button {
+        font-size: 0 !important;
+    }
+
+    body.homer-runtime #chat .homer-opening-nav > button::after {
+        content: '';
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 18px !important;
+        height: 18px !important;
+        background: currentColor;
+        -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='m14 7-5 5 5 5' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
+        mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='m14 7-5 5 5 5' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
+        transform: translate(-50%, -50%);
+        pointer-events: none;
+    }
+
+    body.homer-runtime #chat .homer-opening-nav > button:last-child::after {
+        transform: translate(-50%, -50%) rotate(180deg);
+    }
+}
+
+@media (hover: hover) {
+    body.homer-runtime #chat .homer-opening-nav > button:not(:disabled):hover::before {
+        opacity: .16;
+    }
+}
+
+body.homer-runtime #chat .homer-opening-nav > button:not(:disabled):active::before {
+    opacity: .22;
+    transform: translate(-50%, -50%) scale(.92);
+}
+
+body.homer-runtime #chat .homer-opening-nav > button:disabled {
+    opacity: .3;
+    cursor: default;
+}
+
+body.homer-runtime #chat .homer-opening-nav > button:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: -5px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    body.homer-runtime #chat .homer-opening-nav > button::before {
+        transition: none;
+    }
+}
 .homer-copy-diagnostic{display:block;min-height:36px;margin:8px 0;padding:6px 10px;border:1px solid #8885;border-radius:8px;background:transparent;color:inherit;font:inherit;font-size:12px;cursor:pointer}
 .homer-admin-preview #homer-left-drawer,.homer-admin-preview [aria-label="打开导航与历史会话"]{display:none!important}
 .homer-admin-preview #homer-conversation-title{display:block!important;visibility:visible!important;grid-column:2;grid-row:1}

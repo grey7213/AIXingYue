@@ -6,6 +6,24 @@ import { formatInstructModeExamples } from '../../instruct-mode.js';
 
 /** @typedef {import('../engine/MacroEnv.types.js').MacroEnv} MacroEnv */
 
+const builtinNameHandlers = Object.freeze({
+    user: ({ env }) => env.names.user,
+    char: ({ env }) => env.names.char,
+});
+
+/** Checks the current zero-argument name definition without evaluating it. */
+export function isBuiltinNameMacro(name) {
+    if (typeof name !== 'string') return false;
+    const key = name.toLowerCase();
+    if (!Object.hasOwn(builtinNameHandlers, key)) return false;
+    const definition = MacroRegistry.getMacro(key);
+    return Boolean(definition && definition.handler === builtinNameHandlers[key]
+        && definition.name === key && definition.aliasOf === null
+        && definition.minArgs === 0 && definition.maxArgs === 0 && definition.list === null
+        && definition.strictArgs === true && definition.delayArgResolution === false
+        && Array.isArray(definition.unnamedArgDefs) && definition.unnamedArgDefs.length === 0);
+}
+
 /**
  * Registers macros that mostly act as simple accessors to MacroEnv fields
  * (names, character card fields, system metadata, extras) or basic
@@ -17,14 +35,14 @@ export function registerEnvMacros() {
         category: MacroCategory.NAMES,
         description: 'Your current Persona username.',
         returns: 'Persona username.',
-        handler: ({ env }) => env.names.user,
+        handler: builtinNameHandlers.user,
     });
 
     MacroRegistry.registerMacro('char', {
         category: MacroCategory.NAMES,
         description: 'The character\'s name.',
         returns: 'Character name.',
-        handler: ({ env }) => env.names.char,
+        handler: builtinNameHandlers.char,
     });
 
     MacroRegistry.registerMacro('group', {

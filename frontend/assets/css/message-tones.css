@@ -1,2 +1,11 @@
-.mes[is_user="false"] .mes_text [data-message-tone="speech"],.preview-message:not(.is-user) [data-message-tone="speech"]{color:var(--homer-speech-color,#b4e8ff)}
-.mes[is_user="false"] .mes_text [data-message-tone="thought"],.preview-message:not(.is-user) [data-message-tone="thought"]{color:var(--homer-thought-color,#f6c6eb);font-style:italic}
+/* Author DOM is never selected by these presentation-only markers. */
+html body #chat .mes[is_user="false"] .mes_text [data-message-tone="speech"],
+html body .preview-message:not(.is-user) [data-message-tone="speech"]{color:var(--homer-speech-color,#b4e8ff)!important;font-family:var(--homer-speech-font,inherit)!important;font-style:normal;quotes:none}
+html body #chat .mes[is_user="false"] .mes_text [data-message-tone="aside"],
+html body #chat .mes[is_user="false"] .mes_text [data-message-tone="thought"],
+html body .preview-message:not(.is-user) :is([data-message-tone="aside"],[data-message-tone="thought"]){color:var(--homer-thought-color,#f6c6eb)!important;font-family:var(--homer-thought-font,inherit)!important;font-style:normal}
+html body #chat .mes[is_user="false"] .mes_text:not(.homer-author-content),
+html body #chat .mes[is_user="false"] .mes_text>.homer-prose-region{font-family:var(--homer-prose-font,inherit)!important;color:var(--homer-prose-color,var(--homer-assistant-text,#fff))!important}
+/* Core formatting already keeps the literal quotation marks in <q>. */
+html body #chat .mes[is_user="false"] .mes_text q:has([data-message-tone="speech"])::before,
+html body #chat .mes[is_user="false"] .mes_text q:has([data-message-tone="speech"])::after{content:none}

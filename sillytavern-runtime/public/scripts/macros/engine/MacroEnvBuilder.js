@@ -56,6 +56,11 @@ class MacroEnvBuilder {
         this.#providers = [];
     }
 
+    /** Reports registered providers without constructing an env or invoking them. */
+    hasProviders() {
+        return this.#providers.length > 0;
+    }
+
     /**
      * Registers a provider that can augment the MacroEnv with additional
      * data (for extensions, extra context, etc.).

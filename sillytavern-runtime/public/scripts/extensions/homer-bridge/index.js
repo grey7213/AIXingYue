@@ -7,24 +7,33 @@ import {
     isGenerating,
     saveSettingsDebounced,
     setOnlineStatus,
+    activateCharacterForChat,
+    prepareCharacterRead,
+    prepareCharacterChatMirrorRead,
+    scrollChatToBottom,
+    scrollOnMediaLoad,
 } from '../../../script.js';
 import { oai_settings } from '../../openai.js';
-import { greetingSwipes, restoreRenderedGreetings, canReplayGreetingRules } from '../../homer-greeting-swipes.mjs';
+import { prefetchPersonaAvatarsForConversation, prefetchPersonaAvatarsForCurrentChat } from '../../personas.js';
+import { greetingSwipes, restoreCanonicalGreeting } from '../../homer-greeting-swipes.mjs';
+import { refreshSettledAvatarImages } from '../../homer-avatar-refresh.mjs';
 import { messagePreview } from '/assets/js/message-preview.js';
 import { publicModel, fillModelSelect } from '/assets/js/model-catalog.js';
 import { messageActionIcon, positionChatMenu } from '/assets/js/chat-menu.js';
+import { createDeferredListCovers } from '/assets/js/deferred-list-covers.mjs';
 import { allowScopedScripts, getRegexScripts, getRegexedString, regex_placement } from '../regex/engine.js';
-import { extension_settings } from '../../extensions.js';
+import { extension_settings, writeExtensionField } from '../../extensions.js';
 import { getContext } from '../../st-context.js';
 import { accountStorage } from '../../util/AccountStorage.js';
 import {
-    importEmbeddedWorldInfo,
+    convertCharacterBook,
+    saveWorldInfo,
     updateWorldInfoList,
     world_names,
 } from '../../world-info.js';
 import { loadApprovedExtensions } from './extension-host.js';
 import { installRoleplayHubCompatibility } from './roleplayhub-compat.js';
-import { installCardStageRuntime } from './card-stage.js';
+import { installCardStageRuntime, closeCardStageOverlay } from './card-stage.js';
 import { installKeywordInjector } from './keyword-injector.js';
 import { openChatTool } from '/assets/js/chat-tools.js';
 import { bindChatAppearance } from '/assets/js/chat-appearance.js';
@@ -32,11 +41,223 @@ import { installMemoryUi } from '/assets/js/memory-ui.js';
 import { settingsPage } from '/assets/js/chat-settings-page.js';
 import { controlCenter } from '/assets/js/chat-control-center.js';
 import { apiText } from '/assets/js/api-transport.js';
-import { setOfficialDisplayRules } from '../../homer-official-regex.mjs';
+import { officialDisplayRules, setOfficialDisplayRules } from '../../homer-official-regex.mjs';
 import { generationFailure, safeDiagnostic } from '../../homer-generation-diagnostics.mjs';
 import { activateModelScope, confirmModelChange, mountModelGate } from '../../homer-model-gate.mjs';
 import { adminWorkspace } from './admin-workspace.js';
 import { chatImages } from '/assets/js/chat-images.js';
+import { loadTavoUi, decorateTavoMessage, mountTavoComposer, refreshTavoUi, setTavoHostInsets, installTavoComposerFocusRelay } from '/assets/js/tavo-chat-ui.js';
+import { captureCloudSync, canApplyCloudSync, createCloudSyncQueue } from '../../homer-cloud-sync.mjs';
+import { createCardPreparationCache } from '../../homer-stable-template.mjs';
+import { createChatOutbox } from '../../homer-chat-outbox.mjs';
+import { requestSessionCard } from '../../homer-card-transport.mjs';
+import { clearCardTransportMemory } from '../../homer-card-transport-cache.mjs';
+import { holdLargeSourceLayout } from '../../homer-source-layout.mjs';
+import { preloadStaticDialogueUi } from '../../homer-static-ui-preload.mjs';
+import { capturePromptMessageState, prepareAcknowledgedPromptStates, restoreAcknowledgedPromptStates, samePromptMessageSource, clearPromptMessageState } from '../../homer-prompt-message-state.mjs';
+
+const cardPreparations = createCardPreparationCache();
+const chatOutbox = createChatOutbox();
+const storageRequests = new Set();
+let storageAccountEpoch = 0;
+let verifiedStorageOwner = '';
+let storageOwner = authenticatedStorageOwner();
+let outboxReplay = null;
+let extensionSettingsReplayWork = Promise.resolve();
+const sessionReadFences = new WeakMap();
+const acknowledgedPromptTickets = new WeakMap();
+const storageAckStamps = new Map();
+
+function storageAckKey(scope, kind = 'chat') { return JSON.stringify([scope, kind]); }
+function storageAckStamp(scope, kind = 'chat') {
+    const key = storageAckKey(scope, kind);
+    if (!storageAckStamps.has(key)) storageAckStamps.set(key, { version: 0 });
+    const stamp = storageAckStamps.get(key);
+    storageAckStamps.delete(key); storageAckStamps.set(key, stamp);
+    while (storageAckStamps.size > 64) storageAckStamps.delete(storageAckStamps.keys().next().value);
+    return stamp;
+}
+async function acknowledgeStorage(committed, response) {
+    const acknowledgement = await chatOutbox.cloudACK(committed, response);
+    if (acknowledgement.applied) storageAckStamp(committed.scope, committed.kind).version++;
+    return acknowledgement;
+}
+
+function authenticatedStorageOwner() {
+    try {
+        if (localStorage.getItem('ai_xingyue_logged_in') !== '1') return verifiedStorageOwner;
+        const user = JSON.parse(localStorage.getItem('ai_xingyue_user') || 'null');
+        return String(user?.id || user?.user_id || '').trim() || verifiedStorageOwner;
+    } catch { return verifiedStorageOwner; }
+}
+
+function invalidateStorageAccount() {
+    clearCardTransportMemory();
+    verifiedStorageOwner = ''; storageOwner = ''; storageAccountEpoch++;
+    for (const controller of storageRequests) controller.abort();
+    cardPreparations.clear(); sessionPrefetchCache.clear(); storageAckStamps.clear();
+    sessionPrefetchPeer = null;
+    preparedAdminLaunch = null; scopeDrafts.clear();
+}
+
+function acceptVerifiedSessionOwner(payload, requestOwner, requestEpoch) {
+    const userId = String(payload?.user?.id || payload?.user?.user_id || '').trim();
+    const currentOwner = reconcileStorageAccount();
+    if (!userId || requestEpoch !== storageAccountEpoch
+        || (requestOwner && requestOwner !== userId) || (currentOwner && currentOwner !== userId)) {
+        throw new Error('会话账号已切换，请重新进入');
+    }
+    // A successful authenticated server session, not a local login flag,
+    // establishes the initial owner for a cookie-only login. No credentials
+    // are copied and a logout epoch can never be revived by an old response.
+    if (!currentOwner) { verifiedStorageOwner = userId; storageOwner = userId; }
+}
+
+function reconcileStorageAccount() {
+    const owner = authenticatedStorageOwner();
+    if (owner !== storageOwner) {
+        clearCardTransportMemory();
+        storageOwner = owner; storageAccountEpoch++;
+        for (const controller of storageRequests) controller.abort();
+        cardPreparations.clear();
+        sessionPrefetchCache.clear();
+        sessionPrefetchPeer = null;
+        storageAckStamps.clear();
+        preparedAdminLaunch = null; scopeDrafts.clear();
+    }
+    return owner;
+}
+
+async function requestScopedStorage(snapshot, kind, options = {}) {
+    const owner = JSON.parse(snapshot.scope)[0];
+    if (!owner || reconcileStorageAccount() !== owner
+        || owner !== String(session?.user?.id || session?.user?.user_id || '')) {
+        throw new Error('会话账号已切换');
+    }
+    const epoch = storageAccountEpoch;
+    const current = await chatOutbox.fence(snapshot.scope, kind);
+    if (reconcileStorageAccount() !== owner || epoch !== storageAccountEpoch
+        || owner !== String(session?.user?.id || session?.user?.user_id || '')) throw new Error('会话账号已切换');
+    if (!current || current.commitId !== snapshot.committed?.commitId || current.revision !== snapshot.committed?.revision) {
+        throw new Error('本机存档已更新，等待最新版本同步');
+    }
+    const controller = new AbortController();
+    storageRequests.add(controller);
+    try {
+        const result = await requestJson(kind === 'chat' ? '/api/homer/sync' : '/api/homer/runtime-state', {
+            method: 'POST', body: snapshot.body, ...options, signal: controller.signal,
+        });
+        if (reconcileStorageAccount() !== owner || epoch !== storageAccountEpoch) throw new Error('会话账号已切换');
+        if (kind === 'chat' && !Array.isArray(result?.messages)) throw new Error('云端未确认聊天记录');
+        return result;
+    } finally { storageRequests.delete(controller); }
+}
+
+const extensionSyncQueue = createCloudSyncQueue(async (snapshot, options) => {
+    const epoch = storageAccountEpoch;
+    const result = await requestScopedStorage(snapshot, 'extension-settings', options);
+    await acknowledgeStorage(snapshot.committed, result);
+    if (JSON.parse(snapshot.scope)[0] !== reconcileStorageAccount() || epoch !== storageAccountEpoch) throw new Error('会话账号已切换');
+    return result;
+});
+
+async function replayPendingStorage() {
+    const owner = reconcileStorageAccount();
+    if (!owner || owner !== String(session?.user?.id || session?.user?.user_id || '')) return;
+    if (outboxReplay) return outboxReplay;
+    outboxReplay = (async () => {
+        for (const committed of await chatOutbox.pending(owner)) {
+            if (reconcileStorageAccount() !== owner) break;
+            // Read back after listing: a live edit may have committed a newer
+            // version while another scope was uploading. Never replay that old
+            // listed body over the new one.
+            const latest = await chatOutbox.read(committed.scope, committed.kind);
+            if (!latest?.pending) continue;
+            const snapshot = captureCloudSync(latest.scope, latest.payload);
+            snapshot.committed = latest;
+            try {
+                await (latest.kind === 'chat' ? cloudSyncQueue : extensionSyncQueue).enqueue(snapshot);
+            } catch { break; } // Retain the failed and remaining durable rows.
+        }
+    })().catch(() => {
+        console.warn(`${MODULE_ID}: local chat replay remains pending`);
+    }).finally(() => { outboxReplay = null; });
+    return outboxReplay;
+}
+
+window.addEventListener('storage', event => {
+    if (!event.key || (event.key === 'ai_xingyue_user' && event.newValue === null)
+        || (event.key === 'ai_xingyue_logged_in' && event.newValue !== '1')) invalidateStorageAccount();
+    else if (['ai_xingyue_user', 'ai_xingyue_logged_in'].includes(event.key)) reconcileStorageAccount();
+});
+window.addEventListener('homer-account-cleared', invalidateStorageAccount);
+
+let tavoComposer = null;
+let tavoUiReady;
+let chatAppearance = null;
+function prepareTavoConversationUi() {
+    if (!tavoUiReady) tavoUiReady = loadTavoUi().catch(error => { tavoUiReady = null; throw error; });
+    return tavoUiReady;
+}
+
+function setComposerDraft(value) {
+    const composer = document.querySelector('#send_textarea');
+    if (!(composer instanceof HTMLTextAreaElement)) return;
+    composer.value = String(value || '').slice(0, 10_000);
+    composer.dispatchEvent(new Event('input', { bubbles: true }));
+    const key = scopeDraftKey();
+    if (key) scopeDrafts.set(key, composer.value);
+}
+
+function openComposerFullscreen() {
+    const source = document.querySelector('#send_textarea');
+    if (!source || loadingLaunch) return;
+    const scope = scopeDraftKey();
+    document.querySelector('#homer-composer-fullscreen')?.remove();
+    const dialog = createElement('dialog', 'homer-composer-fullscreen');
+    dialog.id = 'homer-composer-fullscreen'; dialog.setAttribute('aria-label', '编辑消息');
+    const head = createElement('header');
+    const cancel = createElement('button', '', '取消'), save = createElement('button', '', '完成');
+    cancel.type = save.type = 'button';
+    const editor = createElement('textarea'); editor.value = source.value; editor.maxLength = 10_000;
+    editor.setAttribute('aria-label', '消息正文');
+    cancel.addEventListener('click', () => dialog.close());
+    save.addEventListener('click', () => {
+        if (scopeDraftKey() !== scope) { dialog.close(); return; }
+        setComposerDraft(editor.value); tavoComposer?.refresh(); dialog.close();
+    });
+    head.append(cancel, createElement('strong', '', '编辑消息'), save); dialog.append(head, editor);
+    dialog.addEventListener('close', () => dialog.remove(), { once: true });
+    document.body.append(dialog); dialog.showModal(); editor.focus();
+}
+
+async function installTavoConversationUi() {
+    await prepareTavoConversationUi();
+    const container = document.querySelector('#form_sheld');
+    if (!container) throw new Error('对话输入区域未就绪');
+    if (!tavoComposer) {
+        tavoComposer = await mountTavoComposer({
+            container,
+            inputSizing: () => !(canNotifyHost() && document.documentElement.classList.contains('homer-host-chrome')),
+            getState: () => ({ scope: scopeDraftKey(), text: document.querySelector('#send_textarea')?.value || '',
+                generating: Boolean(isGenerating() || generationBusy), disabled: Boolean(loadingLaunch || rollbackBusy || conversationRecoveryBlocked) }),
+            onText: text => setComposerDraft(text),
+            onSubmit: text => {
+                if (isGenerating() || generationBusy || rollbackBusy || loadingLaunch || conversationRecoveryBlocked || !text.trim()) return;
+                assertCanonicalConversationScope();
+                setComposerDraft(text);
+                const send = document.querySelector('#send_but');
+                if (send && !send.matches(':disabled')) send.click();
+            },
+            onStop: () => { getContext().stopGeneration(); scheduleHostStateNotify(0, 'stop-requested'); },
+            onPlus: text => { setComposerDraft(text); openHostRequestedSettings('attachments'); },
+            onFullscreen: text => { setComposerDraft(text); openComposerFullscreen(); },
+        });
+        const canonicalInput = document.querySelector('#send_textarea');
+        canonicalInput?.addEventListener('input', () => tavoComposer?.refresh());
+    }
+    tavoComposer.refresh(); queueMessageMenuRender();
+}
 
 const imageGenerationUi = chatImages({
     request: requestJson,
@@ -100,8 +321,23 @@ let requestedConversationId = String(
 const requestedSiteOrigin = String(urlParams.get('homer_site_origin') || '').trim();
 const requestedHostChannel = String(urlParams.get('homer_host_channel') || '').trim();
 const requestedEmbed = String(urlParams.get('homer_embed') || '').trim();
+// Presentation capability only. It neither establishes an owner nor grants
+// card access, and administrator/older hosts retain the original transport.
+const requestedIdleHostDisplay = urlParams.get('homer_idle_host_display') === '1';
 const HOST_CHANNEL = 'homer:dialogue-host:v1';
 const prewarmOnly = urlParams.get('homer_prewarm') === '1';
+// Correlation only. Capture once so a new host name cannot relabel an old
+// document. This identifier never grants account or card access.
+const hostBootstrapEngineToken = normalizeBootstrapToken(String(window.name || '').startsWith('homer-bootstrap:')
+    ? String(window.name).slice('homer-bootstrap:'.length) : '');
+const hostBootstrapDocumentToken = globalThis.crypto?.randomUUID?.()
+    || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+if (hostBootstrapEngineToken) document.documentElement.dataset.homerBootstrapDocument = hostBootstrapDocumentToken;
+let boundBootstrapToken = '';
+if (urlParams.get('homer_host_chrome') === '1') {
+    document.documentElement.classList.add('homer-host-chrome');
+    installTavoComposerFocusRelay();
+}
 let coreAvailable = false;
 let preparedAdminLaunch = null;
 let adminBinding = false;
@@ -121,26 +357,34 @@ function retainScopeDraft() {
 function restoreScopeDraft() {
     const composer = document.querySelector('#send_textarea');
     if (!composer) return;
-    composer.value = scopeDrafts.get(scopeDraftKey()) || '';
+    const draft = scopeDrafts.get(scopeDraftKey()) || '';
+    // Re-announcing an unchanged draft is not an input change. The normal
+    // ready/state notifications still refresh model, busy and layout state.
+    if (composer.value === draft) return;
+    composer.value = draft;
     composer.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
 function prepareAdminLaunch(appId) {
     if (!appId) return null;
-    if (preparedAdminLaunch?.appId === appId && Date.now() - preparedAdminLaunch.created < 15000) return preparedAdminLaunch.promise;
+    const owner = reconcileStorageAccount(), epoch = storageAccountEpoch;
+    if (preparedAdminLaunch?.appId === appId && preparedAdminLaunch.owner === owner
+        && preparedAdminLaunch.epoch === epoch && Date.now() - preparedAdminLaunch.created < 15000) return preparedAdminLaunch.promise;
     const promise = Promise.all([fetchSession(appId, '', true), requestJson('/api/homer/models')]).then(async ([preview, models]) => {
+        acceptVerifiedSessionOwner(preview, owner, epoch);
         const enabled = payloadList(models).filter(item => item?.enabled !== false);
         const model = String(models?.default_id || enabled.find(item => item?.is_default)?.id || enabled[0]?.id || '');
         const config = await requestJson('/api/homer/admin-configuration', {
             method: 'POST', body: JSON.stringify({ app_id: appId, model, draft: {}, include_library: true }),
         });
+        acceptVerifiedSessionOwner(preview, owner, epoch);
         // Memory-only, single-consumption data. Generation still refreshes the
         // authoritative configuration; no old draft or account cache is reused.
         return { ...preview, adminStartupData: { models, config } };
     });
     // Preload failures are surfaced on explicit bind, never unhandled rejections.
     promise.catch(() => { if (preparedAdminLaunch?.promise === promise) preparedAdminLaunch = null; });
-    preparedAdminLaunch = { appId, created: Date.now(), promise };
+    preparedAdminLaunch = { appId, owner, epoch, created: Date.now(), promise };
     return promise;
 }
 
@@ -159,6 +403,9 @@ const applicationReadyPromise = new Promise(resolve => {
 });
 let postApplicationReadyWork = Promise.resolve();
 let loadingLaunch = false;
+// A failed activation must never expose a previous launch over another
+// character's canonical chat, or permit that chat to be saved/generated.
+let conversationRecoveryBlocked = false;
 let pendingCardScriptCharacter = null;
 let launch = null;
 let session = null;
@@ -173,6 +420,13 @@ let generationSnapshot = null;
 let generationRecoveryChain = Promise.resolve();
 let rollbackBusy = false;
 let lastSyncSignature = '';
+const cloudSyncQueue = createCloudSyncQueue(async (snapshot, options) => {
+    const epoch = storageAccountEpoch;
+    const result = await requestScopedStorage(snapshot, 'chat', options);
+    await acknowledgeStorage(snapshot.committed, result);
+    if (JSON.parse(snapshot.scope)[0] !== reconcileStorageAccount() || epoch !== storageAccountEpoch) throw new Error('会话账号已切换');
+    return result;
+});
 let eventHandlersInstalled = false;
 let dialogueEventLogMuted = 0;
 let messageMenuObserver = null;
@@ -183,6 +437,11 @@ let messagePressTimer = null;
 let messagePressStart = null;
 let messagePressTarget = null;
 let suppressMessageClickUntil = 0;
+let suppressMessageMenuPressRelease = false;
+let hostOverlayActive = false;
+let hostOverlaySignature = '';
+let hostOverlayObserver = null;
+let hostOverlaySyncQueued = false;
 let presentationModeBridgeInstalled = false;
 const MESSAGE_LONG_PRESS_DELAY = 500;
 const MESSAGE_LONG_PRESS_MOVE_TOLERANCE = 10;
@@ -213,7 +472,9 @@ const SESSION_PREFETCH_LIMIT = 2;
 const SESSION_CACHE_TTL_MS = 30_000;
 const sessionPrefetchCache = new Map();
 let sessionPrefetchTimer = null;
+let sessionPrefetchPeer = null;
 let hostStateNotifyTimer = null;
+let hostStateNotifyToken = null;
 
 const DEFAULT_MODEL_SETTINGS = Object.freeze({
     model_id: '',
@@ -558,30 +819,39 @@ function extensionSettingsSnapshot() {
     };
 }
 
-async function persistExtensionSettingsSnapshot(options = {}) {
-    if (launch?.admin_preview) return false;
-    if (extensionSettingsHydrating || !launch?.app_id || !launch?.conversation_id) {
-        return false;
+function captureExtensionStorage(options = {}) {
+    if (launch?.admin_preview) return null;
+    if (extensionSettingsHydrating || conversationRecoveryBlocked || !hasCanonicalConversationScope()
+        || !launch?.app_id || !launch?.conversation_id) {
+        return null;
     }
     const appId = String(launch.app_id);
     const conversationId = String(launch.conversation_id);
     const scope = extensionSettingsScope(appId, conversationId);
     const snapshot = extensionSettingsSnapshot();
-    if (scope === lastExtensionSettingsScope && snapshot.signature === lastExtensionSettingsSignature) {
-        return false;
+    if (!options.force && scope === lastExtensionSettingsScope && snapshot.signature === lastExtensionSettingsSignature) {
+        return null;
     }
-    await requestJson('/api/homer/runtime-state', {
-        method: 'POST',
-        body: JSON.stringify({
-            app_id: appId,
-            conversation_id: conversationId,
-            extension_settings: snapshot.value,
-        }),
-        keepalive: Boolean(options.keepalive) && snapshot.signature.length < 60_000,
+    return {
+        snapshot: captureCloudSync(cloudSyncScope(), {
+            app_id: appId, conversation_id: conversationId, extension_settings: snapshot.value,
+        }), scope, signature: snapshot.signature,
+    };
+}
+
+async function persistExtensionSettingsSnapshot(options = {}, captured = captureExtensionStorage(options)) {
+    if (!captured) return false;
+    captured.snapshot.committed = await chatOutbox.prepare(captured.snapshot, 'extension-settings');
+    const acknowledgement = await extensionSyncQueue.enqueue(captured.snapshot, {
+        keepaliveOnly: Boolean(options.keepalive),
     });
-    if (scope === extensionSettingsScope()) {
-        lastExtensionSettingsScope = scope;
-        lastExtensionSettingsSignature = snapshot.signature;
+    if (acknowledgement.deferred) return false;
+    if (acknowledgement.skipped) {
+        await acknowledgeStorage(captured.snapshot.committed, acknowledgement.response);
+    }
+    if (captured.scope === extensionSettingsScope()) {
+        lastExtensionSettingsScope = captured.scope;
+        lastExtensionSettingsSignature = captured.signature;
     }
     return true;
 }
@@ -594,8 +864,13 @@ function flushExtensionSettingsPersist(options = {}) {
     if (!waiters.length && !options.force) {
         return extensionSettingsPersistChain;
     }
-    const persist = () => persistExtensionSettingsSnapshot(options);
-    extensionSettingsPersistChain = extensionSettingsPersistChain.then(persist, persist);
+    // Capture now, not when a previous remote write eventually finishes. A
+    // later cloud response must never capture the newly selected card instead.
+    const captured = captureExtensionStorage(options);
+    // The storage queue already orders transports. Do not defer even the local
+    // prepare behind an older cloud request: it could land after a newer leave
+    // snapshot and reintroduce the old settings as the newest revision.
+    extensionSettingsPersistChain = persistExtensionSettingsSnapshot(options, captured);
     extensionSettingsPersistChain.then(
         value => waiters.forEach(waiter => waiter.resolve(value)),
         error => waiters.forEach(waiter => waiter.reject(error)),
@@ -625,7 +900,8 @@ function saveConversationExtensionSettings() {
     // second timer runs, so use a zero-delay coalescing queue whose promise only
     // resolves after the current conversation snapshot reaches Homer.
     extensionSettingsPersistTimer = window.setTimeout(() => {
-        void (async () => {
+        const replayScope = cloudSyncScope();
+        extensionSettingsReplayWork = (async () => {
             // Card helpers can mutate the public extensionSettings object while
             // an extension still holds the previous value in module-local UI
             // state. Replay the standard load event before persisting so that
@@ -634,17 +910,23 @@ function saveConversationExtensionSettings() {
             const intended = cloneJsonObject(conversationExtensionSettings || extension_settings);
             extensionSettingsReplayInProgress = true;
             try {
+                if (replayScope !== cloudSyncScope()) return;
                 replaceExtensionSettings(intended);
                 await eventSource.emit(event_types.SETTINGS_LOADED);
+                if (replayScope !== cloudSyncScope()) return;
                 replaceExtensionSettings(intended);
                 conversationExtensionSettings = cloneJsonObject(extension_settings);
             } finally {
                 extensionSettingsReplayInProgress = false;
             }
-            await flushExtensionSettingsPersist();
+            // This chain tracks local settings reconciliation only. Remote
+            // persistence remains separately awaitable by extension callers.
+            void flushExtensionSettingsPersist().catch(() => {
+                console.warn(`${MODULE_ID}: extension settings save remains pending`);
+            });
         })().catch(error => {
             console.warn(`${MODULE_ID}: extension settings reconciliation failed`, error);
-            void flushExtensionSettingsPersist();
+            void flushExtensionSettingsPersist().catch(() => {});
         });
     }, 0);
     return promise;
@@ -727,16 +1009,8 @@ function installEmbeddedDocumentLookupBridge() {
 function conversationModelSettings() {
     const saved = runtimeVariables.homer_model_settings;
     const raw = saved && typeof saved === 'object' ? saved : {};
-    const allowedModels = new Set(runtimeUiData.models.map(item => String(item?.id || '')));
-    const requestedModelId = String(raw.model_id || '').trim();
-    const fallbackModelId = String(
-        runtimeUiData.modelDefaultId
-        || runtimeUiData.models.find(item => item?.is_default)?.id
-        || runtimeUiData.models[0]?.id
-        || '',
-    );
     return {
-        model_id: allowedModels.has(requestedModelId) ? requestedModelId : fallbackModelId,
+        model_id: selectRuntimeModelId(runtimeVariables, runtimeUiData.models, runtimeUiData.modelDefaultId),
         temperature: clampNumber(raw.temperature, 0, 2, DEFAULT_MODEL_SETTINGS.temperature),
         top_p: clampNumber(raw.top_p, 0, 1, DEFAULT_MODEL_SETTINGS.top_p),
         frequency_penalty: clampNumber(
@@ -752,6 +1026,12 @@ function conversationModelSettings() {
             DEFAULT_MODEL_SETTINGS.presence_penalty,
         ),
     };
+}
+
+function selectRuntimeModelId(variables, models, defaultId = '') {
+    const requested = String(variables?.homer_model_settings?.model_id || '').trim();
+    return models.some(item => String(item?.id || '') === requested) ? requested
+        : String(defaultId || models.find(item => item?.is_default)?.id || models[0]?.id || '');
 }
 
 function selectedModel() {
@@ -797,6 +1077,59 @@ function notifyHost(type, payload = {}) {
     }, window.location.origin);
 }
 
+const HOST_OVERLAY_SELECTOR = 'dialog,[role="dialog"][aria-modal="true"],.popup,#homerCardExperienceRoot';
+const HOST_ANCHORED_OVERLAY_SELECTOR = '#homer-message-menu-dialog,#homer-preset-panel';
+function fullRuntimeOverlayOpen(element) {
+    if (element.matches('#homerCardExperienceRoot')) return element.getAttribute('data-homer-overlay-active') === 'true';
+    if (element.matches(HOST_ANCHORED_OVERLAY_SELECTOR)) return false;
+    if (element instanceof HTMLDialogElement) return element.open;
+    return !element.hidden && !element.closest('[hidden],[aria-hidden="true"]')
+        && element.getAttribute('data-state') !== 'closed'
+        && element.style.display !== 'none' && element.style.visibility !== 'hidden'
+        && !element.classList.contains('hidden') && !element.classList.contains('is-hidden');
+}
+
+function syncHostOverlayState() {
+    hostOverlayActive = Boolean(messageSelection)
+        || [...document.querySelectorAll(HOST_OVERLAY_SELECTOR)].some(fullRuntimeOverlayOpen);
+    if (!canNotifyHost() || !launch?.conversation_id) return;
+    const payload = {
+        active: hostOverlayActive,
+        admin_preview: Boolean(launch.admin_preview),
+        app_id: String(launch.app_id || '').slice(0, 160),
+        conversation_id: String(launch.conversation_id || '').slice(0, 160),
+    };
+    const signature = JSON.stringify(payload);
+    if (signature === hostOverlaySignature) return;
+    hostOverlaySignature = signature;
+    notifyHost('overlay-state', payload);
+}
+
+function installHostOverlayTracking() {
+    if (hostOverlayObserver) return;
+    const isOverlayNode = node => node instanceof Element && (
+        node.matches(HOST_OVERLAY_SELECTOR + ',#homer-message-selection')
+        || Boolean(node.querySelector(HOST_OVERLAY_SELECTOR + ',#homer-message-selection')));
+    hostOverlayObserver = new MutationObserver(records => {
+        const relevant = records.some(record => record.type === 'attributes'
+            ? record.target instanceof Element && record.target.matches(HOST_OVERLAY_SELECTOR)
+                && !record.target.matches(HOST_ANCHORED_OVERLAY_SELECTOR)
+            : [...record.addedNodes, ...record.removedNodes].some(isOverlayNode));
+        if (!relevant || hostOverlaySyncQueued) return;
+        hostOverlaySyncQueued = true;
+        queueMicrotask(() => { hostOverlaySyncQueued = false; syncHostOverlayState(); });
+    });
+    hostOverlayObserver.observe(document.body, {
+        subtree: true, childList: true, attributes: true,
+        attributeFilter: ['open', 'hidden', 'aria-hidden', 'data-state', 'class', 'style', 'data-homer-overlay-active'],
+    });
+    document.addEventListener('close', event => {
+        if (event.target instanceof Element && event.target.matches(HOST_OVERLAY_SELECTOR)
+            && !event.target.matches(HOST_ANCHORED_OVERLAY_SELECTOR)) syncHostOverlayState();
+    }, true);
+    syncHostOverlayState();
+}
+
 function currentRoleName() {
     return String(
         launch?.card?.data?.name
@@ -806,20 +1139,33 @@ function currentRoleName() {
     ).trim().slice(0, 120);
 }
 
-function notifyHostConversation(type = 'ready') {
+function normalizeBootstrapToken(value) {
+    return typeof value === 'string' && /^[A-Za-z0-9._:-]{1,80}$/.test(value) ? value : '';
+}
+
+function notifyHostConversation(type = 'ready', transition = {}) {
     restoreScopeDraft();
+    const idleDisplay = type === 'ready' && requestedIdleHostDisplay && canNotifyHost()
+        && !launch?.admin_preview && !conversationRecoveryBlocked && hasCanonicalConversationScope();
+    if (idleDisplay) syncHostOverlayState();
+    const controlState = idleDisplay ? hostControlState() : null;
     const payload = {
         admin_preview: Boolean(launch?.admin_preview),
         app_id: String(launch?.app_id || '').slice(0, 160),
         conversation_id: String(launch?.conversation_id || '').slice(0, 160),
         role_name: currentRoleName(),
+        ...transition,
     };
     notifyHost('title', payload);
     notifyHost('conversation', payload);
+    // Schedule the fresh state before acknowledging it to capable hosts.
+    // Older hosts may still request state explicitly through the same channel.
+    scheduleHostStateNotify(0, type, { idleDisplay });
     if (type === 'ready') {
-        notifyHost('ready', payload);
-    } else notifyHost(type, payload);
-    scheduleHostStateNotify(0, type);
+        notifyHost('ready', { ...payload, state_scheduled: true,
+            ...(controlState ? { control_state: controlState } : {}) });
+    } else notifyHost(type, type === 'conversation-switch-failed'
+        ? { ...payload, state_scheduled: true } : payload);
 }
 
 function notifyHostLoading(message) {
@@ -828,14 +1174,42 @@ function notifyHostLoading(message) {
     });
 }
 
-function notifyHostError() {
+function notifyHostError(bootstrapToken = '') {
     notifyHost('error', {
         code: 'DIALOGUE_START_FAILED',
         message: '对话准备失败，请重试。',
+        ...(normalizeBootstrapToken(bootstrapToken) ? { bootstrap_token: bootstrapToken } : {}),
     });
 }
 
-function hostMessageSnapshot(message, index) {
+function canonicalDisplayTexts() {
+    const result = new Map();
+    for (const row of document.querySelectorAll('#chat .mes[mesid]')) {
+        const index = Number(row.getAttribute('mesid'));
+        const content = row.querySelector('.mes_text');
+        // Interactive cards retain their live runtime. Never persist source
+        // HTML, script code, hidden controls, or an iframe's document as text.
+        if (!Number.isSafeInteger(index) || index < 0 || !content || content.querySelector('iframe,object,embed,canvas,video,audio')) continue;
+        const walker = document.createTreeWalker(content, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+            acceptNode(node) {
+                if (node.nodeType === Node.ELEMENT_NODE && (
+                    node.matches('script,style,template,noscript,button,input,textarea,select,[hidden],[aria-hidden="true"],.homer-message-actions,.tav-action-bar')
+                    || node.style.display === 'none' || node.style.visibility === 'hidden')) return NodeFilter.FILTER_REJECT;
+                return NodeFilter.FILTER_ACCEPT;
+            },
+        });
+        let value = '', node;
+        while ((node = walker.nextNode())) {
+            if (node.nodeType === Node.TEXT_NODE) value += node.textContent;
+            else if (node.matches('br,p,div,li,blockquote,pre,h1,h2,h3,h4,h5,h6') && value && !value.endsWith('\n')) value += '\n';
+            if (value.length >= 60_000) break;
+        }
+        result.set(index, value.slice(0, 60_000).trim());
+    }
+    return result;
+}
+
+function hostMessageSnapshot(message, index, displayTexts) {
     const swipes = Array.isArray(message?.swipes) ? message.swipes.map(item => String(item)) : [];
     const swipeIndex = Math.max(0, Math.min(Number(message?.swipe_id || 0), Math.max(0, swipes.length - 1)));
     const content = String(swipes.length ? swipes[swipeIndex] : message?.mes || '').slice(0, 60_000);
@@ -851,10 +1225,11 @@ function hostMessageSnapshot(message, index) {
         ).slice(0, 180),
         role: message?.is_user ? 'user' : 'assistant',
         content,
+        ...(displayTexts?.has(index) ? { display_text: displayTexts.get(index) } : {}),
         hidden: Boolean(message?.extra?.homer_hidden),
         collapsed: Boolean(message?.extra?.homer_collapsed),
         created_at: Number.isFinite(parsedCreatedAt) ? parsedCreatedAt : 0,
-        swipes: swipes.slice(0, 100),
+        // This is a display notification; complete swipes stay in serializeChat.
         swipe_index: swipeIndex,
     };
 }
@@ -872,40 +1247,101 @@ function hostConversationSnapshot(conversation) {
     };
 }
 
+function hostControlState() {
+    const conversation = currentConversationRecord() || launch?.conversation || {};
+    return {
+        admin_preview: Boolean(launch?.admin_preview),
+        app_id: String(launch?.app_id || '').slice(0, 160),
+        conversation_id: String(launch?.conversation_id || '').slice(0, 160),
+        title: currentRoleName(),
+        avatar: String(launch?.conversation?.app_icon || '').slice(0, 2_000),
+        conversation: hostConversationSnapshot(conversation),
+        conversations: runtimeUiData.conversations.slice(0, 100).map(hostConversationSnapshot),
+        models: runtimeUiData.models.map(publicModel),
+        model_default_id: String(runtimeUiData.modelDefaultId || '').slice(0, 160),
+        model_settings: { ...conversationModelSettings() },
+        generating: Boolean(generationBusy || rollbackBusy),
+        overlay_active: hostOverlayActive,
+        draft: String(document.querySelector('#send_textarea')?.value || '').slice(0, 10_000),
+    };
+}
+
+function cancelHostStateNotify(timer = hostStateNotifyTimer, token = hostStateNotifyToken) {
+    if (timer === null) return;
+    if (token?.idle) window.cancelIdleCallback(timer);
+    else window.clearTimeout(timer);
+}
+
 function notifyHostState(reason = 'update') {
+    const pendingTimer = hostStateNotifyTimer;
+    const pendingToken = hostStateNotifyToken;
+    tavoComposer?.refresh();
     if (!canNotifyHost() || !launch?.conversation_id) return;
+    if (conversationRecoveryBlocked || !hasCanonicalConversationScope()) return;
+    syncHostOverlayState();
     const context = getContext();
     const chat = Array.isArray(context?.chat) ? context.chat : [];
-    const conversation = currentConversationRecord() || launch?.conversation || {};
+    const displayTexts = generationBusy || rollbackBusy || isGenerating() ? null : canonicalDisplayTexts();
     notifyHost('state', {
         reason: String(reason || 'update').slice(0, 40),
         state: {
-            admin_preview: Boolean(launch?.admin_preview),
-            app_id: String(launch?.app_id || '').slice(0, 160),
-            conversation_id: String(launch?.conversation_id || '').slice(0, 160),
-            title: currentRoleName(),
-            avatar: String(launch?.conversation?.app_icon || '').slice(0, 2_000),
-            conversation: hostConversationSnapshot(conversation),
-            conversations: runtimeUiData.conversations.slice(0, 100).map(hostConversationSnapshot),
+            ...hostControlState(),
             messages: chat
-                .filter(message => !message?.is_system || message?.extra?.homer_hidden)
+                .map((message, index) => ({ message, index }))
+                .filter(({ message }) => !message?.is_system || message?.extra?.homer_hidden)
                 .slice(-120)
-                .map(hostMessageSnapshot),
-            models: runtimeUiData.models.map(publicModel),
-            model_default_id: String(runtimeUiData.modelDefaultId || '').slice(0, 160),
-            model_settings: { ...conversationModelSettings() },
-            generating: Boolean(generationBusy || rollbackBusy),
+                .map(({ message, index }) => hostMessageSnapshot(message, index, displayTexts)),
         },
     });
+    // A successful immediate reply also satisfies the old scheduled snapshot.
+    // Capture before refresh/posting: reentrant edits may schedule newer work.
+    // Keep the original timer on an ineligible reply or a thrown snapshot.
+    if (pendingTimer !== null && hostStateNotifyTimer === pendingTimer && hostStateNotifyToken === pendingToken) {
+        cancelHostStateNotify(pendingTimer, pendingToken);
+        hostStateNotifyTimer = null;
+        hostStateNotifyToken = null;
+    }
 }
 
-function scheduleHostStateNotify(delay = 80, reason = 'update') {
+function scheduleHostStateNotify(delay = 80, reason = 'update', { idleDisplay = false } = {}) {
     if (!canNotifyHost()) return;
-    window.clearTimeout(hostStateNotifyTimer);
-    hostStateNotifyTimer = window.setTimeout(() => {
+    idleDisplay = idleDisplay === true && reason === 'ready' && requestedIdleHostDisplay
+        && !launch?.admin_preview && !conversationRecoveryBlocked && hasCanonicalConversationScope();
+    // Launch/switch completion promises one fresh state with its final ready
+    // (or restored-failure) ACK. Do not read all message DOM during the adapter
+    // await just to repeat that optional display snapshot at the final ACK.
+    if (reason === 'chat-loaded' && loadingLaunch) return;
+    cancelHostStateNotify();
+    const token = {};
+    if (idleDisplay) {
+        // Keep only correlation identity, never message/DOM snapshots. The
+        // optional read uses the current live DOM only after this fence holds.
+        token.owner = reconcileStorageAccount();
+        token.epoch = storageAccountEpoch;
+        token.launch = launch;
+        token.appId = String(launch?.app_id || '');
+        token.conversationId = String(launch?.conversation_id || '');
+        token.engineToken = hostBootstrapEngineToken;
+        token.documentToken = hostBootstrapDocumentToken;
+        token.idle = typeof window.requestIdleCallback === 'function'
+            && typeof window.cancelIdleCallback === 'function';
+    }
+    hostStateNotifyToken = token;
+    const callback = () => {
+        if (hostStateNotifyToken !== token) return;
         hostStateNotifyTimer = null;
+        hostStateNotifyToken = null;
+        if (idleDisplay && (!token.owner || reconcileStorageAccount() !== token.owner
+            || storageAccountEpoch !== token.epoch || launch !== token.launch
+            || String(launch?.app_id || '') !== token.appId || String(launch?.conversation_id || '') !== token.conversationId
+            || launch?.admin_preview
+            || hostBootstrapEngineToken !== token.engineToken || hostBootstrapDocumentToken !== token.documentToken
+            || (token.engineToken && document.documentElement?.dataset.homerBootstrapDocument !== token.documentToken))) return;
         notifyHostState(reason);
-    }, Math.max(0, Number(delay) || 0));
+    };
+    hostStateNotifyTimer = token.idle
+        ? window.requestIdleCallback(callback, { timeout: 500 })
+        : window.setTimeout(callback, idleDisplay ? 32 : Math.max(0, Number(delay) || 0));
 }
 
 function openHostRequestedSettings(section) {
@@ -952,6 +1388,14 @@ async function receiveHostCommand(event) {
     if (!message || message.channel !== HOST_CHANNEL || message.version !== 1) {
         return;
     }
+    if (message.type === 'prepare-conversation') {
+        prepareColdConversation(message);
+        return;
+    }
+    if (message.type === 'prepare-history-conversations') {
+        prepareColdHistoryConversations(message);
+        return;
+    }
     if (['prepare-admin-preview', 'bind-admin-preview'].includes(message.type)) {
         const appId = String(message.app_id || '').trim().slice(0, 160);
         if (!appId) return;
@@ -968,6 +1412,14 @@ async function receiveHostCommand(event) {
             performance.mark('homer-admin-bind-authorized');
             preparedAdminLaunch = null;
             if (isGenerating() || generationBusy || rollbackBusy) throw new Error('请先停止当前生成，再切换角色');
+            notifyHost('conversation-switching', {
+                admin_preview: true,
+                app_id: String(next?.launch?.app_id || appId),
+                conversation_id: String(next?.launch?.conversation_id || ''),
+                from_app_id: String(launch?.app_id || ''),
+                from_conversation_id: String(launch?.conversation_id || ''),
+                role_name: String(next?.launch?.card?.data?.name || next?.launch?.card?.name || '角色对话'),
+            });
             await flushExtensionSettingsPersist();
             await syncCloudChat();
             performance.mark('homer-admin-bind-flushed');
@@ -975,6 +1427,7 @@ async function receiveHostCommand(event) {
             window.clearTimeout(syncTimer);
             window.clearTimeout(sessionPrefetchTimer);
             sessionPrefetchCache.clear();
+            sessionPrefetchPeer = null;
             requestedAppId = appId; requestedConversationId = '';
             adminConversationDraft = {}; adminConversationConfig = null; runtimeVariables = {};
             lastGenerationDiagnostic = null; generationSnapshot = null;
@@ -995,6 +1448,7 @@ async function receiveHostCommand(event) {
         performance.mark('homer-bind-received');
         requestedAppId = appId;
         requestedConversationId = conversationId;
+        boundBootstrapToken = normalizeBootstrapToken(message.bootstrap_token);
         if (coreAvailable) {
             bridgeStartScheduled = true;
             void startHomerBridge();
@@ -1025,10 +1479,11 @@ async function receiveHostCommand(event) {
         await switchConversation({
             id: String(message.conversation_id || ''),
             app_id: String(message.app_id || ''),
-        });
+        }, normalizeBootstrapToken(message.bootstrap_token));
         return;
     }
     if (message.type === 'message-action') {
+        assertCanonicalConversationScope();
         const context = getContext();
         const messageId = String(message.message_id || '');
         const index = context.chat.findIndex(item => stableHomerMessageId(item) === messageId
@@ -1036,6 +1491,25 @@ async function receiveHostCommand(event) {
         const target = index >= 0 ? messageMenuTargetForIndex(index) : null;
         if (target) await handleMessageMenuAction(String(message.action || ''), target);
         else showHostNotice('消息尚未同步完成，请稍后重新长按操作', 'warning');
+        return;
+    }
+    if (message.type === 'host-insets') {
+        setTavoHostInsets({ top: message.top, bottom: message.bottom });
+        return;
+    }
+    if (message.type === 'refresh-appearance') {
+        chatAppearance?.refresh();
+        refreshTavoUi();
+        return;
+    }
+    if (message.type === 'stop') {
+        getContext().stopGeneration();
+        scheduleHostStateNotify(0, 'stop-requested');
+        return;
+    }
+    if (message.type === 'composer-text') {
+        setComposerDraft(String(message.content || ''));
+        tavoComposer?.refresh();
         return;
     }
     if (message.type !== 'draft') return;
@@ -1047,6 +1521,7 @@ async function receiveHostCommand(event) {
     composer.dispatchEvent(new Event('input', { bubbles: true }));
     if (message.submit === true) {
         requestAnimationFrame(() => {
+            if (conversationRecoveryBlocked || loadingLaunch || !hasCanonicalConversationScope()) return;
             const sendButton = document.querySelector('#send_but');
             if (sendButton instanceof HTMLElement && !sendButton.matches(':disabled')) {
                 sendButton.click();
@@ -1236,9 +1711,16 @@ function beginSharedPrewarm() {
         return prewarmBootstrapPromise;
     }
     performance.mark('homer-prewarm-start');
-    // This is deliberately limited to the administrator-approved extension
-    // registry.  It does not fetch a launch, conversation, card, world book,
-    // cloud messages, or any other account-scoped state.
+    preloadStaticDialogueUi();
+    // Activate the fixed empty presentation in this host-owned document, not
+    // merely its downloaded bytes. The ordinary installer shares this promise;
+    // neither core-ready nor extension readiness waits for this optional work.
+    // Do not mount the conversation composer or construct account/card UI here.
+    if (canNotifyHost() && hostBootstrapEngineToken && !requestedAppId && !launch && !bridgeStartScheduled) {
+        void prepareTavoConversationUi().catch(() => {});
+    }
+    // The established approved-extension registry is independent of the empty
+    // presentation. No launch, card, world book or cloud messages are requested.
     prewarmBootstrapPromise = ensureAdministratorExtensions().then(result => {
         performance.mark('homer-prewarm-shared-ready');
         return result;
@@ -1246,10 +1728,68 @@ function beginSharedPrewarm() {
     return prewarmBootstrapPromise;
 }
 
-async function fetchSession(appId = '', conversationId = '', adminPreview = false) {
+async function preferLocalSession(payload, appId, conversationId, fence) {
+    const userId = String(payload?.user?.id || payload?.user?.user_id || '');
+    if (!payload?.launch || !userId || userId !== reconcileStorageAccount()) throw new Error('会话账号已切换，请重新进入');
+    const epoch = storageAccountEpoch;
+    const scope = JSON.stringify([userId, String(payload.launch.app_id), String(payload.launch.conversation_id)]);
+    if (appId && String(payload.launch.app_id) !== String(appId)) throw new Error('会话角色信息不一致');
+    if (conversationId && String(payload.launch.conversation_id) !== String(conversationId)) throw new Error('会话存档信息不一致');
+    acknowledgedPromptTickets.delete(payload.launch);
+    const ticket = sessionReadFences.get(payload);
+    const local = await chatOutbox.read(scope, 'chat', fence);
+    if (userId !== reconcileStorageAccount() || epoch !== storageAccountEpoch) throw new Error('会话账号已切换，请重新进入');
+    if (!local && ticket && (ticket.stamp !== storageAckStamps.get(storageAckKey(scope))
+        || ticket.version !== ticket.stamp?.version)) {
+        // A very large acknowledged row may have been evicted by the byte
+        // budget during this GET. Refetch instead of accepting its older body.
+        const error = new Error('云端存档已更新，正在重新读取');
+        error.code = 'HOMER_STALE_STORAGE_READ';
+        throw error;
+    }
+    if (!local?.preferred) {
+        // Fresh cloud messages/order remain authoritative. Retain only a
+        // versioned, fully ACKed per-swipe Prompt Template tuple whose exact
+        // canonical source also matches both that ACK and the fresh response.
+        if (local && !local.pending && local.kind === 'chat' && local.owner === userId && local.scope === scope
+            && Number.isSafeInteger(local.revision) && local.revision > 0 && local.ackRevision === local.revision
+            && local.payload?.app_id === String(payload.launch.app_id)
+            && local.payload?.conversation_id === String(payload.launch.conversation_id)) {
+            const states = prepareAcknowledgedPromptStates(payload.launch.messages, local.payload.messages, local.ackPayload?.messages);
+            if (states.some(Boolean)) acknowledgedPromptTickets.set(payload.launch, { owner: userId, epoch, scope, states });
+        }
+        return payload;
+    }
+    const messages = cloneJsonValue(local.payload.messages);
+    if (local.ackRevision === local.revision && Array.isArray(local.ackPayload?.messages)) {
+        local.ackPayload.messages.forEach((saved, index) => {
+            if (!messages[index]) return;
+            messages[index].extra = { ...(messages[index].extra || {}),
+                homer_message_id: String(saved.id || ''), homer_sync_id: String(saved.id || messages[index].extra?.homer_sync_id || ''),
+                homer_created_at: Number(saved.created_at || messages[index].extra?.homer_created_at || Date.now()),
+            };
+        });
+    }
+    // Retain complete canonical messages (including hidden/swipe/extension
+    // metadata), not the clipped plain-text first-screen preview.
+    payload.launch.local_chat = messages;
+    payload.launch.local_pending = local.pending;
+    payload.launch.messages = messages.map(message => ({
+        id: String(message.extra?.homer_message_id || message.extra?.homer_sync_id || ''),
+        role: message.is_system && !message.extra?.homer_hidden ? 'system' : message.is_user ? 'user' : 'assistant',
+        content: String(message.mes || ''), created_at: Number(message.extra?.homer_created_at || Date.now()),
+        swipes: message.swipes || [], swipe_index: Number(message.swipe_id || 0),
+    }));
+    return payload;
+}
+
+async function fetchSession(appId = '', conversationId = '', adminPreview = false, storageRetry = 0, { deferLocalMerge = false } = {}) {
+    const owner = reconcileStorageAccount();
+    const requestEpoch = storageAccountEpoch;
     if (adminPreview) {
         const preview = await requestJson(`/api/homer/admin-preview?app_id=${encodeURIComponent(appId)}`);
         if (!preview?.user?.is_admin || !preview?.launch?.admin_preview || !preview.launch.bridge_token) throw new Error('管理员试聊不可用，请检查服务端版本与权限');
+        acceptVerifiedSessionOwner(preview, owner, requestEpoch);
         return preview;
     }
     const params = new URLSearchParams();
@@ -1267,27 +1807,182 @@ async function fetchSession(appId = '', conversationId = '', adminPreview = fals
     // string works on every engine.
     const query = params.toString();
     const suffix = query ? `?${query}` : '';
+    const readScope = owner && appId && conversationId ? JSON.stringify([owner, String(appId), String(conversationId)]) : '';
+    const stamp = readScope ? storageAckStamp(readScope) : null;
+    const version = stamp?.version;
+    const fence = owner && appId && conversationId
+        ? await chatOutbox.fence(JSON.stringify([owner, String(appId), String(conversationId)])) : null;
+    let embedded;
     try {
-        const embedded = await requestJson(`/api/homer/session${suffix}`);
-        if (embedded?.launch?.card && embedded.launch.bridge_token) return embedded;
+        embedded = await requestSessionCard(`/api/homer/session${suffix}`, {
+            owner, appId, conversationId, request: requestJson,
+            validate: payload => acceptVerifiedSessionOwner(payload, owner, requestEpoch),
+            isCurrent: () => storageAccountEpoch === requestEpoch
+                && (!owner || reconcileStorageAccount() === owner),
+        });
     } catch (error) {
         // 嵌入式端点失败是预期路径之一，下面还有站点侧回退，这里只记日志。
         console.debug(`${MODULE_ID}: embedded session endpoint unavailable, falling back`, error);
     }
-    // LAN/mobile proxies can route the embedded namespace before the Homer
-    // backend route is ready. Fall back to the site-owned session endpoint,
-    // which carries the same authorization and launch payload.
-    // launch_only reserves an ID; it intentionally omits card, messages and
-    // bridge credentials. A running conversation always needs the full payload.
+    const finalize = async payload => {
+        acceptVerifiedSessionOwner(payload, owner, requestEpoch);
+        if (appId && String(payload?.launch?.app_id) !== String(appId)) throw new Error('会话角色信息不一致');
+        if (conversationId && String(payload?.launch?.conversation_id) !== String(conversationId)) throw new Error('会话存档信息不一致');
+        const payloadScope = JSON.stringify([String(payload?.user?.id || payload?.user?.user_id || ''), String(payload?.launch?.app_id), String(payload?.launch?.conversation_id)]);
+        const payloadStamp = stamp || storageAckStamp(payloadScope);
+        sessionReadFences.set(payload, { fence, stamp: payloadStamp, version: stamp ? version : payloadStamp.version,
+            raw: deferLocalMerge === true, owner: reconcileStorageAccount(), epoch: storageAccountEpoch, scope: payloadScope });
+        // Read-only peer preparation retains the unprojected cloud response.
+        // Its original GET fence is checked against a fresh local read once at
+        // consumption, not by parsing/merging the same large row twice.
+        if (deferLocalMerge === true) return payload;
+        try { return await preferLocalSession(payload, appId, conversationId, fence); }
+        catch (error) {
+            if (error.code === 'HOMER_STALE_STORAGE_READ' && storageRetry < 1) return fetchSession(appId, conversationId, false, storageRetry + 1);
+            throw error;
+        }
+    };
+    if (embedded?.launch?.card && embedded.launch.bridge_token) return finalize(embedded);
+    // Only use the site fallback when the embedded endpoint really failed or
+    // omitted its launch. Never fetch a second complete large card on success.
     const fallback = await requestJson(`/console/api/web/dialogue/session${suffix}`);
-    if (!fallback?.launch?.card || !fallback.launch.bridge_token) {
-        throw new Error('会话数据不完整，请重试连接');
-    }
-    return fallback;
+    if (!fallback?.launch?.card || !fallback.launch.bridge_token) throw new Error('会话数据不完整，请重试连接');
+    return finalize(fallback);
 }
 
 function sessionCacheKey(appId = '', conversationId = '') {
     return `${String(appId).trim()}::${String(conversationId).trim()}`;
+}
+
+// An explicit user target wins for the lifetime of this empty engine, even
+// before bind/core-ready. Rejected messages must never set this latch.
+let coldHistoryPreparationSelected = false;
+
+function discardColdCharacterPreparation(entry) {
+    if (entry?.characterPreparation) entry.characterPreparation.cancelled = true;
+}
+
+function prepareColdCharacterRead(appId, conversationId, expiresAt = undefined) {
+    const key = sessionCacheKey(appId, conversationId), entry = sessionPrefetchCache.get(key);
+    const owner = reconcileStorageAccount(), epoch = storageAccountEpoch;
+    const scope = JSON.stringify([owner, String(appId), String(conversationId)]);
+    if (!owner || !entry?.promise || entry.expiresAt <= Date.now()) return null;
+    const retained = entry.characterPreparation;
+    if (retained?.scope === scope && retained.owner === owner && retained.epoch === epoch
+        && !retained.cancelled && retained.expiresAt > Date.now()) {
+        if (Number.isFinite(expiresAt)) retained.expiresAt = Math.min(retained.expiresAt, expiresAt);
+        return retained;
+    }
+    discardColdCharacterPreparation(entry);
+    const safeKey = String(appId).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80) || 'character';
+    const preparation = { owner, epoch, scope, appId: String(appId), conversationId: String(conversationId),
+        avatar: `homer-${safeKey}.png`, expiresAt: Number.isFinite(expiresAt) ? Math.min(entry.expiresAt, expiresAt) : entry.expiresAt,
+        cancelled: false, claimed: false, payload: null, read: null };
+    const isCurrent = () => !preparation.cancelled && preparation.expiresAt > Date.now()
+        && reconcileStorageAccount() === owner && storageAccountEpoch === epoch
+        && !adminPreviewRequested && !adminBinding
+        && (!requestedAppId || (String(requestedAppId) === preparation.appId
+            && String(requestedConversationId) === preparation.conversationId))
+        && (!preparation.claimed || (session === preparation.targetSession && launch === preparation.targetLaunch));
+    preparation.isCurrent = isCurrent;
+    preparation.headerScope = JSON.stringify([owner, epoch, String(appId), String(conversationId)]);
+    preparation.headerStamp = storageAckStamp(scope);
+    preparation.headerVersion = preparation.headerStamp.version;
+    const headerCurrent = () => isCurrent() && preparation.headerStamp === storageAckStamp(scope)
+        && preparation.headerVersion === preparation.headerStamp.version;
+    // This API refuses unknown/old servers, active/saving targets and invalid
+    // scopes. The ticket contains only an existing mirror header, not prompts.
+    try { preparation.headerRead = prepareCharacterChatMirrorRead(preparation.avatar,
+        `Homer-${String(conversationId).replace(/[^a-zA-Z0-9_-]/g, '')}`, {
+            owner, scope: preparation.headerScope, expiresAt: preparation.expiresAt, isCurrent: headerCurrent,
+        }); } catch { /* Optional; the actual selected read remains authoritative. */ }
+    // This endpoint authenticates the current account and reads only its
+    // existing mirror. Prepare beside the session, without publishing it; the
+    // separately authenticated session and original save/read fence must still
+    // settle before this exact payload can receive a one-use handoff.
+    try { preparation.read = prepareCharacterRead(preparation.avatar, { cacheOwner: owner, isCurrent }); }
+    catch { /* Optional preparation cannot fail an ordinary selected read. */ }
+    preparation.pending = entry.promise.then(async payload => {
+        const fence = sessionReadFences.get(payload);
+        if (!isCurrent() || sessionPrefetchCache.get(key) !== entry
+            || fence?.raw !== true || fence.owner !== owner || fence.epoch !== epoch || fence.scope !== scope
+            || String(payload?.user?.id || payload?.user?.user_id || '') !== owner
+            || String(payload?.launch?.app_id || '') !== preparation.appId
+            || String(payload?.launch?.conversation_id || '') !== preparation.conversationId
+            || !payload?.launch?.card || !payload.launch.bridge_token || payload.launch.admin_preview) return null;
+        preparation.payload = payload;
+        return preparation.read ? await preparation.read.pending : null;
+    }).then(value => ({ value }), error => ({ error }));
+    // Only the existing two retained session/resource peers own this holder.
+    // Its current check deliberately survives takePrefetchedSession's deletion
+    // so an authenticated, same-payload one-use handoff remains valid.
+    entry.characterPreparation = preparation;
+    return preparation;
+}
+
+function prepareColdConversation(message) {
+    if (!prewarmOnly || adminPreviewRequested || bridgeStartScheduled || requestedAppId || launch
+        || !hostBootstrapEngineToken || message.engine_token !== hostBootstrapEngineToken
+        || message.document_token !== hostBootstrapDocumentToken) return;
+    const owner = reconcileStorageAccount();
+    const appId = String(message.app_id || '').trim();
+    const conversationId = String(message.conversation_id || '').trim();
+    if (!owner || message.owner !== owner || !appId || !conversationId || appId.length > 160 || conversationId.length > 160) return;
+    coldHistoryPreparationSelected = true;
+    // One selected target only. Evicted in-flight requests cannot publish into
+    // a live chat; consumption retains the existing account/outbox read fences.
+    const key = sessionCacheKey(appId, conversationId);
+    for (const retained of sessionPrefetchCache.keys()) if (retained !== key) {
+        discardColdCharacterPreparation(sessionPrefetchCache.get(retained));
+        sessionPrefetchCache.delete(retained);
+    }
+    void prefetchSession(appId, conversationId).catch(() => {});
+    prepareColdCharacterRead(appId, conversationId);
+    prepareConversationResources(appId, conversationId);
+    performance.mark('homer-cold-target-read-start');
+}
+
+function prepareColdHistoryConversations(message) {
+    if (!prewarmOnly || adminPreviewRequested || adminBinding || bridgeStartScheduled
+        || requestedAppId || requestedConversationId || launch || coldHistoryPreparationSelected
+        || !hostBootstrapEngineToken || message.engine_token !== hostBootstrapEngineToken
+        || message.document_token !== hostBootstrapDocumentToken) return;
+    const now = Date.now();
+    if (!Number.isFinite(message.expires_at) || message.expires_at <= now
+        || message.expires_at > now + SESSION_CACHE_TTL_MS
+        || !Array.isArray(message.targets) || !message.targets.length
+        || message.targets.length > SESSION_PREFETCH_LIMIT) return;
+    const owner = reconcileStorageAccount(), epoch = storageAccountEpoch;
+    if (!owner || message.owner !== owner) return;
+    const targets = new Map();
+    // Validate the entire batch before pruning or issuing any private request.
+    // IDs originate in the host's fresh authorized list, not a cached preview;
+    // fetchSession still performs the actual per-conversation authorization.
+    for (const target of message.targets) {
+        if (!target || typeof target !== 'object' || Array.isArray(target)
+            || typeof target.app_id !== 'string' || typeof target.conversation_id !== 'string') return;
+        const appId = target.app_id.trim(), conversationId = target.conversation_id.trim();
+        if (!appId || !conversationId || appId.length > 160 || conversationId.length > 160) return;
+        const key = sessionCacheKey(appId, conversationId), previous = targets.get(key);
+        // The legacy cache-key separator must not merge distinct scoped pairs.
+        if (previous && (previous.appId !== appId || previous.conversationId !== conversationId)) return;
+        targets.set(key, { appId, conversationId });
+    }
+    if (reconcileStorageAccount() !== owner || storageAccountEpoch !== epoch
+        || Date.now() >= message.expires_at) return;
+    // One atomic bounded retention decision: calling the single-target helper
+    // twice would evict the first peer and defeat the shared one-use promises.
+    for (const retained of sessionPrefetchCache.keys()) if (!targets.has(retained)) {
+        discardColdCharacterPreparation(sessionPrefetchCache.get(retained));
+        sessionPrefetchCache.delete(retained);
+    }
+    for (const { appId, conversationId } of targets.values()) {
+        if (reconcileStorageAccount() !== owner || storageAccountEpoch !== epoch || coldHistoryPreparationSelected) return;
+        void prefetchSession(appId, conversationId).catch(() => {});
+        prepareColdCharacterRead(appId, conversationId, message.expires_at);
+        prepareConversationResources(appId, conversationId);
+    }
+    performance.mark('homer-cold-history-read-start');
 }
 
 function invalidateCachedSession(appId = '', conversationId = '') {
@@ -1304,8 +1999,8 @@ function prefetchSession(appId = '', conversationId = '') {
         return cached.promise;
     }
     sessionPrefetchCache.delete(key);
-    const promise = fetchSession(appId, conversationId).catch(error => {
-        sessionPrefetchCache.delete(key);
+    const promise = fetchSession(appId, conversationId, false, 0, { deferLocalMerge: true }).catch(error => {
+        if (sessionPrefetchCache.get(key)?.promise === promise) sessionPrefetchCache.delete(key);
         throw error;
     });
     sessionPrefetchCache.set(key, {
@@ -1317,29 +2012,98 @@ function prefetchSession(appId = '', conversationId = '') {
 
 async function takePrefetchedSession(appId = '', conversationId = '') {
     const key = sessionCacheKey(appId, conversationId);
+    const owner = reconcileStorageAccount();
+    const epoch = storageAccountEpoch;
     const promise = prefetchSession(appId, conversationId);
     try {
-        return await promise;
+        const payload = await promise;
+        const currentOwner = reconcileStorageAccount();
+        const ticket = sessionReadFences.get(payload);
+        if (epoch !== storageAccountEpoch || (owner && owner !== currentOwner)
+            || (ticket?.raw === true && (ticket.owner !== currentOwner || ticket.epoch !== storageAccountEpoch))) {
+            throw new Error('会话账号已切换，请重新进入');
+        }
+        const scope = JSON.stringify([currentOwner, String(appId), String(conversationId)]);
+        if (ticket?.raw !== true || ticket.scope !== scope || !payload?.launch
+            || Object.hasOwn(payload.launch, 'local_chat') || Object.hasOwn(payload.launch, 'local_pending')) {
+            // A legacy/consumed/local-projected payload is not fresh cloud
+            // input. Refetch instead of erasing fields from an already changed
+            // message list or treating it as authoritative on a later take.
+            return await fetchSession(appId, conversationId);
+        }
+        ticket.raw = false;
+        try {
+            const restored = await preferLocalSession(payload, appId, conversationId, ticket.fence);
+            // A cookie-only first read had no pre-GET owner/fence. An ACK
+            // before or during consumption can make its older cloud body look
+            // authoritative once the local row stops being pending. Refetch
+            // with the now verified owner; never invent a zero/local fence.
+            if (ticket.fence === null && (ticket.stamp !== storageAckStamps.get(storageAckKey(scope))
+                || ticket.version !== ticket.stamp?.version)) return await fetchSession(appId, conversationId);
+            return restored;
+        }
+        catch (error) {
+            if (error.code === 'HOMER_STALE_STORAGE_READ') return fetchSession(appId, conversationId);
+            throw error;
+        }
     } finally {
         // A prefetched payload contains private messages and can be large. Use
         // it once, then release it instead of keeping a second chat in memory.
-        sessionPrefetchCache.delete(key);
+        if (sessionPrefetchCache.get(key)?.promise === promise) sessionPrefetchCache.delete(key);
     }
 }
 
-function scheduleSessionPrefetch() {
+function scheduleSessionPrefetch(preferredLaunch = null) {
     window.clearTimeout(sessionPrefetchTimer);
-    sessionPrefetchTimer = window.setTimeout(() => {
-        const currentId = String(launch?.conversation_id || '');
-        const candidates = runtimeUiData.conversations
-            .filter(item => String(item?.id || item?.conversation_id || '') !== currentId)
-            .slice(0, SESSION_PREFETCH_LIMIT);
-        for (const item of candidates) {
+    sessionPrefetchTimer = null;
+    const owner = reconcileStorageAccount();
+    const epoch = storageAccountEpoch;
+    const currentKey = sessionCacheKey(launch?.app_id, launch?.conversation_id);
+    if (!owner || !launch?.app_id || !launch?.conversation_id || launch.admin_preview) {
+        sessionPrefetchPeer = null;
+        return;
+    }
+    if (preferredLaunch) {
+        const appId = String(preferredLaunch.app_id || '').trim();
+        const conversationId = String(preferredLaunch.conversation_id || '').trim();
+        sessionPrefetchPeer = appId && conversationId && !preferredLaunch.admin_preview
+            && sessionCacheKey(appId, conversationId) !== currentKey
+            ? { owner, epoch, currentKey, appId, conversationId } : null;
+    }
+    const timer = window.setTimeout(() => {
+        // A superseded timer or an account/scope change cannot start an old
+        // scope's private read, even if the callback was already queued.
+        if (sessionPrefetchTimer !== timer) return;
+        sessionPrefetchTimer = null;
+        if (reconcileStorageAccount() !== owner || storageAccountEpoch !== epoch
+            || launch?.admin_preview || sessionCacheKey(launch?.app_id, launch?.conversation_id) !== currentKey) return;
+        // Foreground hydration owns the critical path. Remember the preferred
+        // peer above, but do not start/prune speculative reads while a switch
+        // is in progress. The successful ready-tail reschedules after finally.
+        if (loadingLaunch) return;
+        const peer = sessionPrefetchPeer;
+        const preferred = peer?.owner === owner && peer.epoch === epoch && peer.currentKey === currentKey
+            ? [{ app_id: peer.appId, conversation_id: peer.conversationId }] : [];
+        const candidates = [], keys = new Set();
+        for (const item of [...preferred, ...runtimeUiData.conversations]) {
             const appId = String(item?.app_id || '').trim();
             const conversationId = String(item?.id || item?.conversation_id || '').trim();
-            void prefetchSession(appId, conversationId).catch(() => {});
+            const key = sessionCacheKey(appId, conversationId);
+            if (!appId || !conversationId || key === currentKey || keys.has(key)) continue;
+            candidates.push({ appId, conversationId }); keys.add(key);
+            if (candidates.length >= SESSION_PREFETCH_LIMIT) break;
         }
-    }, 650);
+        // Retain at most the two chosen peers, not an accumulating copy of
+        // every visited card. In-flight reads remain authenticated and fenced.
+        for (const key of sessionPrefetchCache.keys()) if (!keys.has(key)) sessionPrefetchCache.delete(key);
+        for (const { appId, conversationId } of candidates) {
+            void prefetchSession(appId, conversationId).catch(() => {});
+            // Prepare the same bounded peers' settings as well as their card.
+            // Only read bytes here: no SETTINGS/CHAT events or card scripts.
+            prepareConversationResources(appId, conversationId);
+        }
+    }, 0);
+    sessionPrefetchTimer = timer;
 }
 
 function setAccessClasses(user) {
@@ -1378,12 +2142,21 @@ function applyConnectionConfiguration() {
     const modelId = modelSettings.model_id || 'homer-cloud';
     activateModelScope(JSON.stringify([session?.user?.id || session?.user?.user_id, Boolean(launch.admin_preview), launch.app_id, launch.conversation_id || 'preview']), modelId);
 
-    if (getContext().mainApi === 'openai' && oai_settings.chat_completion_source === 'custom'
+    const sameConnectionConfiguration = getContext().mainApi === 'openai' && oai_settings.chat_completion_source === 'custom'
         && oai_settings.custom_url === apiBase && oai_settings.custom_model === modelId
-        && oai_settings.custom_include_headers === includeHeaders
         && oai_settings.temp_openai === modelSettings.temperature && oai_settings.top_p_openai === modelSettings.top_p
-        && oai_settings.freq_pen_openai === modelSettings.frequency_penalty && oai_settings.pres_pen_openai === modelSettings.presence_penalty) {
+        && oai_settings.freq_pen_openai === modelSettings.frequency_penalty && oai_settings.pres_pen_openai === modelSettings.presence_penalty;
+    if (sameConnectionConfiguration && oai_settings.custom_include_headers === includeHeaders) {
         enforceStreamingConfiguration(); setOnlineStatus(modelId); return;
+    }
+    if (sameConnectionConfiguration && oai_settings.bypass_status_check === true && oai_settings.stream_openai === true) {
+        // A fresh session token is live authorization, not a changed persistent
+        // provider configuration. Install it now without serializing/saving all
+        // native settings or rewriting unrelated model controls on every switch.
+        oai_settings.custom_include_headers = includeHeaders;
+        $('#custom_include_headers').val(includeHeaders);
+        reaffirmConversationConnection();
+        return;
     }
 
     // A new bridge token is not an API/provider change. Re-running these UI
@@ -1462,19 +2235,9 @@ function installTokenRefresh() {
     tokenRefreshTimer = window.setInterval(refreshBridgeToken, Math.max(60, ttl - 120) * 1000);
 }
 
-function cardFingerprint(card) {
-    const text = JSON.stringify(card || {});
-    let hash = 2166136261;
-    for (let index = 0; index < text.length; index += 1) {
-        hash ^= text.charCodeAt(index);
-        hash = Math.imul(hash, 16777619);
-    }
-    return `v2-${(hash >>> 0).toString(16).padStart(8, '0')}-${text.length}`;
-}
-
-function cloneCardWithMarker(card) {
-    const copy = JSON.parse(JSON.stringify(card || {}));
-    const cardSignature = cardFingerprint(copy);
+function cloneCardWithMarker(prepared) {
+    const copy = JSON.parse(prepared.json);
+    const cardSignature = prepared.signature;
     copy.spec = copy.spec || 'chara_card_v2';
     copy.spec_version = copy.spec_version || '2.0';
     copy.data = copy.data && typeof copy.data === 'object' ? copy.data : {};
@@ -1593,14 +2356,14 @@ async function ensureEmbeddedWorldInfo(characterId, character) {
         await updateWorldInfoList();
     }
     if (!world_names.includes(bookName)) {
-        // SillyTavern's official importer reads the target character id from
-        // this control. Homer selects cards programmatically, so populate the
-        // same state the native character panel normally supplies.
-        $('#import_character_info').data('chid', characterId);
-        await importEmbeddedWorldInfo(true);
-    } else if (String(character?.data?.extensions?.world || '') !== bookName) {
-        // Preserve an existing (possibly user-edited) book and only link it.
-        $('#character_world').val(bookName).trigger('change');
+        await saveWorldInfo(bookName, convertCharacterBook(embeddedBook), true);
+        await updateWorldInfoList();
+    }
+    if (String(character?.data?.extensions?.world || '') !== bookName) {
+        // Normal chat has no character-edit form. Triggering that control's
+        // change event would save the previous card's stale hidden fields.
+        // Preserve an existing user-edited book; bind only the extension field.
+        await writeExtensionField(characterId, 'world', bookName);
     }
 }
 
@@ -1708,7 +2471,7 @@ async function selectLaunchCharacter(context, characterId, options = {}) {
     throw new Error('当前角色会话仍在保存，请稍后重试');
 }
 
-async function openLaunchCharacterChat(characterId, { reuseActiveCharacter = false } = {}) {
+async function openLaunchCharacterChat(characterId, { reuseActiveCharacter = false, preparedHeader = null } = {}) {
     pendingCardScriptCharacter = null;
     const context = getContext();
     const localChatName = `Homer-${String(launch.conversation_id).replace(/[^a-zA-Z0-9_-]/g, '')}`;
@@ -1721,31 +2484,26 @@ async function openLaunchCharacterChat(characterId, { reuseActiveCharacter = fal
         // cloud payload replaces its messages immediately afterwards.
         installCsrfAjaxBridge();
         if (typeof context.bindCharacterChatWithoutLoad === 'function') {
-            await context.bindCharacterChatWithoutLoad(localChatName, { ephemeral: Boolean(launch.admin_preview) });
+            await context.bindCharacterChatWithoutLoad(localChatName, { ephemeral: Boolean(launch.admin_preview), preparedHeader });
         } else {
             await context.openCharacterChat(localChatName, { persistCharacter: false });
         }
         setOnlineStatus(conversationModelSettings().model_id || 'homer-cloud');
         return;
     }
-    // Establish the active character without loading its previous local ST chat.
-    // The product opens the cloud-bound mirror below, so loading both chats adds
-    // a redundant message render, sprite scan and CHAT_CHANGED lifecycle.
-    await selectLaunchCharacter(context, characterId, { switchMenu: false, skipChatLoad: true });
-    performance.mark('homer-card-selected');
-    // A same-character selection unshallows the card and binds the edit form.
-    await context.selectCharacterById(characterId, {
-        switchMenu: false,
-        persistSelection: false,
+    // Activate canonical chat state directly, not the hidden creation/editor
+    // controls. Keep mirror integrity and itemized prompt storage validation.
+    await activateCharacterForChat(characterId, {
+        chatName: localChatName,
+        ephemeral: Boolean(launch.admin_preview),
+        preparedHeader,
     });
-    performance.mark('homer-card-form-bound');
-    await waitForStableCharacterForm();
-    performance.mark('homer-card-form-stable');
-    character = context.characters?.[characterId];
+    performance.mark('homer-card-selected');
+    character = getContext().characters?.[characterId];
+    enableEmbeddedCardCapabilities(character);
     await ensureEmbeddedWorldInfo(characterId, character);
     performance.mark('homer-card-world-ready');
     installCsrfAjaxBridge();
-    await context.bindCharacterChatWithoutLoad(localChatName, { ephemeral: Boolean(launch.admin_preview) });
     performance.mark('homer-card-mirror-ready');
     // The cloud payload is authoritative. Do not read, render and save a
     // provisional local greeting before replacing it with the cloud messages.
@@ -1828,12 +2586,25 @@ function generationNeedsRecovery(snapshot, currentChat) {
 }
 
 async function syncLaunchCharacterAvatar(character, force = false) {
+    const capturedLaunch = launch;
+    const owner = reconcileStorageAccount();
+    const epoch = storageAccountEpoch;
+    const appId = String(capturedLaunch?.app_id || '');
+    const signature = String(character?.data?.extensions?.homer_bridge?.card_signature || '');
     const coverUrl = getManagedCoverUrl();
     const avatar = String(character?.avatar || '').trim();
-    if (!coverUrl || !avatar) {
+    if (!coverUrl || !avatar || !owner || !appId || !signature) {
         return false;
     }
-    const markerKey = `homer-avatar-sync:${String(launch.app_id || '')}`;
+    const isSameRevision = () => {
+        if (reconcileStorageAccount() !== owner || storageAccountEpoch !== epoch) return false;
+        const current = getContext().characters?.find(item => String(item?.avatar || '') === avatar
+            && String(item?.data?.extensions?.homer_bridge?.app_id || '') === appId);
+        return String(current?.data?.extensions?.homer_bridge?.card_signature || '') === signature;
+    };
+    const isCurrent = () => isSameRevision() && String(launch?.app_id || '') === appId;
+    if (!isSameRevision()) return false;
+    const markerKey = `homer-avatar-sync:${appId}`;
     if (!force && accountStorage.getItem(markerKey) === coverUrl) {
         return false;
     }
@@ -1859,6 +2630,10 @@ async function syncLaunchCharacterAvatar(character, force = false) {
         return false;
     }
 
+    // A handoff may leave this card in the retained catalog. Finish its exact
+    // captured file upload there; never read a later launch for the target or
+    // mark/upload after a revision, logout or same-owner relogin.
+    if (!isSameRevision()) return false;
     const formData = new FormData();
     formData.append('avatar', new File([coverBlob], 'avatar.png', {
         type: coverBlob.type || 'image/png',
@@ -1874,23 +2649,24 @@ async function syncLaunchCharacterAvatar(character, force = false) {
         console.warn(`${MODULE_ID}: avatar upload skipped (HTTP ${uploadResponse.status})`);
         return false;
     }
+    if (!isSameRevision()) return false;
     accountStorage.setItem(markerKey, coverUrl);
 
-    // Make both the character list and already-rendered message avatars observe
-    // the new pixels immediately, while leaving the card metadata untouched.
-    const cacheBuster = `homer_cover=${Date.now()}`;
-    for (const image of document.querySelectorAll('img')) {
-        if (!(image instanceof HTMLImageElement)) {
-            continue;
-        }
-        const src = String(image.getAttribute('src') || '');
-        if (!src.includes(encodeURIComponent(avatar)) && !src.includes(avatar)) {
-            continue;
-        }
-        const separator = src.includes('?') ? '&' : '?';
-        image.src = `${src}${separator}${cacheBuster}`;
-    }
+    refreshSettledAvatarImages([...document.querySelectorAll('img')].filter(image => image instanceof HTMLImageElement), {
+        avatar, stamp: Date.now(), baseUrl: window.location.href, isCurrent,
+    });
     return true;
+}
+
+function reaffirmSelectedCardCapabilities() {
+    const context = getContext();
+    const character = context.characters?.[context.characterId];
+    const selectedApp = character?.data?.extensions?.homer_bridge?.app_id;
+    // APP_READY can replay an overlay captured BEFORE this card was selected.
+    // Restore only the already-authorized active card's derived capabilities;
+    // never trust a stale/previous card merely because it is in the catalog.
+    if (!launch?.app_id || String(selectedApp ?? '') !== String(launch.app_id)) return;
+    enableEmbeddedCardCapabilities(character);
 }
 
 async function importLaunchCardJson(card, preservedName) {
@@ -1915,29 +2691,162 @@ async function importLaunchCardJson(card, preservedName) {
     return `${String(result.file_name).replace(/\.png$/i, '')}.png`;
 }
 
-async function importLaunchCharacter({ reuseActiveCharacter = false } = {}) {
+function prepareLaunchMirrorHeader(optionalPreparation = null) {
+    const owner = reconcileStorageAccount(), epoch = storageAccountEpoch;
+    const targetSession = session, targetLaunch = launch;
+    if (!owner || !targetLaunch?.card || !targetLaunch.bridge_token || targetLaunch.admin_preview
+        || adminPreviewRequested || adminBinding || !targetLaunch.app_id || !targetLaunch.conversation_id
+        || owner !== String(targetSession?.user?.id || targetSession?.user?.user_id || '')
+        || Object.hasOwn(targetLaunch, 'local_chat') || Object.hasOwn(targetLaunch, 'local_pending')) return null;
+    const appId = String(targetLaunch.app_id), conversationId = String(targetLaunch.conversation_id);
+    const sessionScope = JSON.stringify([owner, appId, conversationId]);
+    const scope = JSON.stringify([owner, epoch, appId, conversationId]);
+    const stamp = storageAckStamp(sessionScope), version = stamp.version;
+    const current = () => reconcileStorageAccount() === owner && storageAccountEpoch === epoch
+        && session === targetSession && launch === targetLaunch && !targetLaunch.admin_preview
+        && String(targetSession?.user?.id || targetSession?.user?.user_id || '') === owner
+        && String(targetLaunch.app_id) === appId && String(targetLaunch.conversation_id) === conversationId
+        && !Object.hasOwn(targetLaunch, 'local_chat') && !Object.hasOwn(targetLaunch, 'local_pending')
+        && storageAckStamp(sessionScope) === stamp && stamp.version === version;
+    const avatar = `homer-${appId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80) || 'character'}.png`;
+    if (optionalPreparation) {
+        if (!optionalPreparation.headerRead || optionalPreparation.payload !== targetSession
+            || optionalPreparation.owner !== owner || optionalPreparation.epoch !== epoch
+            || optionalPreparation.scope !== sessionScope || optionalPreparation.avatar !== avatar
+            || optionalPreparation.headerScope !== scope || optionalPreparation.headerStamp !== stamp
+            || optionalPreparation.headerVersion !== version || !optionalPreparation.isCurrent()) return null;
+        return { ticket: optionalPreparation.headerRead, owner, scope,
+            isCurrent: () => current() && optionalPreparation.isCurrent() };
+    }
+    try {
+        const ticket = prepareCharacterChatMirrorRead(avatar,
+            `Homer-${conversationId.replace(/[^a-zA-Z0-9_-]/g, '')}`, {
+                owner, scope, expiresAt: Date.now() + SESSION_CACHE_TTL_MS, isCurrent: current,
+            });
+        return ticket ? { ticket, owner, scope, isCurrent: current } : null;
+    } catch { return null; }
+}
+
+function prepareInitialCharacterRead(optionalPreparation = null) {
+    const targetOwner = reconcileStorageAccount(), targetEpoch = storageAccountEpoch;
+    const targetLaunch = launch, targetSession = session;
+    // Only an authenticated explicit initial selection is eligible. Empty
+    // engine prewarm, existing characters and administrator previews stay out.
+    if (!targetOwner || !targetLaunch?.card || targetLaunch.admin_preview
+        || !targetLaunch.app_id || !targetLaunch.conversation_id
+        || targetOwner !== String(targetSession?.user?.id || targetSession?.user?.user_id || '')) return null;
+    const safeKey = String(targetLaunch.app_id || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80) || 'character';
+    const avatar = `homer-${safeKey}.png`;
+    if (getContext().characters.some(item => item?.avatar === avatar
+        || String(item?.data?.extensions?.homer_bridge?.app_id || '') === String(targetLaunch.app_id))) return null;
+    // A local merge/refetch may return a different payload. Never attach an
+    // earlier peer's mirror read to it merely because the IDs still match.
+    if (optionalPreparation && !optionalPreparation.claimed && optionalPreparation.read
+        && optionalPreparation.payload === targetSession && optionalPreparation.owner === targetOwner
+        && optionalPreparation.epoch === targetEpoch && optionalPreparation.avatar === avatar
+        && optionalPreparation.scope === JSON.stringify([targetOwner, String(targetLaunch.app_id), String(targetLaunch.conversation_id)])
+        && optionalPreparation.isCurrent()) {
+        return { owner: targetOwner, epoch: targetEpoch, targetLaunch, targetSession, avatar,
+            read: optionalPreparation.read, optionalPreparation };
+    }
+    const isCurrent = () => reconcileStorageAccount() === targetOwner && storageAccountEpoch === targetEpoch
+        && launch === targetLaunch && session === targetSession
+        && targetOwner === String(session?.user?.id || session?.user?.user_id || '');
+    return { owner: targetOwner, epoch: targetEpoch, targetLaunch, targetSession, avatar,
+        read: prepareCharacterRead(avatar, { cacheOwner: targetOwner, isCurrent }) };
+}
+
+async function importLaunchCharacter({ reuseActiveCharacter = false, initialRead = null, preparedHeader = null } = {}) {
+    const targetOwner = reconcileStorageAccount(), targetEpoch = storageAccountEpoch;
+    const targetLaunch = launch, targetSession = session;
+    const isCurrent = () => reconcileStorageAccount() === targetOwner
+        && storageAccountEpoch === targetEpoch && launch === targetLaunch && session === targetSession
+        && targetOwner && targetOwner === String(session?.user?.id || session?.user?.user_id || '');
+    const assertCurrent = () => {
+        if (!isCurrent()) throw new Error('当前账号或会话已变化，请重新打开');
+    };
+    assertCurrent();
     const context = getContext();
-    const card = cloneCardWithMarker(launch.card);
+    const prepared = cardPreparations.prepare(JSON.stringify([
+        String(session?.user?.id || session?.user?.user_id || ''), String(launch.app_id),
+    ]), launch.card);
     const safeKey = String(launch.app_id || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80) || 'character';
     const preservedName = `homer-${safeKey}`;
     const expectedAvatar = `${preservedName}.png`;
+    if (initialRead && (initialRead.owner !== targetOwner || initialRead.epoch !== targetEpoch
+        || initialRead.targetLaunch !== targetLaunch || initialRead.targetSession !== targetSession
+        || initialRead.avatar !== expectedAvatar)) {
+        if (initialRead.optionalPreparation) initialRead = null;
+        else throw new Error('角色读取票据与当前会话不一致');
+    }
+    const assertTargetCharacter = index => {
+        assertCurrent();
+        const character = context.characters[index];
+        const marker = character?.data?.extensions?.homer_bridge;
+        if (character?.avatar !== expectedAvatar
+            || String(marker?.app_id ?? '') !== String(targetLaunch.app_id)
+            || marker?.card_signature !== prepared.signature) {
+            throw new Error('角色资料与当前会话不一致，请重新打开');
+        }
+    };
     let characterId = context.characters.findIndex(item => (
         String(item?.data?.extensions?.homer_bridge?.app_id || '') === String(launch.app_id)
         || item?.avatar === expectedAvatar
     ));
+    if (characterId < 0) {
+        // Cold embedded hosts have no whole-library catalog. Read the exact
+        // persisted mirror, then verify its app/revision just like a warm card.
+        // Only 404 means missing; auth/server failures must not cause an import.
+        const optional = initialRead?.optionalPreparation;
+        if (optional) {
+            let expiryTimer;
+            const outcome = await Promise.race([initialRead.read.pending, new Promise(resolve => {
+                expiryTimer = setTimeout(() => resolve({ error: new Error('角色预读已过期') }),
+                    Math.max(0, optional.expiresAt - Date.now()));
+            })]).finally(() => clearTimeout(expiryTimer));
+            assertCurrent();
+            if (optional.claimed || optional.payload !== targetSession || !optional.isCurrent()
+                || outcome.error || !outcome.value?.ok || outcome.value.getData?.avatar !== expectedAvatar) {
+                optional.cancelled = true; initialRead = null;
+            }
+            else { optional.claimed = true; optional.targetLaunch = targetLaunch; optional.targetSession = targetSession; }
+        }
+        try {
+            characterId = await context.getOneCharacter(expectedAvatar, { addIfMissing: true, missingOk: true, isCurrent,
+                cacheOwner: targetLaunch.admin_preview ? '' : targetOwner, preparedRead: initialRead?.read || null });
+        } catch (error) {
+            assertCurrent();
+            if (!optional || !initialRead) throw error;
+            // Optional bytes never turn a recoverable read into a startup
+            // failure. The normal selected read still enforces HTTP status,
+            // avatar, account and revision rules (only a real 404 imports).
+            characterId = await context.getOneCharacter(expectedAvatar, { addIfMissing: true, missingOk: true, isCurrent,
+                cacheOwner: targetLaunch.admin_preview ? '' : targetOwner });
+        }
+        assertCurrent();
+    }
     if (characterId >= 0) {
         const currentSignature = String(
             context.characters[characterId]?.data?.extensions?.homer_bridge?.card_signature || '',
         );
-        const desiredSignature = String(card.data.extensions.homer_bridge.card_signature || '');
-        const metadataChanged = !currentSignature || currentSignature !== desiredSignature;
+        const desiredSignature = prepared.signature;
+        const currentAppId = context.characters[characterId]?.data?.extensions?.homer_bridge?.app_id;
+        // Sanitizing/truncating an app ID into an avatar name is not injective.
+        // Equal source JSON must never reuse another app's persisted marker.
+        const metadataChanged = String(currentAppId ?? '') !== String(launch.app_id)
+            || !currentSignature || currentSignature !== desiredSignature;
         if (metadataChanged) {
-            const refreshedAvatar = await importLaunchCardJson(card, preservedName);
-            characterId = await context.getOneCharacter(refreshedAvatar, { addIfMissing: true });
+            const refreshedAvatar = await importLaunchCardJson(cloneCardWithMarker(prepared), preservedName);
+            assertCurrent();
+            if (refreshedAvatar !== expectedAvatar) throw new Error('角色导入结果与目标不一致');
+            characterId = await context.getOneCharacter(refreshedAvatar, { addIfMissing: true, missingOk: true, isCurrent,
+                cacheOwner: targetLaunch.admin_preview ? '' : targetOwner });
+            assertCurrent();
             if (characterId < 0) {
                 throw new Error('角色卡元数据刷新后未找到角色卡');
             }
         }
+        assertTargetCharacter(characterId);
         // An unchanged imported card already owns the persisted avatar file.
         // Re-uploading the same multi-megabyte cover for every fresh browser
         // session was pure startup work and also forced another full character
@@ -1951,20 +2860,34 @@ async function importLaunchCharacter({ reuseActiveCharacter = false } = {}) {
         }
         await openLaunchCharacterChat(characterId, {
             reuseActiveCharacter: reuseActiveCharacter && !metadataChanged,
+            preparedHeader: metadataChanged ? null : preparedHeader,
         });
+        assertCurrent();
         return;
     }
 
-    const avatar = await importLaunchCardJson(card, preservedName);
+    const avatar = await importLaunchCardJson(cloneCardWithMarker(prepared), preservedName);
+    assertCurrent();
+    if (avatar !== expectedAvatar) throw new Error('角色导入结果与目标不一致');
     performance.mark('homer-card-json-imported');
-    characterId = await context.getOneCharacter(avatar, { addIfMissing: true });
+    characterId = await context.getOneCharacter(avatar, { addIfMissing: true, missingOk: true, isCurrent,
+        cacheOwner: targetLaunch.admin_preview ? '' : targetOwner });
+    assertCurrent();
     performance.mark('homer-card-list-updated');
     if (characterId < 0) {
         throw new Error('导入后未找到角色卡');
     }
+    assertTargetCharacter(characterId);
     void syncLaunchCharacterAvatar(context.characters[characterId], true)
         .catch(error => console.debug(`${MODULE_ID}: avatar refresh deferred`, error));
     await openLaunchCharacterChat(characterId);
+    assertCurrent();
+}
+
+function normalizeOpeningMessage(message) {
+    return restoreCanonicalGreeting(launch?.card, message,
+        raw => getRegexedString(raw, regex_placement.AI_OUTPUT, { isMarkdown: true, depth: 0, deterministicReplay: true }),
+        getRegexScripts({ allowedOnly: true }), { guardedReplay: true });
 }
 
 function cloudMessageToDialogue(message, index) {
@@ -1978,9 +2901,9 @@ function cloudMessageToDialogue(message, index) {
         ? message.swipes.map(item => String(item))
         : [];
     if (index === 0 && !isUser && !isSystem) {
-        ({ content, swipes } = restoreRenderedGreetings(launch?.card, swipes, content,
-            raw => canReplayGreetingRules(raw, getRegexScripts({ allowedOnly: true }))
-                ? getRegexedString(raw, regex_placement.AI_OUTPUT, { isMarkdown: true, depth: 0 }) : raw));
+        ({ mes: content, swipes } = normalizeOpeningMessage({
+            mes: content, swipes, is_user: false, is_system: false,
+        }));
         swipes = greetingSwipes(launch?.card, swipes, content);
     }
     const swipeId = Math.max(0, Math.min(Number(message?.swipe_index || 0), Math.max(0, swipes.length - 1)));
@@ -2038,11 +2961,30 @@ function initialGreetingMessage() {
 }
 
 async function loadCloudChat({ emitChatChanged = true } = {}) {
+    const previousSuppressSync = suppressSync;
+    const releaseSourceLayout = holdLargeSourceLayout();
     suppressSync = true;
+    try {
     const context = getContext();
-    const messages = Array.isArray(launch.messages)
+    const stateLaunch = launch;
+    const promptTicket = acknowledgedPromptTickets.get(stateLaunch);
+    acknowledgedPromptTickets.delete(stateLaunch);
+    const messages = Array.isArray(launch.local_chat) ? cloneJsonValue(launch.local_chat) : Array.isArray(launch.messages)
         ? launch.messages.map(cloudMessageToDialogue)
         : [];
+    if (Array.isArray(launch.local_chat) && messages.length) {
+        const opening = messages[0];
+        messages[0] = normalizeOpeningMessage(opening);
+        if (!samePromptMessageSource(opening, messages[0])) clearPromptMessageState(messages[0]);
+    } else if (promptTicket && launch === stateLaunch && promptTicket.owner === reconcileStorageAccount()
+        && promptTicket.epoch === storageAccountEpoch
+        && promptTicket.owner === String(session?.user?.id || session?.user?.user_id || '')
+        && promptTicket.scope === JSON.stringify([promptTicket.owner, String(launch.app_id), String(launch.conversation_id)])) {
+        // Projection has already normalized greetings/swipes. A changed source
+        // cannot inherit a processed marker from its formerly rendered version.
+        restoreAcknowledgedPromptStates(messages, promptTicket.states);
+    }
+    delete launch.local_chat;
     if (!messages.length) {
         const greeting = initialGreetingMessage();
         if (greeting) {
@@ -2051,17 +2993,21 @@ async function loadCloudChat({ emitChatChanged = true } = {}) {
     }
     context.chat.splice(0, context.chat.length, ...messages);
     context.chatMetadata.homer_bridge = {
+        user_id: String(session?.user?.id || session?.user?.user_id || ''),
         app_id: launch.app_id,
         conversation_id: launch.conversation_id,
         runtime: 'dialogue',
     };
     delete context.chatMetadata.homer_preset_overrides;
     context.chatMetadata.homer_model_settings = { ...conversationModelSettings() };
+    // Launch a fresh, same-scope filename read before large DOM/iframe work,
+    // not once those tasks are already occupying the main thread.
+    prefetchPersonaAvatarsForCurrentChat();
     // The cloud conversation is authoritative. Paint it immediately; a fresh
     // embedded page must not block interactivity on two redundant writes to
     // SillyTavern's compatibility mirror. Normal generation/save hooks keep
     // that mirror current after the user actually changes the conversation.
-    await context.printMessages();
+    await context.printMessages({ scroll: false });
     if (emitChatChanged) {
         performance.mark('homer-switch-messages');
     }
@@ -2075,31 +3021,49 @@ async function loadCloudChat({ emitChatChanged = true } = {}) {
         await enableTavernHelperCardScripts(character);
     }
     await eventSource.emit(event_types.CHAT_LOADED, context.chatId);
-    suppressSync = false;
+    } finally {
+        suppressSync = previousSuppressSync;
+        releaseSourceLayout();
+    }
+    // Do not force a viewport-sized layout of temporary 3MB source code
+    // while the HTML frontend renderer is replacing it. Scroll the real DOM.
+    scrollChatToBottom({ waitForFrame: true });
+    // Preserve the normal late image/video/audio bottom-position watcher,
+    // but attach it only after frontend conversion has finished.
+    scrollOnMediaLoad();
     scheduleSync(100);
     scheduleHostStateNotify(0, 'chat-loaded');
 }
 
 function serializeChat() {
     const context = getContext();
-    return context.chat.map((message, index) => ({
+    return context.chat.map((message, index) => {
+        const swipes = Array.isArray(message?.swipes) ? message.swipes.map(item => String(item)) : [];
+        const swipeId = Number(message?.swipe_id || 0);
+        const promptState = capturePromptMessageState(message, { swipes, swipe_id: swipeId });
+        const extra = { ...(message?.extra && typeof message.extra === 'object' ? message.extra : {}) };
+        delete extra.homer_prompt_state;
+        if (promptState) extra.homer_prompt_state = promptState.descriptor;
+        return {
         name: String(message?.name || ''),
         is_user: Boolean(message?.is_user),
         // Hiding changes prompt participation, not the original cloud message role.
         is_system: Boolean(message?.is_system && !message?.extra?.homer_hidden),
         send_date: String(message?.send_date || ''),
         mes: String(message?.mes || ''),
-        swipes: Array.isArray(message?.swipes) ? message.swipes.map(item => String(item)) : [],
-        swipe_id: Number(message?.swipe_id || 0),
+        swipes,
+        swipe_id: swipeId,
+        ...(promptState?.values || {}),
         extra: {
-            ...(message?.extra && typeof message.extra === 'object' ? message.extra : {}),
+            ...extra,
             homer_sync_id: String(
                 message?.extra?.homer_sync_id
                 || message?.extra?.homer_message_id
                 || `${launch.conversation_id}-${message?.send_date || index}-${index}`,
             ),
         },
-    }));
+        };
+    });
 }
 
 async function recoverFailedGeneration(snapshot) {
@@ -2108,7 +3072,6 @@ async function recoverFailedGeneration(snapshot) {
         return false;
     }
     if (!generationNeedsRecovery(snapshot, context.chat)) {
-        scheduleSync(100);
         return false;
     }
 
@@ -2148,33 +3111,201 @@ async function recoverFailedGeneration(snapshot) {
     return true;
 }
 
-async function syncCloudChat() {
+function cloudSyncScope() {
+    return JSON.stringify([String(session?.user?.id || session?.user?.user_id || ''), launch?.app_id, launch?.conversation_id]);
+}
+
+function hasCanonicalConversationScope(context = getContext()) {
+    const owner = String(session?.user?.id || session?.user?.user_id || '');
+    const appId = String(launch?.app_id || '');
+    const conversationId = String(launch?.conversation_id || '');
+    const scope = context?.chatMetadata?.homer_bridge;
+    const character = context?.characters?.[context.characterId];
+    const mirror = `Homer-${conversationId.replace(/[^a-zA-Z0-9_-]/g, '')}`;
+    return Boolean(owner && appId && conversationId
+        && reconcileStorageAccount() === owner
+        && String(scope?.user_id || '') === owner
+        && String(scope?.app_id || '') === appId
+        && String(scope?.conversation_id || '') === conversationId
+        && scope?.runtime === 'dialogue'
+        && String(character?.data?.extensions?.homer_bridge?.app_id || '') === appId
+        && String(context?.chatId || '') === mirror);
+}
+
+function assertCanonicalConversationScope() {
+    if (conversationRecoveryBlocked || !hasCanonicalConversationScope()) {
+        throw new Error('当前会话未能完整恢复，请重新进入后再操作');
+    }
+}
+
+function captureConversationRecovery() {
+    assertCanonicalConversationScope();
+    const context = getContext();
+    return {
+        owner: String(session.user.id || session.user.user_id),
+        epoch: storageAccountEpoch,
+        characterId: String(context.characterId),
+        avatar: String(context.characters[context.characterId]?.avatar || ''),
+        chatId: String(context.chatId),
+        chat: cloneJsonValue(context.chat),
+        chatMetadata: cloneJsonValue(context.chatMetadata),
+        // References detect untouched preflight failures without moving live
+        // message/iframe DOM or cloning the multi-megabyte character card.
+        chatReference: context.chat,
+        metadataReference: context.chatMetadata,
+        messageReferences: context.chat.slice(),
+    };
+}
+
+function assertRecoveryAccount(snapshot) {
+    if (!snapshot || reconcileStorageAccount() !== snapshot.owner
+        || storageAccountEpoch !== snapshot.epoch) {
+        throw new Error('会话账号已切换，请重新进入');
+    }
+}
+
+function canonicalRecoveryIsUntouched(snapshot) {
+    const context = getContext();
+    return Boolean(snapshot && hasCanonicalConversationScope(context)
+        && String(context.characterId) === snapshot.characterId
+        && String(context.chatId) === snapshot.chatId
+        && context.chat === snapshot.chatReference
+        && context.chatMetadata === snapshot.metadataReference
+        && context.chat.length === snapshot.messageReferences.length
+        && context.chat.every((message, index) => message === snapshot.messageReferences[index]));
+}
+
+async function restoreCanonicalConversation(snapshot, beforeRender) {
+    assertRecoveryAccount(snapshot);
+    const characterId = getContext().characters.findIndex(character => (
+        String(character?.data?.extensions?.homer_bridge?.app_id || '') === String(launch.app_id)
+        && String(character?.avatar || '') === snapshot.avatar
+    ));
+    if (characterId < 0) throw new Error('原角色资料未能恢复，请重新进入');
+    pendingCardScriptCharacter = null;
+    await activateCharacterForChat(characterId, {
+        chatName: snapshot.chatId, ephemeral: Boolean(launch.admin_preview),
+    });
+    assertRecoveryAccount(snapshot);
+    const context = getContext();
+    const metadata = cloneJsonValue(snapshot.chatMetadata);
+    for (const key of Object.keys(context.chatMetadata)) delete context.chatMetadata[key];
+    Object.assign(context.chatMetadata, metadata);
+    context.chat.splice(0, context.chat.length, ...cloneJsonValue(snapshot.chat));
+    await beforeRender();
+    assertRecoveryAccount(snapshot);
+    await context.printMessages({ scroll: false });
+    assertRecoveryAccount(snapshot);
+    await eventSource.emit(event_types.CHAT_CHANGED, context.chatId);
+    assertRecoveryAccount(snapshot);
+    await enableTavernHelperCardScripts(getContext().characters[characterId]);
+    assertRecoveryAccount(snapshot);
+    await eventSource.emit(event_types.CHAT_LOADED, context.chatId);
+    assertRecoveryAccount(snapshot);
+    if (!hasCanonicalConversationScope()) throw new Error('原会话状态未能完整恢复，请重新进入');
+    scrollChatToBottom({ waitForFrame: true });
+    scrollOnMediaLoad();
+    queueMessageMenuRender();
+}
+
+function blockConversationRecovery(error, bootstrapToken = '') {
+    conversationRecoveryBlocked = true;
+    pendingCardScriptCharacter = null;
+    window.clearTimeout(syncTimer); syncTimer = null;
+    window.clearTimeout(extensionSettingsPersistTimer); extensionSettingsPersistTimer = null;
+    window.clearTimeout(hostStateNotifyTimer); hostStateNotifyTimer = null;
+    hostStateNotifyToken = null;
+    extensionSettingsPersistWaiters.splice(0).forEach(waiter => waiter.resolve(false));
+    document.body.classList.add('homer-runtime-error');
+    setOnlineStatus('no_connection');
+    failRuntimeGate(error);
+    tavoComposer?.refresh();
+    notifyHostError(bootstrapToken);
+}
+
+function captureCurrentChatStorage() {
+    assertCanonicalConversationScope();
+    return captureCloudSync(cloudSyncScope(), {
+        app_id: launch.app_id,
+        conversation_id: launch.conversation_id,
+        title: String(launch?.card?.data?.name || launch?.card?.name || '角色对话'),
+        messages: serializeChat(),
+    });
+}
+
+async function commitConversationBeforeSwitch() {
+    const epoch = storageAccountEpoch;
+    const leavingLaunch = launch;
+    window.clearTimeout(syncTimer); syncTimer = null;
+    window.clearTimeout(extensionSettingsPersistTimer); extensionSettingsPersistTimer = null;
+    // A running zero-delay settings replay can still be changing canonical
+    // objects. Wait for that local work, never its remote network chain.
+    await extensionSettingsReplayWork;
     if (launch?.admin_preview) return;
-    if (suppressSync || !launch?.app_id || !launch?.conversation_id) {
-        return;
-    }
-    const messages = serializeChat();
-    const signature = JSON.stringify(messages);
-    if (signature === lastSyncSignature) {
-        return;
-    }
+    if (reconcileStorageAccount() !== JSON.parse(cloudSyncScope())[0]) throw new Error('请重新登录后再切换会话');
+    const chatSnapshot = captureCurrentChatStorage();
+    const extensionSnapshot = captureExtensionStorage({ force: true });
+    if (!extensionSnapshot) throw new Error('当前会话设置仍在恢复，已保留当前会话，请稍后再试');
     try {
-        const result = await requestJson('/api/homer/sync', {
-            method: 'POST',
-            body: JSON.stringify({
-                app_id: launch.app_id,
-                conversation_id: launch.conversation_id,
-                title: String(launch?.card?.data?.name || launch?.card?.name || '角色对话'),
-                messages,
-            }),
-        });
-        lastSyncSignature = signature;
-        const synced = Array.isArray(result?.messages) ? result.messages : [];
+        [chatSnapshot.committed, extensionSnapshot.snapshot.committed] = await Promise.all([
+            chatOutbox.prepare(chatSnapshot), chatOutbox.prepare(extensionSnapshot.snapshot, 'extension-settings'),
+        ]);
+    } catch {
+        throw new Error('本机存档未保存成功，已保留当前会话，请腾出存储空间后重试');
+    }
+    if (JSON.parse(chatSnapshot.scope)[0] !== reconcileStorageAccount()
+        || epoch !== storageAccountEpoch || launch !== leavingLaunch) throw new Error('会话账号已切换，请重新进入');
+    // Both full snapshots have completed their local transactions. Uploads keep
+    // captured identities and do not delay activating another conversation.
+    void cloudSyncQueue.enqueue(chatSnapshot).catch(() => {});
+    const waiters = extensionSettingsPersistWaiters.splice(0);
+    extensionSyncQueue.enqueue(extensionSnapshot.snapshot).then(
+        acknowledgement => waiters.forEach(waiter => waiter.resolve(!acknowledgement.deferred)),
+        error => waiters.forEach(waiter => waiter.reject(error)),
+    );
+}
+
+async function syncCloudChat({ keepaliveOnly = false, localOnly = false } = {}) {
+    if (launch?.admin_preview || suppressSync || !launch?.app_id || !launch?.conversation_id) return false;
+    if (conversationRecoveryBlocked || !hasCanonicalConversationScope()) {
+        if (localOnly) assertCanonicalConversationScope();
+        return false;
+    }
+    const epoch = storageAccountEpoch;
+    const snapshot = captureCurrentChatStorage();
+    try {
+        snapshot.committed = await chatOutbox.prepare(snapshot);
+        if (localOnly) {
+            if (JSON.parse(snapshot.scope)[0] === reconcileStorageAccount()
+                && epoch === storageAccountEpoch && canApplyCloudSync(snapshot, cloudSyncScope(), serializeChat())) launch.local_pending = snapshot.committed.pending;
+            void syncCloudChatSnapshot(snapshot, { keepaliveOnly });
+            return true;
+        }
+        return await syncCloudChatSnapshot(snapshot, { keepaliveOnly });
+    } catch {
+        if (JSON.parse(snapshot.scope)[0] === reconcileStorageAccount() && epoch === storageAccountEpoch
+            && snapshot.scope === cloudSyncScope()) updateRuntimeStatus('本机存档未保存，请勿退出', 'warning');
+        if (localOnly) throw new Error('本机存档未保存成功，请腾出存储空间后重试');
+        return false;
+    }
+}
+
+async function syncCloudChatSnapshot(snapshot, { keepaliveOnly = false } = {}) {
+    const epoch = storageAccountEpoch;
+    try {
+        const acknowledgement = await cloudSyncQueue.enqueue(snapshot, { keepaliveOnly });
+        if (acknowledgement.deferred) return false;
+        if (acknowledgement.skipped) {
+            await acknowledgeStorage(snapshot.committed, acknowledgement.response);
+        }
+        // No late account/chat response may mutate the new active chat. Even
+        // in the same scope, an older version must not overwrite newer IDs.
+        if (JSON.parse(snapshot.scope)[0] !== reconcileStorageAccount()
+            || epoch !== storageAccountEpoch || !canApplyCloudSync(snapshot, cloudSyncScope(), serializeChat())) return true;
+        const result = acknowledgement.response;
         const context = getContext();
-        synced.forEach((message, index) => {
-            if (!context.chat[index]) {
-                return;
-            }
+        result.messages.forEach((message, index) => {
+            if (!context.chat[index]) return;
             context.chat[index].extra = {
                 ...(context.chat[index].extra || {}),
                 homer_message_id: String(message?.id || ''),
@@ -2182,12 +3313,30 @@ async function syncCloudChat() {
                 homer_created_at: Number(message?.created_at || context.chat[index].extra?.homer_created_at || Date.now()),
             };
         });
+        lastSyncSignature = JSON.stringify(serializeChat());
+        launch.local_pending = false;
         queueMessageMenuRender();
-        updateRuntimeStatus('云端已同步', 'online');
-    } catch (error) {
-        console.warn(`${MODULE_ID}: cloud sync failed`, error);
-        updateRuntimeStatus('等待同步', 'warning');
+        if (!cloudSyncQueue.pending(snapshot.scope)) updateRuntimeStatus('云端已同步', 'online');
+        return true;
+    } catch {
+        console.warn(`${MODULE_ID}: chat cloud save remains pending`);
+        if (JSON.parse(snapshot.scope)[0] === reconcileStorageAccount() && epoch === storageAccountEpoch
+            && snapshot.scope === cloudSyncScope()) updateRuntimeStatus('等待同步', 'warning');
+        return false;
     }
+}
+
+async function commitConfirmedCloudMutation() {
+    const snapshot = captureCurrentChatStorage();
+    snapshot.committed = await chatOutbox.prepare(snapshot);
+    const messages = snapshot.payload.messages.map(message => ({
+        id: String(message.extra?.homer_message_id || message.extra?.homer_sync_id || ''),
+        role: message.is_system && !message.extra?.homer_hidden ? 'system' : message.is_user ? 'user' : 'assistant',
+        content: String(message.mes || ''), created_at: Number(message.extra?.homer_created_at || 0),
+        swipes: message.swipes || [], swipe_index: Number(message.swipe_id || 0),
+    }));
+    await acknowledgeStorage(snapshot.committed, { messages });
+    launch.local_pending = false;
 }
 
 function scheduleSync(delay = 900) {
@@ -2290,6 +3439,7 @@ async function rollbackToMessage(target, { askConfirmation = true } = {}) {
     queueMessageMenuRender();
     const previousSuppressSync = suppressSync;
     try {
+        if (!await syncCloudChat()) throw new Error('当前消息尚未同步，请联网后再回溯');
         const result = await requestJson(
             siteUrl(`/console/api/web/messages/${encodeURIComponent(messageId)}/rollback`),
             { method: 'POST', body: '{}' },
@@ -2317,6 +3467,7 @@ async function rollbackToMessage(target, { askConfirmation = true } = {}) {
             dialogueEventLogMuted = Math.max(0, dialogueEventLogMuted - 1);
         }
         lastSyncSignature = JSON.stringify(serializeChat());
+        await commitConfirmedCloudMutation();
         await logDialogueEvent('rewind', index, message);
         closeMessageMenu();
         queueMessageMenuRender();
@@ -2335,16 +3486,44 @@ async function rollbackToMessage(target, { askConfirmation = true } = {}) {
     }
 }
 
-async function loadRuntimeState() {
+async function loadRuntimeState(preparedRead = null, modelCatalogWork = Promise.resolve(), preparedRegex = null) {
     if (launch?.admin_preview) {
         runtimeVariables = {};
         replaceExtensionSettings(cloneJsonObject(extensionSettingsBaseline || {}));
         await refreshOfficialRegex();
         return;
     }
-    const state = await requestJson(
-        `/api/homer/runtime-state?${queryString(launch.app_id, launch.conversation_id)}`,
-    );
+    const scope = cloudSyncScope();
+    const owner = reconcileStorageAccount();
+    const stateLaunch = launch;
+    const epoch = storageAccountEpoch;
+    const assertScope = () => {
+        if (owner !== reconcileStorageAccount() || epoch !== storageAccountEpoch || launch !== stateLaunch
+            || scope !== cloudSyncScope() || owner !== JSON.parse(scope)[0]) throw new Error('会话已切换，未应用旧配置');
+    };
+    assertScope();
+    let read = preparedRead || prepareRuntimeState(stateLaunch.app_id, stateLaunch.conversation_id);
+    if (read.owner !== owner || read.epoch !== epoch || read.scope !== scope) {
+        throw new Error('会话已切换，未应用旧配置');
+    }
+    // A click can wait at the durable-leave barrier. The peer's deadline is
+    // checked again at consumption, not just when it was taken from the cache.
+    if (read.expiresAt !== undefined && read.expiresAt <= Date.now()) read = prepareRuntimeState(stateLaunch.app_id, stateLaunch.conversation_id);
+    let outcome = await read.pending;
+    assertScope();
+    if (read.expiresAt !== undefined && read.expiresAt <= Date.now()) {
+        read = prepareRuntimeState(stateLaunch.app_id, stateLaunch.conversation_id);
+        outcome = await read.pending;
+    }
+    assertScope();
+    if (outcome.error) throw outcome.error;
+    const { state, fence } = outcome.value;
+    const local = await chatOutbox.read(scope, 'extension-settings', fence);
+    assertScope();
+    if (read.expiresAt !== undefined && read.expiresAt <= Date.now()) {
+        return loadRuntimeState(prepareRuntimeState(stateLaunch.app_id, stateLaunch.conversation_id), modelCatalogWork);
+    }
+    if (local?.preferred) state.extension_settings = local.payload.extension_settings;
     const savedExtensionSettings = state?.extension_settings
         && typeof state.extension_settings === 'object'
         && !Array.isArray(state.extension_settings)
@@ -2356,11 +3535,26 @@ async function loadRuntimeState() {
     }
     conversationExtensionSettings = cloneJsonObject(restoredExtensionSettings || {});
     replaceExtensionSettings(conversationExtensionSettings);
+    runtimeVariables = state?.variables && typeof state.variables === 'object'
+        ? { ...state.variables }
+        : {};
+    delete runtimeVariables.homer_preset_overrides;
     // Extensions that mirror settings into controls or module-local state have
     // already handled the native global load by this point. Re-emit the normal
     // loaded signal after applying the conversation overlay so those mirrors do
     // not later write stale global values back into the active conversation.
-    await eventSource.emit(event_types.SETTINGS_LOADED);
+    const settingsLoaded = eventSource.emit(event_types.SETTINGS_LOADED);
+    let regexModelId = '';
+    const regexLoaded = (async () => {
+        // The first catalog may still be arriving alongside the state read.
+        // Never select an empty/default model just to start its regex sooner.
+        await modelCatalogWork;
+        assertScope();
+        regexModelId = String(conversationModelSettings().model_id || '');
+        await refreshOfficialRegex(regexModelId, preparedRegex);
+    })();
+    await Promise.all([settingsLoaded, regexLoaded]);
+    assertScope();
     // Some third-party extensions finalize module-local defaults on APP_READY.
     // When the embedded bridge starts from the earlier core-ready signal, one
     // post-ready replay is required so those defaults cannot overwrite the
@@ -2369,27 +3563,107 @@ async function loadRuntimeState() {
     const extensionSnapshot = extensionSettingsSnapshot();
     lastExtensionSettingsScope = extensionSettingsScope();
     lastExtensionSettingsSignature = extensionSnapshot.signature;
-    runtimeVariables = state?.variables && typeof state.variables === 'object'
-        ? { ...state.variables }
-        : {};
-    delete runtimeVariables.homer_preset_overrides;
-    await refreshOfficialRegex();
+    // A settings listener may legitimately select a different effective model.
+    // Its response guard rejects the earlier rules; read the matching set now.
+    const currentModelId = String(conversationModelSettings().model_id || '');
+    if (currentModelId !== regexModelId) {
+        await refreshOfficialRegex(currentModelId);
+        assertScope();
+    }
 }
 
-async function refreshOfficialRegex(modelId = '') {
+function prepareRuntimeState(appId, conversationId) {
+    const owner = reconcileStorageAccount();
+    const epoch = storageAccountEpoch;
+    const targetAppId = String(appId || '').trim();
+    const targetConversationId = String(conversationId || '').trim();
+    const scope = JSON.stringify([owner, targetAppId, targetConversationId]);
+    const assertOwner = () => {
+        if (!owner || !targetAppId || !targetConversationId || owner !== reconcileStorageAccount()
+            || epoch !== storageAccountEpoch) throw new Error('会话账号已切换，请重新进入');
+    };
+    // Capture the same outbox read fence as an ordinary state load, but start
+    // this cookie-authenticated GET beside the durable leave/session work.
+    // Nothing is applied until loadRuntimeState verifies the new live scope.
+    const pending = (async () => {
+        assertOwner();
+        const fence = await chatOutbox.fence(scope, 'extension-settings');
+        assertOwner();
+        const state = await requestJson(`/api/homer/runtime-state?${queryString(targetAppId, targetConversationId)}`);
+        assertOwner();
+        return { state, fence };
+    })().then(value => ({ value }), error => ({ error }));
+    // A failed leave/session can discard this read before it is consumed.
+    // The settled outcome must not create an unhandled rejected Promise.
+    return Object.freeze({ owner, epoch, scope, pending });
+}
+
+function prepareConversationResources(appId, conversationId) {
+    const owner = reconcileStorageAccount();
+    const epoch = storageAccountEpoch;
+    const scope = JSON.stringify([owner, String(appId || '').trim(), String(conversationId || '').trim()]);
+    const cached = sessionPrefetchCache.get(sessionCacheKey(appId, conversationId));
+    const retained = cached?.resources;
+    if (cached?.expiresAt > Date.now() && retained?.owner === owner
+        && retained.epoch === epoch && retained.scope === scope) return retained;
+    const expiresAt = cached?.expiresAt > Date.now() ? cached.expiresAt : undefined;
+    const state = Object.freeze({ ...prepareRuntimeState(appId, conversationId), expiresAt });
+    const models = Object.freeze({ ...prepareRuntimeModels(appId, conversationId), expiresAt });
+    const regex = Object.freeze({ owner, epoch, scope, expiresAt, pending: (async () => {
+        const [stateResult, modelResult] = await Promise.all([state.pending, models.pending]);
+        if (stateResult.error) throw stateResult.error;
+        if (modelResult.error) throw modelResult.error;
+        if (!owner || owner !== reconcileStorageAccount() || epoch !== storageAccountEpoch) throw new Error('会话账号已切换');
+        const modelList = payloadList(modelResult.value).filter(item => item?.enabled !== false);
+        const modelId = selectRuntimeModelId(stateResult.value.state?.variables, modelList, modelResult.value?.default_id);
+        const params = new URLSearchParams({ app_id: String(appId).trim(), conversation_id: String(conversationId).trim(), model: modelId });
+        const payload = await requestJson(`/api/homer/regex?${params}`);
+        if (owner !== reconcileStorageAccount() || epoch !== storageAccountEpoch) throw new Error('会话账号已切换');
+        return { modelId, payload };
+    })().then(value => ({ value }), error => ({ error })) });
+    const resources = Object.freeze({ owner, epoch, scope, state, models, regex, character: cached?.characterPreparation || null });
+    // Lifetime and eviction exactly follow the two one-use session peers.
+    // Never create an unbounded second cache of per-conversation settings.
+    if (cached && cached.expiresAt > Date.now()) cached.resources = resources;
+    void regex.pending.then(outcome => {
+        if (outcome.error && cached?.resources === resources) delete cached.resources;
+    });
+    return resources;
+}
+
+async function refreshOfficialRegex(modelId = '', preparedRead = null) {
     if (launch?.admin_preview) {
         // Fail closed: do not generate with silently stale admin settings.
         await refreshAdminConfiguration(modelId);
         return;
     }
+    const regexLaunch = launch;
+    const owner = reconcileStorageAccount();
+    const epoch = storageAccountEpoch;
+    const selectedId = String(modelId || conversationModelSettings().model_id || '');
+    const current = () => launch === regexLaunch && owner === reconcileStorageAccount()
+        && epoch === storageAccountEpoch && selectedId === String(conversationModelSettings().model_id || '');
     setOfficialDisplayRules({ scripts: [] });
-    const params = new URLSearchParams({ app_id: launch.app_id, model: modelId || conversationModelSettings().model_id || '' });
+    const params = new URLSearchParams({ app_id: launch.app_id, model: selectedId });
     if (!launch.admin_preview) params.set('conversation_id', launch.conversation_id);
     try {
-        const payload = await requestJson(`/api/homer/regex?${params}`);
+        let prepared;
+        if (preparedRead?.owner === owner && preparedRead.epoch === epoch
+            && (preparedRead.expiresAt === undefined || preparedRead.expiresAt > Date.now())
+            && preparedRead.scope === cloudSyncScope()) {
+            const outcome = await preparedRead.pending;
+            if (!current()) return;
+            if (!outcome.error && outcome.value?.modelId === selectedId
+                && (preparedRead.expiresAt === undefined || preparedRead.expiresAt > Date.now())) prepared = outcome.value.payload;
+        }
+        // Model edits, expiry, failed preparation and every generation use a
+        // fresh authorized read; a peer's old model never supplies its rules.
+        const payload = prepared || await requestJson(`/api/homer/regex?${params}`);
+        if (!current()) return;
         officialRegexState = setOfficialDisplayRules(payload);
         if (officialRegexState.errors.length) showHostNotice(`[HM-R422] ${officialRegexState.errors.length} 条官方正则语法无效，请管理员检查`, 'error');
     } catch (error) {
+        if (!current()) return;
         officialRegexState = { count: 0, errors: ['HM-R503'] };
         showHostNotice('[HM-R503] 官方展示规则读取失败，请重试或联系管理员更新服务', 'warning');
     }
@@ -2441,12 +3715,49 @@ function payloadList(payload) {
     return Array.isArray(payload?.list) ? payload.list : [];
 }
 
-async function loadRuntimeUiData() {
+function prepareRuntimeModels(appId, conversationId) {
+    const owner = reconcileStorageAccount();
+    const epoch = storageAccountEpoch;
+    const scope = JSON.stringify([owner, String(appId || ''), String(conversationId || '')]);
+    const assertOwner = () => {
+        if (!owner || owner !== reconcileStorageAccount() || epoch !== storageAccountEpoch) {
+            throw new Error('会话账号已切换，未应用旧模型目录');
+        }
+    };
+    // Fresh cookie-authenticated catalog, not a stale/background replacement.
+    // Start beside the durable leave; consume only after the target is bound.
+    const pending = (async () => {
+        assertOwner();
+        const payload = await requestJson('/api/homer/models');
+        assertOwner();
+        return payload;
+    })().then(value => ({ value }), error => ({ error }));
+    return Object.freeze({ owner, epoch, scope, pending });
+}
+
+async function loadRuntimeUiData(preparedRead = null) {
+    const stateLaunch = launch;
+    const owner = reconcileStorageAccount();
+    const epoch = storageAccountEpoch;
     const conversationId = String(launch?.conversation_id || '');
+    const scope = JSON.stringify([owner, String(launch?.app_id || ''), conversationId]);
+    let read = preparedRead || prepareRuntimeModels(launch?.app_id, conversationId);
+    if (read.owner !== owner || read.epoch !== epoch || read.scope !== scope) {
+        throw new Error('会话已切换，未应用旧模型目录');
+    }
     // Optional Mod requests must not hold conversation startup hostage.
     void loadConversationMods();
-    const payload = await requestJson('/api/homer/models').catch(() => ({}));
-    if (String(launch?.conversation_id || '') !== conversationId) return;
+    if (read.expiresAt !== undefined && read.expiresAt <= Date.now()) read = prepareRuntimeModels(stateLaunch.app_id, conversationId);
+    let outcome = await read.pending;
+    if (launch !== stateLaunch || owner !== reconcileStorageAccount() || epoch !== storageAccountEpoch) return;
+    if (read.expiresAt !== undefined && read.expiresAt <= Date.now()) {
+        read = prepareRuntimeModels(stateLaunch.app_id, conversationId);
+        outcome = await read.pending;
+    }
+    if (launch !== stateLaunch || owner !== reconcileStorageAccount() || epoch !== storageAccountEpoch) return;
+    // Keep the existing unavailable-catalog behavior; never adopt an old
+    // request's model IDs after switching target or logging out/relogging in.
+    const payload = outcome.error ? {} : outcome.value;
     runtimeUiData = { ...runtimeUiData, models: payloadList(payload).filter(item => item?.enabled !== false), modelDefaultId: String(payload?.default_id || '') };
 }
 
@@ -2936,6 +4247,10 @@ function messageMenuActions(resolved) {
         { id: 'hide', label: resolved?.message?.extra?.homer_hidden ? '取消隐藏' : '隐藏', icon: 'fa-regular fa-eye' },
         { id: 'select', label: '多选', icon: 'fa-solid fa-list-check' },
         { id: 'collapse', label: resolved?.message?.extra?.homer_collapsed ? '展开' : '折叠', icon: 'fa-solid fa-angles-down' },
+        ...(!resolved?.isUser ? [
+            { id: 'regenerate', label: '重写', icon: 'fa-solid fa-rotate-right' },
+            { id: 'continue', label: '续写', icon: 'fa-solid fa-forward' },
+        ] : []),
     ];
 }
 
@@ -2952,6 +4267,19 @@ function ensureMessageMenuDialog() {
     actions.setAttribute('role', 'menu');
     shell.append(actions);
     dialog.append(shell);
+    // Opening a modal mid-touch makes Android send the original release click
+    // to its backdrop (or a button underneath the finger). Consume only that
+    // inherited click; a fresh pointerdown is an explicit new user action.
+    dialog.addEventListener('pointerdown', () => {
+        suppressMessageMenuPressRelease = false;
+        suppressMessageClickUntil = 0;
+    }, true);
+    dialog.addEventListener('click', event => {
+        if (!suppressMessageMenuPressRelease) return;
+        suppressMessageMenuPressRelease = false;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+    }, true);
     new ResizeObserver(() => {
         if (dialog.open && activeMessageMenuTarget) {
             positionMessageMenuDialog(dialog, resolveMessageMenuTarget(activeMessageMenuTarget));
@@ -2975,6 +4303,7 @@ function ensureMessageMenuDialog() {
     });
     dialog.addEventListener('close', () => {
         activeMessageMenuTarget = null;
+        suppressMessageMenuPressRelease = false;
         dialog.classList.remove('is-positioning');
         dialog.style.removeProperty('left');
         dialog.style.removeProperty('top');
@@ -3005,9 +4334,20 @@ function positionMessageMenuDialog(dialog, resolved) {
         dialog.classList.remove('is-positioning');
         return;
     }
+    let header = document.querySelector('.homer-chat-header');
+    let composer = document.querySelector('#form_sheld');
+    if (document.documentElement.classList.contains('homer-host-chrome')) {
+        // The visible controls belong to the permanent same-origin host, not
+        // the offscreen canonical composer retained for engine event guards.
+        header = composer = null;
+        try {
+            header = window.parent.document.querySelector('.preview-header');
+            composer = window.parent.document.querySelector('#shared-composer');
+        } catch { /* No cross-origin access is needed for standalone runtime. */ }
+    }
     positionChatMenu(dialog, anchorElement, {
-        header: document.querySelector('.homer-chat-header'),
-        composer: document.querySelector('#form_sheld'),
+        header,
+        composer,
         isUser: resolved?.isUser,
         pressY: resolved?.anchorY,
     });
@@ -3060,12 +4400,13 @@ function renderMessageMenuDialog() {
         return button;
     });
     actions.replaceChildren(...buttons);
+    dialog.dataset.actionCount = String(buttons.length);
     if (dialog.open) {
         requestAnimationFrame(() => positionMessageMenuDialog(dialog, resolved));
     }
 }
 
-function openMessageMenu(target) {
+function openMessageMenu(target, { suppressRelease = false } = {}) {
     window.getSelection?.()?.removeAllRanges?.();
     const resolved = resolveMessageMenuTarget(target);
     if (!resolved) {
@@ -3073,6 +4414,7 @@ function openMessageMenu(target) {
         return;
     }
     const dialog = ensureMessageMenuDialog();
+    suppressMessageMenuPressRelease = suppressRelease;
     activeMessageMenuTarget = resolved;
     dialog.classList.add('is-positioning');
     renderMessageMenuDialog();
@@ -3137,7 +4479,18 @@ function messageHeaderName(message) {
     return `《${raw}》`;
 }
 
-function messageHeaderTime(message) {
+function createMessageHeaderTimeFormatter() {
+    return new Intl.DateTimeFormat('zh-CN', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hourCycle: 'h23',
+    });
+}
+
+function messageHeaderTime(message, getFormatter = createMessageHeaderTimeFormatter) {
     const raw = message?.send_date || message?.extra?.homer_created_at || '';
     let date;
     if (typeof raw === 'number' || /^\d+$/.test(String(raw))) {
@@ -3152,14 +4505,7 @@ function messageHeaderTime(message) {
     if (!Number.isFinite(date.getTime())) {
         return '';
     }
-    return new Intl.DateTimeFormat('zh-CN', {
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        hourCycle: 'h23',
-    }).format(date).replace(/\s+/g, ' ').trim();
+    return getFormatter().format(date).replace(/\s+/g, ' ').trim();
 }
 
 function setTextIfChanged(element, text) {
@@ -3168,7 +4514,7 @@ function setTextIfChanged(element, text) {
     }
 }
 
-function decorateMessageHeader(messageElement, message, messageIndex) {
+function decorateMessageHeader(messageElement, message, messageIndex, getTimeFormatter) {
     const header = messageElement.querySelector('.ch_name');
     const nameText = header?.querySelector('.name_text');
     const timestamp = header?.querySelector('.timestamp');
@@ -3178,7 +4524,7 @@ function decorateMessageHeader(messageElement, message, messageIndex) {
     }
 
     setTextIfChanged(nameText, messageHeaderName(message));
-    setTextIfChanged(timestamp, messageHeaderTime(message));
+    setTextIfChanged(timestamp, messageHeaderTime(message, getTimeFormatter));
     timestamp.setAttribute('aria-label', `消息时间：${timestamp.textContent || '未知'}`);
 
     let version = meta.querySelector('.homer-message-version');
@@ -3261,6 +4607,10 @@ function renderOpeningNavigation(element, message, index, editing) {
 function renderMessageMenuTargets() {
     const context = getContext();
     imageGenerationUi.render();
+    // Only share within this synchronous pass; later passes resolve the current
+    // locale/timezone again, and invalid dates never construct a formatter.
+    let timeFormatter;
+    const getTimeFormatter = () => timeFormatter ??= createMessageHeaderTimeFormatter();
     document.querySelectorAll('#chat .mes').forEach(messageElement => {
         messageElement.querySelector('.homer-message-actions')?.remove();
         const index = messageIndexFromElement(messageElement);
@@ -3281,7 +4631,9 @@ function renderMessageMenuTargets() {
             delete messageElement.dataset.homerMessageId;
             return;
         }
-        decorateMessageHeader(messageElement, message, index);
+        decorateMessageHeader(messageElement, message, index, getTimeFormatter);
+        decorateTavoMessage(messageElement, { id: stableHomerMessageId(message), isUser: !!message?.is_user,
+            hidden: !!message?.extra?.homer_hidden, collapsed: !!message?.extra?.homer_collapsed });
         messageElement.tabIndex = 0;
         messageElement.setAttribute('aria-haspopup', 'dialog');
         messageElement.setAttribute('aria-controls', 'homer-message-menu-dialog');
@@ -3385,6 +4737,7 @@ async function deleteCloudMessage(target, alreadyConfirmed = false) {
     queueMessageMenuRender();
     const previousSuppressSync = suppressSync;
     try {
+        if (!await syncCloudChat()) throw new Error('当前消息尚未同步，请联网后再删除');
         const result = await requestJson(
             siteUrl(`/console/api/web/messages/${encodeURIComponent(messageId)}/delete`),
             { method: 'POST', body: '{}' },
@@ -3417,7 +4770,8 @@ async function deleteCloudMessage(target, alreadyConfirmed = false) {
         }
         lastSyncSignature = JSON.stringify(serializeChat());
         await logDialogueEvent('message_delete', messageIndex, message);
-        updateRuntimeStatus('云端已同步', 'online');
+        await commitConfirmedCloudMutation();
+        updateRuntimeStatus(launch.local_pending ? '本机已保存，等待同步' : '云端已同步', launch.local_pending ? 'warning' : 'online');
         showHostNotice('已删除这条消息', 'success');
         queueMessageMenuRender();
         return true;
@@ -3566,6 +4920,7 @@ function closeMessageSelection() {
     document.body.classList.remove('homer-selecting-messages');
     document.querySelector('#homer-message-selection')?.remove();
     document.querySelectorAll('#chat .mes').forEach(el => { el.classList.remove('homer-message-selected'); el.removeAttribute('aria-selected'); });
+    syncHostOverlayState();
 }
 
 function renderMessageSelection() {
@@ -3630,6 +4985,7 @@ function startMessageSelection(target) {
         foot.append(button);
     }
     root.append(head, foot); document.body.append(root); renderMessageSelection();
+    syncHostOverlayState();
 }
 
 function installMessageMenu() {
@@ -3697,7 +5053,7 @@ function installMessageMenu() {
                 if (target) {
                     suppressMessageClickUntil = Date.now() + 700;
                     window.getSelection?.()?.removeAllRanges?.();
-                    openMessageMenu(target);
+                    openMessageMenu(target, { suppressRelease: true });
                 }
                 clearMessagePress();
             }, MESSAGE_LONG_PRESS_DELAY);
@@ -3728,7 +5084,7 @@ function installMessageMenu() {
             openMessageMenu(messageMenuTargetFromElement(element, {
                 x: event.clientX,
                 y: event.clientY,
-            }));
+            }), { suppressRelease: suppressMessageMenuPressRelease });
         });
         chat.addEventListener('click', event => {
             const menuTrigger = event.target instanceof Element
@@ -3875,6 +5231,8 @@ function setDrawerOpen(side = '') {
     }
     document.body.classList.toggle('homer-drawer-open', leftOpen || rightOpen);
     document.body.classList.toggle('homer-left-drawer-open', leftOpen);
+    if (leftOpen) historyCoverLoader?.open();
+    else historyCoverLoader?.close();
     if (leftOpen || rightOpen) {
         window.setTimeout(() => {
             (rightOpen ? right : left)?.querySelector('button, a, select, input')?.focus();
@@ -4571,17 +5929,46 @@ function buildNewConversationMenu() {
 }
 
 let continuationLayoutObserver;
-function positionContinuationControl() {
+let continuationLayoutFrame = 0;
+function positionContinuationControl(defer = false) {
     const trigger = document.querySelector('#homer-continuation-trigger');
+    // The app removed this floating action. Mirror its shipping CSS state
+    // without a computed-style/layout read, including late resize callbacks.
+    if (!trigger || trigger.hidden || document.body.classList.contains('homer-runtime')) return;
     const composer = document.querySelector('#send_form');
-    if (trigger && composer) trigger.style.bottom = `${Math.max(0, window.innerHeight - composer.getBoundingClientRect().top + 8)}px`;
+    if (!composer) return;
+    if (defer === true) {
+        if (continuationLayoutFrame) cancelAnimationFrame(continuationLayoutFrame);
+        continuationLayoutFrame = requestAnimationFrame(() => {
+            continuationLayoutFrame = 0;
+            positionContinuationControl();
+        });
+        return;
+    }
+    trigger.style.bottom = `${Math.max(0, window.innerHeight - composer.getBoundingClientRect().top + 8)}px`;
 }
-window.addEventListener('resize', positionContinuationControl);
+
+function installContinuationControlLayout() {
+    continuationLayoutObserver?.disconnect();
+    continuationLayoutObserver = undefined;
+    window.removeEventListener('resize', positionContinuationControl);
+    if (continuationLayoutFrame) cancelAnimationFrame(continuationLayoutFrame);
+    continuationLayoutFrame = 0;
+    const trigger = document.querySelector('#homer-continuation-trigger');
+    if (!trigger || trigger.hidden || document.body.classList.contains('homer-runtime')) return;
+    const composer = document.querySelector('#send_form');
+    if (!composer) return;
+    continuationLayoutObserver = new ResizeObserver(positionContinuationControl);
+    continuationLayoutObserver.observe(composer);
+    window.addEventListener('resize', positionContinuationControl);
+    positionContinuationControl(true);
+}
 
 function buildContinuationControls() {
     const controls = createElement('div');
     const trigger = createElement('button', 'homer-continuation-trigger');
     trigger.id = 'homer-continuation-trigger'; trigger.type = 'button'; trigger.setAttribute('aria-label', '生成操作');
+    trigger.hidden = document.body.classList.contains('homer-runtime');
     trigger.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 8 5 4-5 4Zm6 0 5 4-5 4Z" fill="currentColor" stroke="none"/></svg>';
     const dialog = createElement('dialog', 'homer-site-dialog'); dialog.id = 'homer-generation-dialog'; dialog.setAttribute('aria-label', '生成操作');
     const surface = createElement('section', 'homer-site-dialog__surface homer-generation-options');
@@ -4688,12 +6075,53 @@ function bindComposerAttachmentButton() {
     }, { capture: true });
 }
 
+let historyCoverLoader = null;
+let historyCoverList = null;
+
+function disposeHistoryCoverLoader() {
+    historyCoverLoader?.dispose();
+    historyCoverLoader = null;
+    historyCoverList = null;
+}
+
+function historyCoversFor(historyList) {
+    if (historyCoverList !== historyList) disposeHistoryCoverLoader();
+    if (!historyCoverLoader) {
+        historyCoverList = historyList;
+        const owner = storageOwner;
+        const epoch = storageAccountEpoch;
+        const appId = String(launch?.app_id || '');
+        const conversationId = String(launch?.conversation_id || '');
+        historyCoverLoader = createDeferredListCovers({
+            list: historyList,
+            isOpen: () => {
+                const root = historyList.closest('#homer-runtime-root');
+                const drawer = historyList.closest('#homer-left-drawer');
+                // Image visibility is presentation-only. Keep a late observer
+                // tied to the actual live root/scope without reading an account
+                // bridge for every avatar or altering authentication state.
+                return historyList.isConnected && root === document.querySelector('#homer-runtime-root')
+                    && drawer?.classList.contains('is-open') && drawer.getAttribute('aria-hidden') === 'false'
+                    && Boolean(owner) && owner === storageOwner && epoch === storageAccountEpoch
+                    && owner === String(session?.user?.id || session?.user?.user_id || '')
+                    && appId === String(launch?.app_id || '') && conversationId === String(launch?.conversation_id || '');
+            },
+            setCover: (node, url) => {
+                node.style.backgroundImage = url ? `url("${url.replaceAll('"', '%22')}")` : '';
+            },
+        });
+    }
+    return historyCoverLoader;
+}
+
 function populateHistoryList(historyCount, historyList) {
     if (!(historyCount instanceof HTMLElement) || !(historyList instanceof HTMLElement)) {
         return;
     }
     historyCount.textContent = String(runtimeUiData.conversations.length);
     historyList.replaceChildren();
+    const coverLoader = historyCoversFor(historyList);
+    const covers = [];
     for (const conversation of runtimeUiData.conversations) {
         const item = createElement('div', 'homer-history-item');
         item.dataset.conversationId = String(conversation?.id || conversation?.conversation_id || '');
@@ -4705,7 +6133,8 @@ function populateHistoryList(historyCount, historyList) {
         const avatar = createElement('span', 'homer-history-item__avatar');
         const avatarUrl = siteAssetUrl(conversation?.app_icon)
             || siteUrl('/assets/img/apk/avatar.webp?v=20260831-silvercat-v1');
-        avatar.style.backgroundImage = `url("${avatarUrl.replaceAll('"', '%22')}")`;
+        coverLoader.set(avatar, avatarUrl);
+        covers.push(avatar);
         const copy = createElement('span', 'homer-history-item__copy');
         const itemHead = createElement('span', 'homer-history-item__head');
         itemHead.append(
@@ -4733,9 +6162,31 @@ function populateHistoryList(historyCount, historyList) {
     if (!historyList.children.length) {
         historyList.append(createElement('div', 'homer-empty', '还没有历史会话'));
     }
+    coverLoader.retain(covers);
+}
+
+let runtimeBackHandler = null;
+function installRuntimeBackHandler() {
+    if (window.HomerCloseOverlay === runtimeBackHandler && runtimeBackHandler) return;
+    const previousCloseOverlay = window.HomerCloseOverlay;
+    runtimeBackHandler = () => {
+        if (typeof previousCloseOverlay === 'function' && previousCloseOverlay()) return true;
+        if ([...document.querySelectorAll('dialog[open]')].some(el => el.getClientRects().length)) return false;
+        if (closeCardStageOverlay()) return true;
+        const root = document.querySelector('#homer-runtime-root');
+        const panel = root?.querySelector('#homer-preset-panel');
+        if (panel && !panel.hidden) { setPanelOpen(false); return true; }
+        if (root?.querySelector('.homer-chat-drawer.is-open, #homer-left-drawer.is-open, #homer-right-drawer.is-open')) {
+            setDrawerOpen(); return true;
+        }
+        return false;
+    };
+    window.HomerCloseOverlay = runtimeBackHandler;
 }
 
 function buildRuntimeUi() {
+    installHostOverlayTracking();
+    void prepareTavoConversationUi().catch(() => {});
     document.documentElement.classList.toggle('homer-admin-preview', Boolean(launch?.admin_preview));
     installMemoryUi();
     try { document.documentElement.toggleAttribute('data-homer-dark', localStorage.getItem('ai_xingyue_shell_theme') === 'dark'); } catch {}
@@ -4756,6 +6207,7 @@ function buildRuntimeUi() {
     const sameCard = previousRoot?.dataset.appId === String(launch?.app_id || '');
     const previousDrawer = sameCard && previousRoot?.querySelector('#homer-right-drawer.is-open') ? 'right'
         : sameCard && previousRoot?.querySelector('#homer-left-drawer.is-open') ? 'left' : '';
+    disposeHistoryCoverLoader();
     previousRoot?.remove();
     const root = createElement('div', 'homer-runtime-root');
     root.id = 'homer-runtime-root';
@@ -4948,7 +6400,7 @@ function buildRuntimeUi() {
             }
         }
     } else settingList.append(modelButton, presetButton, memoryButton, modButton);
-    const appearance = bindChatAppearance(() => ({ owner: session?.user?.id || session?.user?.user_id, conversation: launch?.conversation_id }));
+    const appearance = chatAppearance = bindChatAppearance(() => ({ owner: session?.user?.id || session?.user?.user_id, conversation: launch?.conversation_id }));
     const shortcuts = createElement('nav', 'homer-chat-shortcuts');
     shortcuts.setAttribute('aria-label', '对话快捷操作');
     for (const [action, label, icon] of [['appearance', '界面设置', 'fa-palette'], ['stats', '统计', 'fa-chart-simple'], ['search', '搜索', 'fa-magnifying-glass']]) {
@@ -5074,24 +6526,10 @@ function buildRuntimeUi() {
     });
     document.body.append(root);
     // The native Back contract must include custom panels, not only HTML dialogs.
-    const previousCloseOverlay = window.HomerCloseOverlay;
-    window.HomerCloseOverlay = () => {
-        if (typeof previousCloseOverlay === 'function' && previousCloseOverlay()) return true;
-        // Preserve the top modal's cancellation behavior before touching its parent.
-        if ([...document.querySelectorAll('dialog[open]')].some(el => el.getClientRects().length)) return false;
-        if (!panel.hidden) { setPanelOpen(false); return true; }
-        if (root.querySelector('.homer-chat-drawer.is-open, #homer-left-drawer.is-open, #homer-right-drawer.is-open')) {
-            setDrawerOpen(); return true;
-        }
-        return false;
-    };
+    installRuntimeBackHandler();
     // The runtime form shell may fill the viewport; anchor to the actual input
-    // form's geometry rather than the shell's percentage height.
-    continuationLayoutObserver?.disconnect();
-    continuationLayoutObserver = new ResizeObserver(positionContinuationControl);
-    const composerForm = document.querySelector('#send_form');
-    if (composerForm) continuationLayoutObserver.observe(composerForm);
-    requestAnimationFrame(positionContinuationControl);
+    // form's geometry only when a host actually exposes the floating control.
+    installContinuationControlLayout();
     bindComposerAttachmentButton();
     renderPresetLists();
     flushHostNotices();
@@ -5137,10 +6575,13 @@ async function startNewConversation() {
     } finally {
         loadingLaunch = false;
         document.body.classList.remove('homer-switching-chat');
+        queueMessageMenuRender();
     }
 }
 
-async function switchConversation(conversation) {
+async function switchConversation(conversation, bootstrapToken = '') {
+    const bootstrapAcknowledgement = normalizeBootstrapToken(bootstrapToken)
+        ? { bootstrap_token: bootstrapToken } : {};
     const targetConversationId = String(conversation?.id || conversation?.conversation_id || '').trim();
     const targetAppId = String(conversation?.app_id || '').trim();
     if (!targetConversationId || !targetAppId) {
@@ -5153,7 +6594,11 @@ async function switchConversation(conversation) {
     }
     if (loadingLaunch || adminBinding || generationBusy || rollbackBusy) {
         showHostNotice(rollbackBusy ? '当前消息保存后才能切换会话' : generationBusy ? '回复生成完成后才能切换会话' : '会话正在切换，请稍候', 'warning');
-        if (!loadingLaunch) notifyHostConversation('conversation-switch-failed');
+        if (!loadingLaunch) notifyHostConversation('conversation-switch-failed', {
+            failed_app_id: targetAppId,
+            failed_conversation_id: targetConversationId,
+            ...bootstrapAcknowledgement,
+        });
         return;
     }
 
@@ -5169,6 +6614,14 @@ async function switchConversation(conversation) {
         extensionSettings: cloneJsonObject(extension_settings),
         extensionSettingsScope: lastExtensionSettingsScope,
         extensionSettingsSignature: lastExtensionSettingsSignature,
+        conversationExtensionSettings,
+        reaffirmExtensionSettingsAfterReady,
+        officialRegexState,
+        displayRules: officialDisplayRules().map(rule => ({ ...rule })),
+        owner: reconcileStorageAccount(),
+        epoch: storageAccountEpoch,
+        canonical: null,
+        configurationChanged: false,
     };
     retainScopeDraft();
     loadingLaunch = true;
@@ -5177,26 +6630,55 @@ async function switchConversation(conversation) {
     setDrawerOpen();
     notifyHostLoading('正在切换历史会话…');
     notifyHost('conversation-switching', {
+        admin_preview: false,
         app_id: targetAppId.slice(0, 160),
         conversation_id: targetConversationId.slice(0, 160),
+        from_app_id: String(previous.launch?.app_id || '').slice(0, 160),
+        from_conversation_id: String(previous.launch?.conversation_id || '').slice(0, 160),
         role_name: String(conversation?.app_name || conversation?.title || '角色对话').slice(0, 120),
     });
     try {
+        assertCanonicalConversationScope();
         const currentAppId = String(launch?.app_id || '');
         const currentConversationId = String(launch?.conversation_id || '');
         const sameCharacterCard = currentAppId === targetAppId;
-        const [, , nextSession] = await Promise.all([
-            flushExtensionSettingsPersist(),
-            syncCloudChat(),
-            takePrefetchedSession(targetAppId, targetConversationId),
+        // Establish the same one-use session row before preparing resources.
+        // Otherwise an uncached click prepares unattached settings and an
+        // arriving prefetch can start a second read for the exact target.
+        const nextSessionWork = takePrefetchedSession(targetAppId, targetConversationId);
+        // Still await the original promise below; this observer only handles
+        // rejection if synchronous resource preparation fails before that await.
+        void nextSessionWork.catch(() => {});
+        const preparedResources = prepareConversationResources(targetAppId, targetConversationId);
+        const runtimeStateRead = preparedResources.state;
+        const modelCatalogRead = preparedResources.models;
+        const [, nextSession] = await Promise.all([
+            commitConversationBeforeSwitch(),
+            nextSessionWork,
         ]);
+        // The durable leave barrier has settled. Capture only chat state,
+        // never source card JSON, before any target activation can clear it.
+        previous.canonical = captureConversationRecovery();
+        assertRecoveryAccount(previous);
         invalidateCachedSession(currentAppId, currentConversationId);
         performance.mark('homer-switch-session');
         if (!nextSession?.launch) {
             throw new Error('没有找到目标历史会话');
         }
+        previous.configurationChanged = true;
         session = nextSession;
         launch = nextSession.launch;
+        const preparedHeader = prepareLaunchMirrorHeader();
+        // Remember the actual previous peer after its durable leave barrier.
+        // The scheduler defers its reads until foreground hydration is ready,
+        // rather than preparing only whichever history rows happen to be first.
+        if (!launch.admin_preview && !previous.launch?.admin_preview) {
+            scheduleSessionPrefetch(previous.launch);
+        }
+        prefetchPersonaAvatarsForConversation({
+            userId: session.user?.id || session.user?.user_id,
+            appId: launch.app_id, conversationId: launch.conversation_id,
+        });
         requestedAppId = targetAppId;
         requestedConversationId = targetConversationId;
         adminConversationDraft = {};
@@ -5207,18 +6689,18 @@ async function switchConversation(conversation) {
         presetSearchQuery = '';
         lastSyncSignature = '';
         setAccessClasses(session?.user);
-        await Promise.all([
-            loadRuntimeState(),
-            loadRuntimeUiData(),
-        ]);
+        const modelCatalogWork = loadRuntimeUiData(modelCatalogRead);
+        await Promise.all([loadRuntimeState(runtimeStateRead, modelCatalogWork, preparedResources.regex), modelCatalogWork]);
+        assertRecoveryAccount(previous);
         performance.mark('homer-switch-hydrated');
         applyConnectionConfiguration();
         // Keep the website-owned shell visible while a large card and its
         // worldbook finish importing into the dialogue engine.
-        buildRuntimeUi();
-        await importLaunchCharacter({ reuseActiveCharacter: sameCharacterCard });
+        await importLaunchCharacter({ reuseActiveCharacter: sameCharacterCard, preparedHeader });
+        assertRecoveryAccount(previous);
         performance.mark('homer-switch-card');
         await loadCloudChat();
+        assertRecoveryAccount(previous);
         performance.mark('homer-switch-cloud');
         buildRuntimeUi();
         installTokenRefresh();
@@ -5232,14 +6714,22 @@ async function switchConversation(conversation) {
             homer_app_id: launch.app_id,
             homer_conversation_id: launch.conversation_id,
         }, '', nextUrl);
-        updateRuntimeStatus('云端已同步', 'online');
+        updateRuntimeStatus(launch.local_pending ? '本机已保存，等待同步' : '云端已同步', launch.local_pending ? 'warning' : 'online');
         reaffirmConversationConnection();
         window.setTimeout(reaffirmConversationConnection, 800);
+        conversationRecoveryBlocked = false;
         document.body.classList.remove('homer-runtime-error');
-        notifyHostConversation();
+        notifyHostConversation('ready', bootstrapAcknowledgement);
         scheduleSessionPrefetch();
+        void replayPendingStorage();
         performance.mark('homer-switch-ready');
     } catch (error) {
+        // Logout/relogin (even the same owner) invalidates this recovery. Never
+        // resurrect an old account session, token, or message snapshot.
+        if (reconcileStorageAccount() !== previous.owner || storageAccountEpoch !== previous.epoch) {
+            blockConversationRecovery(new Error('会话账号已切换，请重新进入'), bootstrapToken);
+            return;
+        }
         session = previous.session;
         launch = previous.launch;
         adminConversationDraft = previous.adminConversationDraft;
@@ -5250,20 +6740,61 @@ async function switchConversation(conversation) {
         runtimeVariables = previous.runtimeVariables;
         presetSearchQuery = previous.presetSearchQuery;
         runtimeUiData = previous.runtimeUiData;
-        replaceExtensionSettings(previous.extensionSettings);
-        await eventSource.emit(event_types.SETTINGS_LOADED);
-        lastExtensionSettingsScope = previous.extensionSettingsScope;
-        lastExtensionSettingsSignature = previous.extensionSettingsSignature;
-        applyConnectionConfiguration();
-        buildRuntimeUi();
-        console.error(`${MODULE_ID}: conversation switch failed`, error);
-        showHostNotice(String(error?.message || '历史会话切换失败'), 'error');
-        // The host exposes its local shell while this switch runs.  Restore the
-        // previous ready runtime immediately if the target cannot be loaded.
-        notifyHostConversation('conversation-switch-failed');
+        const previousSuppressSync = suppressSync;
+        suppressSync = true;
+        try {
+            const restoreSettings = async () => {
+                replaceExtensionSettings(previous.extensionSettings);
+                await eventSource.emit(event_types.SETTINGS_LOADED);
+                assertRecoveryAccount(previous);
+                lastExtensionSettingsScope = previous.extensionSettingsScope;
+                lastExtensionSettingsSignature = previous.extensionSettingsSignature;
+                conversationExtensionSettings = previous.conversationExtensionSettings;
+                reaffirmExtensionSettingsAfterReady = previous.reaffirmExtensionSettingsAfterReady;
+                officialRegexState = setOfficialDisplayRules({
+                    scripts: previous.displayRules, revision: previous.officialRegexState.revision,
+                });
+                officialRegexState = previous.officialRegexState;
+                applyConnectionConfiguration();
+            };
+            if (previous.configurationChanged) {
+                if (!canonicalRecoveryIsUntouched(previous.canonical)) {
+                    await restoreCanonicalConversation(previous.canonical, restoreSettings);
+                } else {
+                    // GET/configuration failure before activation: preserve the
+                    // existing DOM, focused editor, and live card iframes.
+                    await restoreSettings();
+                }
+            }
+            assertRecoveryAccount(previous);
+            assertCanonicalConversationScope();
+            pendingCardScriptCharacter = null;
+            buildRuntimeUi();
+            const restoredUrl = new URL(window.location.href);
+            restoredUrl.searchParams.set('homer_app_id', launch.app_id);
+            restoredUrl.searchParams.set('homer_conversation_id', launch.conversation_id);
+            restoredUrl.searchParams.delete('app_id');
+            restoredUrl.searchParams.delete('conversation_id');
+            restoredUrl.searchParams.delete('conv_id');
+            window.history.replaceState({}, '', restoredUrl);
+            console.error(`${MODULE_ID}: conversation switch failed; previous canonical chat restored`, error);
+            showHostNotice(String(error?.message || '历史会话切换失败'), 'error');
+            notifyHostConversation('conversation-switch-failed', {
+                failed_app_id: targetAppId,
+                failed_conversation_id: targetConversationId,
+                ...bootstrapAcknowledgement,
+            });
+        } catch (recoveryError) {
+            // No false ready/state event: the canonical state is unavailable.
+            blockConversationRecovery(recoveryError, bootstrapToken);
+            console.error(`${MODULE_ID}: previous conversation recovery failed`, recoveryError);
+        } finally {
+            suppressSync = previousSuppressSync;
+        }
     } finally {
         loadingLaunch = false;
         document.body.classList.remove('homer-switching-chat');
+        queueMessageMenuRender();
     }
 }
 
@@ -5342,7 +6873,9 @@ function installEventHandlers() {
     }
     eventSource.on(event_types.CHAT_COMPLETION_SETTINGS_READY, async data => {
         if (!launch) return;
+        assertCanonicalConversationScope();
         await refreshOfficialRegex(String(data.model || ''));
+        assertCanonicalConversationScope();
         // Per-request only: never persist private admin drafts into account settings.
         if (launch.admin_preview) data.custom_include_body = JSON.stringify({ homer_preview: adminConversationDraft });
     });
@@ -5412,7 +6945,9 @@ function installEventHandlers() {
                     const recovered = await recoverFailedGeneration(snapshot);
                     renderDiagnosticButtons();
                     if (!recovered) {
-                        scheduleSync(100);
+                        window.clearTimeout(syncTimer);
+                        syncTimer = null;
+                        await syncCloudChat({ localOnly: true });
                     }
                 } catch (error) {
                     console.error(`${MODULE_ID}: failed generation recovery did not complete`, error);
@@ -5441,14 +6976,25 @@ function installEventHandlers() {
         });
     });
     window.addEventListener('online', refreshBridgeToken);
+    window.addEventListener('online', () => { void replayPendingStorage(); });
     window.addEventListener('pagehide', () => {
+        // Stop delayed visibility work, retaining image registration for a
+        // possible back/forward document restore. Root replacement disposes it.
+        historyCoverLoader?.close();
         window.clearTimeout(sessionPrefetchTimer);
+        sessionPrefetchTimer = null;
         sessionPrefetchCache.clear();
+        sessionPrefetchPeer = null;
+        window.clearTimeout(syncTimer);
+        syncTimer = null;
+        // Do not send oversized histories through the 64-KiB keepalive quota.
+        // Generation completion already awaits the ordinary storage ACK.
+        void syncCloudChat({ keepaliveOnly: true });
         void flushExtensionSettingsPersist({ force: true, keepalive: true }).catch(() => {});
     });
 }
 
-async function bootstrapLaunch(preloadedSession = null, administratorExtensionsPromise = Promise.resolve()) {
+async function bootstrapLaunch(preloadedSession = null, administratorExtensionsPromise = Promise.resolve(), bootstrapToken = '', preparedResources = null) {
     if (loadingLaunch || !requestedAppId) {
         if (!requestedAppId) {
             failRuntimeGate(new Error('缺少角色会话参数，请从惑梦角色页重新进入。'));
@@ -5456,6 +7002,9 @@ async function bootstrapLaunch(preloadedSession = null, administratorExtensionsP
         return;
     }
     loadingLaunch = true;
+    // Direct/legacy entry may not have a shared prewarm document. Start the
+    // same optional byte preparation beside hydration; never await a hint.
+    preloadStaticDialogueUi();
     performance.mark('homer-bootstrap-start');
     performance.mark('homer-session-start');
     notifyHostLoading('正在同步当前会话…');
@@ -5468,6 +7017,12 @@ async function bootstrapLaunch(preloadedSession = null, administratorExtensionsP
             throw new Error('没有可启动的角色会话');
         }
         launch = session.launch;
+        const initialCharacterRead = prepareInitialCharacterRead(preparedResources?.character);
+        const preparedHeader = prepareLaunchMirrorHeader(preparedResources?.character);
+        prefetchPersonaAvatarsForConversation({
+            userId: session.user?.id || session.user?.user_id,
+            appId: launch.app_id, conversationId: launch.conversation_id,
+        });
         setRuntimeGate('正在恢复配置', '同步模型、预设、扩展与当前对话设置…');
         notifyHostLoading('正在读取角色卡配置…');
         const startupData = launch.admin_preview && session.adminStartupData;
@@ -5480,7 +7035,8 @@ async function bootstrapLaunch(preloadedSession = null, administratorExtensionsP
             officialRegexState = setOfficialDisplayRules(startupData.config.display_regex);
             void loadConversationMods();
         } else {
-            await Promise.all([loadRuntimeState(), loadRuntimeUiData()]);
+            const modelCatalogWork = loadRuntimeUiData(preparedResources?.models);
+            await Promise.all([loadRuntimeState(preparedResources?.state, modelCatalogWork, preparedResources?.regex), modelCatalogWork]);
         }
         performance.mark('homer-bootstrap-hydrated');
         applyConnectionConfiguration();
@@ -5500,7 +7056,7 @@ async function bootstrapLaunch(preloadedSession = null, administratorExtensionsP
         // Extensions that attach APP_READY-time listeners receive an explicit
         // state replay below once that non-critical initialization completes.
         performance.mark('homer-bootstrap-core-ready');
-        await importLaunchCharacter({ reuseActiveCharacter: true });
+        await importLaunchCharacter({ reuseActiveCharacter: true, initialRead: initialCharacterRead, preparedHeader });
         performance.mark('homer-card-ready');
         setRuntimeGate('正在恢复对话', '载入云端消息并校准候选回复…');
         performance.mark('homer-bootstrap-card-imported');
@@ -5508,15 +7064,12 @@ async function bootstrapLaunch(preloadedSession = null, administratorExtensionsP
         const needsApplicationReadyReplay = !applicationReady;
         await loadCloudChat();
         performance.mark('homer-bootstrap-cloud-loaded');
-        if (launch.admin_preview) {
-            // Preview messages have no saved per-chat shell metadata. The shell
-            // already has this launch's configuration; retain its dialog DOM.
-            renderPresetLists(presetSearchQuery);
-            queueMessageMenuRender();
-        } else {
-            buildRuntimeUi();
-        }
+        // The same launch's shell is already mounted. Hydrate its lists in
+        // place rather than reconstructing every dialog after message load.
+        renderPresetLists(presetSearchQuery);
+        queueMessageMenuRender();
         installEventHandlers();
+        await installTavoConversationUi();
         installMessageMenu();
         installTokenRefresh();
         // Native startup may normalize the API selectors after the early
@@ -5531,15 +7084,16 @@ async function bootstrapLaunch(preloadedSession = null, administratorExtensionsP
         cleanUrl.searchParams.delete('conversation_id');
         cleanUrl.searchParams.delete('conv_id');
         window.history.replaceState({}, '', cleanUrl);
-        updateRuntimeStatus('云端已同步', 'online');
+        updateRuntimeStatus(launch.local_pending ? '本机已保存，等待同步' : '云端已同步', launch.local_pending ? 'warning' : 'online');
         reaffirmConversationConnection();
         window.setTimeout(reaffirmConversationConnection, 800);
         setRuntimeGate('梦境已就绪', '正在呈现完整对话界面…');
         await releaseRuntimeGate();
         document.documentElement.classList.add('homer-runtime-ready');
-        requestAnimationFrame(positionContinuationControl);
+        positionContinuationControl(true);
         performance.mark('homer-bootstrap-ready');
-        notifyHostConversation();
+        notifyHostConversation('ready', normalizeBootstrapToken(bootstrapToken) ? { bootstrap_token: bootstrapToken } : {});
+        void replayPendingStorage();
         if (needsApplicationReadyReplay) {
             const replayLaunch = launch;
             void applicationReadyPromise.then(async () => {
@@ -5565,9 +7119,11 @@ async function bootstrapLaunch(preloadedSession = null, administratorExtensionsP
         document.body.classList.add('homer-runtime-error');
         failRuntimeGate(error);
         showHostNotice(String(error?.message || '对话模块启动失败'), 'error');
-        notifyHostError();
+        notifyHostError(bootstrapToken);
     } finally {
         loadingLaunch = false;
+        tavoComposer?.refresh();
+        queueMessageMenuRender();
     }
 }
 
@@ -5583,8 +7139,17 @@ async function startHomerBridge() {
     if (prewarmOnly) {
         performance.mark('homer-bind-start');
     }
+    // Selection is now explicit. Start authorized read-only configuration
+    // beside the session transfer, but do not apply it or execute the card
+    // until fetchSession verifies this exact owner and launch below.
+    const preparedResources = requestedAppId && requestedConversationId && !adminPreviewRequested
+        && reconcileStorageAccount() ? prepareConversationResources(requestedAppId, requestedConversationId) : null;
+    const selectedRead = prewarmOnly && !adminPreviewRequested && requestedAppId && requestedConversationId
+        && sessionPrefetchCache.get(sessionCacheKey(requestedAppId, requestedConversationId));
     const launchSessionPromise = requestedAppId
-        ? (launchSessionPreloadPromise ||= fetchSession(requestedAppId, requestedConversationId, adminPreviewRequested))
+        ? (launchSessionPreloadPromise ||= selectedRead
+            ? takePrefetchedSession(requestedAppId, requestedConversationId)
+            : fetchSession(requestedAppId, requestedConversationId, adminPreviewRequested))
         : fetchSession('', '', adminPreviewRequested);
     const administratorExtensionsPromise = prewarmBootstrapPromise || ensureAdministratorExtensions();
     try {
@@ -5595,11 +7160,11 @@ async function startHomerBridge() {
         installPresentationModeBridge();
         installRoleplayHubCompatibility();
         installCardStageRuntime();
-        await bootstrapLaunch(launchSession, administratorExtensionsPromise);
+        await bootstrapLaunch(launchSession, administratorExtensionsPromise, boundBootstrapToken, preparedResources);
     } catch (error) {
         console.error(`${MODULE_ID}: launch bootstrap failed`, error);
         failRuntimeGate(error);
-        notifyHostError();
+        notifyHostError(boundBootstrapToken);
     }
 }
 
@@ -5608,7 +7173,9 @@ export async function init() {
         return;
     }
     initialized = true;
-    if (prewarmOnly) notifyHost('bridge-available');
+    if (prewarmOnly) notifyHost('bridge-available', hostBootstrapEngineToken ? {
+        engine_token: hostBootstrapEngineToken, document_token: hostBootstrapDocumentToken,
+    } : {});
     installProductSurfaceBoundary();
     installEmbeddedComposerPolicy();
     notifyHostLoading('正在准备对话…');
@@ -5631,7 +7198,9 @@ export async function init() {
             // Prepare the engine, not a user's previous card. No session is
             // opened, no card script runs, and no generation is requested.
             beginSharedPrewarm();
-            notifyHost('core-ready');
+            notifyHost('core-ready', hostBootstrapEngineToken ? {
+                engine_token: hostBootstrapEngineToken, document_token: hostBootstrapDocumentToken,
+            } : {});
             return;
         }
         if (bridgeStartScheduled) {
@@ -5668,6 +7237,7 @@ export async function init() {
         reaffirmExtensionSettingsAfterReady = false;
         postApplicationReadyWork = (async () => {
             replaceExtensionSettings(conversationExtensionSettings);
+            reaffirmSelectedCardCapabilities();
             await eventSource.emit(event_types.SETTINGS_LOADED);
             const snapshot = extensionSettingsSnapshot();
             lastExtensionSettingsScope = extensionSettingsScope();

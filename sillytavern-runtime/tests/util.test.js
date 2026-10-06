@@ -9,6 +9,7 @@ function createMockExpressResponse() {
     const response = new PassThrough();
     response.statusCode = 200;
     response.statusMessage = '';
+    response.setHeader = jest.fn();
 
     return response;
 }

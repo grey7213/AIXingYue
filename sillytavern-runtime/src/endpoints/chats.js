@@ -525,6 +525,8 @@ router.post('/get', validateAvatarUrlMiddleware, async function (request, respon
 
         //if no chat dir for the character is found, make one with the character name
         if (!chatDirExists) {
+            // Optional header preparation must not create an unselected chat mirror.
+            if (request.body.metadata_only === true) return response.send({});
             fs.mkdirSync(directoryPath);
             return response.send({});
         }

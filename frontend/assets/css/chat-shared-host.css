@@ -1,0 +1,28 @@
+/* A single app-owned toolbar/composer stays mounted before and after binding.
+   The engine owns live message DOM and card scripts; it never owns this chrome. */
+body.has-preview .launcher{background:transparent!important}
+body.is-ready .launcher{opacity:1;visibility:visible;pointer-events:none;transition:none}
+body.is-ready .conversation-preview,body.is-ready .preview-stage{background:transparent!important;box-shadow:none!important;pointer-events:none}
+body.is-ready .preview-messages{visibility:hidden;pointer-events:none}
+body.is-ready .preview-header,body.is-ready #shared-composer,
+body.is-ready :is(.preview-sidebar,.preview-settings-drawer,.preview-scrim,.preview-toast,.preview-network-banner){pointer-events:auto}
+body.is-ready .dialogue-frame{opacity:1;transition:none}
+body.is-ready.has-runtime-overlay :is(.preview-header,#shared-composer){visibility:hidden!important;pointer-events:none!important}
+body.has-preview #preview-composer[hidden]{display:none!important}
+body.has-preview .preview-generation-row{display:none!important}
+body.has-preview .preview-stage{display:grid!important;grid-template-rows:calc(48px + env(safe-area-inset-top)) minmax(0,1fr) auto!important}
+body.has-preview .preview-network-banner{position:absolute}
+#shared-composer{position:relative;z-index:5;background:transparent;padding:8px 10px max(12px,env(safe-area-inset-bottom))}
+body.has-preview .preview-messages{padding:10px 10px 20px!important}
+body.has-preview.homer-tavo-ui .preview-message.preview-message{display:block!important;width:100%!important;max-width:none!important;padding:0!important;border:0!important;background:transparent!important;box-shadow:none!important;margin:0 0 10px!important;border-radius:0!important;align-self:stretch!important;white-space:normal}
+body.has-preview.homer-tavo-ui .preview-message .mes_text{padding:0!important;margin:0!important;font-size:15px!important;line-height:1.45!important;min-height:0!important;color:inherit!important;text-shadow:none!important;white-space:pre-wrap}
+body.has-preview .conversation-preview{width:100%!important;max-width:none!important}
+body.is-ready :is(.preview-message-actions,.homer-chat-tool){pointer-events:auto}
+/* The shared app dialog defaults are inset cards. The original composer has
+   a true full-screen editor, so this one deliberately overrides those defaults. */
+dialog.homer-composer-editor.homer-composer-editor{position:fixed;inset:0!important;box-sizing:border-box;width:100vw!important;height:100vh;height:100dvh;max-width:none!important;max-height:none!important;margin:0!important;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)!important;border:0!important;border-radius:0!important;background:var(--chat-panel,#fff)!important;color:var(--chat-text,#292432)!important}
+.homer-composer-editor[open]{display:flex;flex-direction:column}
+.homer-composer-editor header{display:flex;align-items:center;justify-content:space-between;min-height:56px;padding:0 16px;border-bottom:1px solid var(--chat-line,#ddd)}
+.homer-composer-editor h2{margin:0;font:600 17px system-ui}
+.homer-composer-editor button{min-width:64px;min-height:44px;border:0;background:transparent;color:var(--chat-accent,#29485f);font:600 15px system-ui}
+.homer-composer-editor textarea{flex:1;min-height:0;width:100%;box-sizing:border-box;resize:none;border:0;outline:none;padding:20px;background:transparent;color:inherit;font:16px/1.5 system-ui}

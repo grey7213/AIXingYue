@@ -1,0 +1,2 @@
+# Preserve the verified surgical bundle's non-target bytes on every platform.
+index.js -text
