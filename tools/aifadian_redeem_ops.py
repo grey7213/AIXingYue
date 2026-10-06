@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BASE_URL = "https://patcher.villainy.top"
 DEFAULT_PURCHASE_URL = "https://ifdian.net/a/villainy"
 DEFAULT_SSH_KEY = r"C:\Users\86180\.ssh\villainy_backup_ed25519"
-DEFAULT_SSH_HOST = "root@45.207.192.148"
+DEFAULT_SSH_HOST = "root@160.202.46.157"
 DEFAULT_REMOTE_DB = "/opt/ai-fengyue-backend/data/ai_fengyue.sqlite3"
 DEFAULT_ADMIN_EMAIL = "local@ctf.test"
 

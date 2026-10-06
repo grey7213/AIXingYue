@@ -34,9 +34,12 @@
 
 ## Codebase Map
 
+- 2026-10-07 起正式运维目标统一为 `160.202.46.157`（Ubuntu 22.04，hostname `ser0YeymdcIz0pT`），SSH 使用原 `villainy_backup_ed25519` 公钥。`38.76.218.46` 已被用户弃用；它在本次备份中途失联，用户明确授权从本地旧备份恢复，不能再把旧 IP 当作当前目标。域名保持不变。迁移规范与验收：`specs/server-migration-20261007-*.md`；完整报告与私有证据 `E:/server-backups/server-20261007/`。
+- 本次恢复来源：惑梦与其他项目采用 2026-10-02 整机分项目备份；Sub2API 采用同日 14:10 更晚的独立备份（0.2.11）；非遗采用本地已验证的 10-02 手机样式、10-05 Logo 及用户授权的本地状态回退。12 个业务容器运行、9 个容器健康、8 个服务 active、16 个 HTTP 检查 200、11 个域名解析到新 IP；惑梦独立复核 35/35。未声称恢复旧机关闭前未备份的新数据。
+
 - 验证码邮件由 `tools/ai_fengyue_local_server.py::build_verification_email` 统一生成中英文注册/重置的 HTML 与纯文本，`send_verification_email` 复用原 Resend/SMTP 链路；本地验证用 `D:\Anconda3\python.exe tools/_selftest_verification_email.py`。品牌以生产 `APP_BRAND` 和 `SMTP_FROM` 的显示名称为准，二者应为“惑梦（Homer）”。说明见 `specs/verification-email-design-20261002.md`。
 
-- 生产备份使用 `tools/backup_homer_production.py` 和 `tools/verify_homer_backup.py`，本地放仓库外 `E:\homer-backups\`。2026-09-07 DNS/SSH 实测生产机为 `38.76.218.46`，不要沿用旧技能正文里的历史 IP。
+- 生产备份使用 `tools/backup_homer_production.py` 和 `tools/verify_homer_backup.py`，本地放仓库外 `E:\homer-backups\`。工具默认目标已改为 `160.202.46.157`；`38.76.218.46` 和 `45.207.192.148` 只保留作历史来源，不再用于新运维。
 - 2026-10-02 整机分项目备份与清理已验证：惑梦新恢复点为本地 `E:\homer-backups\homer-prod-20261002-102454\` 与服务器同名 `/opt/homer-backups/` 子目录；其他项目和公共配置放本地 `E:\server-backups\server-20261002\` 与服务器 `/opt/server-backups/server-20261002/`，各项目附映射和恢复说明。32 个归档共 2.71 GiB，哈希/解压通过，三个 SQL 服务完成隔离恢复。旧备份/旧 release/未用镜像及缓存清理后净释放 18.09 GiB，12 个业务容器身份与启动时间未变。详见 `specs/cloud-backup-cleanup-20261002.md`。这是一次性清理，既有部署/定时任务仍可能生成新恢复点。
 - 2026-09-07 旧恢复点仍保留在本地 `E:\homer-backups\homer-prod-20260907-150635\`（另有同名 ZIP）；该次服务器副本及旧后端/对话备份已由 2026-10-02 新完整恢复点替代并清理。历史证据见 `specs/homer-backup-cleanup-20260907-tasks.md`。再次清理仍必须先验证本地完整备份、服务器保留包和精确清单；业务库/WAL、用户对话、当前 release、独有导入/安全材料不能按垃圾删除。晚于全量快照新生成的数据库备份须保留或补充下载。
 - 原生 Android 源码真源为独立仓库 `E:\homer-android`（`grey7213/homer-android`），入口 `android-app/app/src/main/java/org/nebula/horizon/composeai/ctf/HomerActivity.java`。本仓库提供 Web/backend 真源；原生仓库 `web-base.json` 固定对应的 Web 快照。正式 APK 发布使用 `tools/publish_homer_apk.py`，成品同时放官网与 `grey7213/homer-android-apk` Releases。
@@ -82,6 +85,26 @@
   Cause: 累计补丁误删仍被静态 import 的 `spine-portrait.mjs` 及其运行库/许可证；枚举当前目录无法检测源文件也被删除。
   Fix: 移除三项删除补丁，原生 APK 校验器新增独立必需依赖清单；累计三方合并还需检查重复函数/路由和生成文件一致性。
   Verify: 原 APK 在新校验器下失败；修复后的 APK 1755 项校验通过，Pixel 6 真实 WebView 导入成功，三项资源均从 APK 返回 200。发布状态见 `specs/pr19-integration-20261007.md`。
+
+- Symptom: 非遗备份显示有 `/var/lib/feiyi-portal`，解压后却没有 JSON、密钥或上传文件。
+  Cause: systemd `DynamicUser` 的 StateDirectory 是指向 `/var/lib/private/feiyi-portal` 的符号链接；旧 tar 只存了链接。
+  Fix: 备份必须包含解析后的真实目录，并检查至少 settings.json/settings.key/portal.json 等实际成员。本次经用户明确授权，采用本地 `output/private-portal-data` 回退，且把新机真实目录另存补充恢复包；它不是旧生产快照。
+  Verify: 新机前后台桌面/390px 均 200、新 Logo 加载、无横向溢出；补充包 `/opt/server-backups/recovered-20261007/feiyi-private-state.tar.zst` 实际包含私有状态。
+
+- Symptom: MariaDB 全库恢复后业务表正常，容器 healthcheck 却持续 Access denied。
+  Cause: 逻辑恢复覆盖了旧 healthcheck 账号密码，但新数据目录 `.my-healthcheck.cnf` 仍保存初始化时的新密码。
+  Fix: 读取新机 healthcheck 配置，只同步已有本地 healthcheck 账号的密码，保留业务账号及权限；不输出密码。
+  Verify: 官方 `healthcheck.sh --connect --innodb_initialized` 通过，seafile-mysql healthy，183 张业务表保留。
+
+- Symptom: Grok SQLite 快照完整性正常，启动却报 `attempt to write a readonly database (1544)`。
+  Cause: Docker 首次注册已还原的 named volume 时把 `_data` 根目录所有者改成 root，数据库文件仍为应用 UID 10001，应用无法创建 WAL。
+  Fix: 卷注册后恢复备份对应的目录 UID/GID（本次 10001:10001），不把目录改成全员可写。
+  Verify: Grok 容器 healthy、HTTPS 首页 200；原 SQLite 快照保留。
+
+- Symptom: 纸墨镜像已正确导入，Compose 却寻找 `zhimo:latest`，并新建错误项目名的网络。
+  Cause: 发布使用 `image.env` 固定镜像 tag，并显式设置 Compose 项目名 `zhimo`；直接在目录执行会落到默认值。
+  Fix: 使用 `docker compose --project-name zhimo --env-file image.env up -d --no-build --pull never`。
+  Verify: 恢复原版本镜像后容器 healthy，桌面/390px 页面 200 且无脚本错误。
 
 - Symptom: 已有邮箱点击注册验证码后提示发送成功并倒计时，却始终收不到邮件。
   Cause: 注册发码接口对已存在账号直接返回 200/accepted 而不发邮件，前端把它当成成功；重复注册的错误又只显示短暂 toast。

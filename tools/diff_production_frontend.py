@@ -21,10 +21,10 @@ from pathlib import Path
 import paramiko
 
 REPO = Path(__file__).resolve().parent.parent
-HOST = "38.76.218.46"
+HOST = "160.202.46.157"
 USER = "root"
 KEY = Path.home() / ".ssh" / "villainy_backup_ed25519"
-EXPECTED_HOSTNAME = "vm-851a1bc4a978a80f"
+EXPECTED_HOSTNAME = "ser0YeymdcIz0pT"
 
 WEB_ROOT = "/var/www/ai-fengyue-frontend"
 REMOTE_MAP = {

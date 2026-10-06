@@ -43,11 +43,11 @@ from pathlib import Path
 
 import paramiko
 
-DEFAULT_HOST = "38.76.218.46"
+DEFAULT_HOST = "160.202.46.157"
 DEFAULT_USER = "root"
 DEFAULT_KEY = Path.home() / ".ssh" / "villainy_backup_ed25519"
 DEFAULT_DEST = Path("E:/homer-backups")
-EXPECTED_HOSTNAME = "vm-851a1bc4a978a80f"
+EXPECTED_HOSTNAME = "ser0YeymdcIz0pT"
 
 BACKEND_DIR = "/opt/ai-fengyue-backend"
 LIVE_DB = f"{BACKEND_DIR}/data/ai_fengyue.sqlite3"

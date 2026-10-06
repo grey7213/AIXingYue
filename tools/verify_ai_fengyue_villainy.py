@@ -85,7 +85,7 @@ def assert_result(label: str, status: int, body: dict, expected: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Verify AI Xingyue email registration and recharge flow.")
     parser.add_argument("--base-url", default="https://patcher.villainy.top")
-    parser.add_argument("--host", default="45.207.192.148")
+    parser.add_argument("--host", default="160.202.46.157")
     parser.add_argument("--user", default="root")
     parser.add_argument("--key", type=Path, default=DEFAULT_KEY)
     parser.add_argument("--email", default=None)

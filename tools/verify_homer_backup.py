@@ -20,7 +20,7 @@ from pathlib import Path
 import paramiko
 import zstandard
 
-HOST = "38.76.218.46"
+HOST = "160.202.46.157"
 USER = "root"
 KEY = Path.home() / ".ssh" / "villainy_backup_ed25519"
 LIVE_DB = "/opt/ai-fengyue-backend/data/ai_fengyue.sqlite3"

@@ -1000,7 +1000,7 @@ def upload_dir(sftp: paramiko.SFTPClient, ssh: paramiko.SSHClient, local_dir: Pa
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Deploy AI Xingyue backend to the Villain Y server.")
-    parser.add_argument("--host", default="38.76.218.46")
+    parser.add_argument("--host", default="160.202.46.157")
     parser.add_argument("--user", default="root")
     parser.add_argument("--key", type=Path, default=DEFAULT_KEY)
     parser.add_argument("--deploy-dir", default="/opt/ai-fengyue-backend")
