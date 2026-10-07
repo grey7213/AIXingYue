@@ -4,6 +4,8 @@
 
 ## 当前主要入口
 
+- 2026-10-07 用户数据回档排查：`data-rollback-incident-20261007.md`（确认历史恢复导致缺口、部署前后只读对照、恢复来源与黑屏待核对边界）。
+
 - PR #19 / R353 审查修复与 1.18.0 发布：`pr19-integration-20261007.md`（新机部署、真实生成/切换、正式覆盖升级、官网/GitHub 哈希与更新检查）。
 
 - 2026-10-07 全服务器迁移至 `160.202.46.157`：`server-migration-20261007-requirements.md`、`server-migration-20261007-design.md`、`server-migration-20261007-tasks.md`。旧机已弃用，按用户授权从本地备份恢复；非遗样式/Logo 及本地状态单独补齐。
