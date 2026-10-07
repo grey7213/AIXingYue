@@ -28,6 +28,7 @@ import zlib
 from homer_generation import display_regex, execute_prompt_regex, generation_error, preset_fingerprint, validate_upstream_event, require_generated_text, settle_delivered_generation
 from homer_images import route as image_route, ImageError
 from homer_session_cards import convert_session_card
+from homer_user_backup import handle as handle_user_backup
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
@@ -20259,6 +20260,18 @@ class Handler(BaseHTTPRequestHandler):
     def handle_any(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
+        def check_backup_role(user_id, row):
+            data = dict(row)
+            try:
+                data.update(json.loads(row.get("extra_settings") or "{}"))
+            except (ValueError, TypeError):
+                raise ValueError("invalid role settings")
+            if advanced_creation_requested(data):
+                self.store.require_advanced_creation(user_id)
+        if handle_user_backup(self, path, parsed.query, can_play=user_can_play_app,
+                              normalize_model=normalize_user_selected_llm_model,
+                              check_role=check_backup_role, public_origin=PUBLIC_BASE_URL):
+            return
         if re.fullmatch(r"/console/api/web/card-assets/[^/]+/content", path):
             self.handle_card_asset_content(path)
             return

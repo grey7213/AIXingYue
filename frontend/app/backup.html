@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="/assets/js/theme-bootstrap.js?v=20261001-r34"></script>
+  <title>本地备份 · 惑梦</title>
+  <link rel="stylesheet" href="/app/assets/css/app.css?v=20260917-r8">
+  <link rel="stylesheet" href="/assets/css/app-design.css?v=20260917-r8">
+  <link rel="stylesheet" href="/assets/css/surface-controls.css">
+  <link rel="stylesheet" href="/app/assets/css/backup.css?v=20261007-1">
+  <script type="module" src="/app/assets/js/backup.js?v=20261007-1"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="app-sidebar" data-app-sidebar></aside>
+    <main class="app-main">
+      <header class="app-topbar"><a href="/app/me.html?panel=settings" aria-label="返回设置">‹ 返回设置</a><h1>本地备份</h1></header>
+      <div class="backup-content">
+        <p class="backup-intro">把自己的创作和聊天留一份在设备上。需要时，随时导入恢复。</p>
+        <p id="backup-status" role="status" aria-live="polite">正在确认登录状态…</p>
+        <section class="backup-card" aria-labelledby="download-heading">
+          <span class="backup-eyebrow">保存一份副本</span>
+          <h2 id="download-heading">下载我的备份</h2>
+          <p>包含人设、自己创作的角色与历史版本、云端聊天及候选回复，以及会话设置、变量和记忆。</p>
+          <button class="xy-btn xy-btn-primary" id="backup-download" disabled>下载备份 ZIP</button>
+          <p class="backup-note">独立图片、音频、Spine 文件保留链接引用；尚未同步的设备草稿不在包内。积分、支付、排名和账号权限不参与恢复。备份包含私人聊天，请保存在自己信任的位置。</p>
+          <p class="backup-note" id="backup-download-state"></p>
+        </section>
+        <section class="backup-card" aria-labelledby="restore-heading">
+          <span class="backup-eyebrow">从文件找回内容</span>
+          <h2 id="restore-heading">导入备份</h2>
+          <p>先预览备份内容，再恢复为当前账号的私有副本。现有角色和聊天会保留，相同内容的备份重复导入不会重复创建。</p>
+          <label class="backup-file">选择备份文件<input id="backup-file" type="file" accept=".zip,.json,application/zip,application/json" disabled></label>
+          <p class="backup-note">支持本页下载的惑梦备份 ZIP，或其中的 backup.json，文件不超过 30 MB。</p>
+          <div id="backup-preview" hidden>
+            <p id="backup-filename" class="backup-filename"></p>
+            <p id="backup-time"></p>
+            <dl id="backup-counts" class="backup-counts"></dl>
+            <label class="backup-check"><input id="backup-persona" type="checkbox">同时用备份中的人设替换当前人设</label>
+            <p class="backup-note">原角色已下架或无访问权限时，会保留聊天并创建存档角色；不会恢复他人的私有角色设定。</p>
+            <button class="xy-btn xy-btn-primary" id="backup-restore">确认导入私有副本</button>
+          </div>
+          <p id="backup-result" role="status" aria-live="polite"></p>
+          <a id="backup-history" class="xy-btn xy-btn-ghost" href="/app/histories.html" hidden>查看历史会话</a>
+        </section>
+      </div>
+    </main>
+    <nav class="app-bottom-nav" data-app-bottom-nav></nav>
+  </div>
+</body>
+</html>

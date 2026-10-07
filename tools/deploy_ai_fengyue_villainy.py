@@ -1049,6 +1049,8 @@ def main() -> int:
         ("spine_media_support.py", args.spine_media_support),
         ("homer_generation.py", args.homer_generation),
         ("homer_images.py", args.homer_images),
+        ("homer_session_cards.py", ROOT / "tools" / "homer_session_cards.py"),
+        ("homer_user_backup.py", ROOT / "tools" / "homer_user_backup.py"),
         ("homer_regex.cjs", args.homer_regex),
     ]
     for _, local_path in backend_modules:

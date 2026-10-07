@@ -1,0 +1,21 @@
+body{margin:0}.app-topbar a{text-decoration:none;color:inherit;white-space:nowrap}.app-topbar{gap:16px}
+.backup-content{max-width:760px;margin:0 auto;padding:24px 20px 96px;line-height:1.7}
+.backup-intro{font-size:16px;margin:0 0 16px;color:var(--text-secondary,#666)}
+.backup-card{padding:26px;margin:20px 0;border:1px solid var(--border-color,#e7e2ec);border-radius:20px;background:var(--bg-card,#fff)}
+.backup-card h2{font-size:23px;line-height:1.3;margin:6px 0 14px;font-weight:700}
+.backup-card p{margin:12px 0}.backup-eyebrow{font-size:12px;letter-spacing:.08em;color:var(--text-secondary,#756b7f)}
+.backup-note{font-size:13px;color:var(--text-secondary,#716979)}
+.backup-card .xy-btn{min-height:44px;padding:10px 20px;margin:8px 0;text-decoration:none}
+.backup-file{display:flex;flex-direction:column;gap:10px;font-weight:600;padding:18px;border:1px dashed #a798b6;border-radius:12px}
+.backup-file input{font:inherit;width:100%;min-width:0;font-size:14px}.backup-filename{overflow-wrap:anywhere;font-weight:600}
+.backup-counts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:16px 0}
+.backup-counts div{padding:10px 12px;background:rgba(128,100,159,.08);border-radius:10px}.backup-counts dt{font-size:12px;color:var(--text-secondary,#756b7f)}.backup-counts dd{font-size:24px;margin:0;font-weight:600}
+.backup-check{display:flex;align-items:flex-start;gap:10px;margin:18px 0}.backup-check input{margin-top:7px;width:16px;height:16px;flex-shrink:0}
+#backup-status:empty,#backup-result:empty,#backup-download-state:empty{display:none}
+.backup-error{color:#b52f44!important;background:rgba(196,57,80,.07);border-radius:10px;padding:12px;overflow-wrap:anywhere}
+.backup-success{color:#237142}.backup-card [hidden]{display:none!important}
+html.dark .backup-card,html[data-theme="dark"] .backup-card{background:#211e26;border-color:#3c3545;color:#efeaf5}
+html.dark .backup-note,html[data-theme="dark"] .backup-note{color:#bdb3c8}
+html.dark .backup-intro,html[data-theme="dark"] .backup-intro,html.dark .backup-counts dt,html[data-theme="dark"] .backup-counts dt,html.dark .backup-eyebrow,html[data-theme="dark"] .backup-eyebrow{color:#bdb3c8}
+html.dark .backup-success,html[data-theme="dark"] .backup-success{color:#8bdbad}
+@media(max-width:640px){.backup-content{padding:16px 14px 104px}.backup-card{padding:20px 16px;margin:14px 0;border-radius:16px}.backup-card .xy-btn{width:100%}.backup-counts{grid-template-columns:repeat(2,minmax(0,1fr))}.backup-card h2{font-size:21px}.app-topbar h1{font-size:18px}.app-topbar a{font-size:14px}}

@@ -86,6 +86,7 @@
               <button class="xy-btn xy-btn-primary" @click="savePersona" :disabled="savingPersona">保存人设</button>
             </section>
             <nav class="profile-settings-routes" x-show="panel==='settings'"><a href="/app/me.html?panel=profile">个人资料 <span>›</span></a><a href="/app/me.html?panel=persona">我的人设 <span>›</span></a><a href="/app/me.html?panel=preferences">内容偏好 <span>›</span></a><button type="button" data-shell-action="theme">切换明暗模式 <span>◐</span></button><button type="button" @click="doLogout" class="profile-signout">退出登录</button></nav>
+            <nav class="profile-settings-routes" x-show="panel==='settings'"><a href="/app/backup.html">本地备份 <span>下载与导入 ›</span></a></nav>
             <section class="profile-setting-section profile-account-info" x-show="panel==='settings'"><h3>账户信息</h3><p>注册时间：<span x-text="formatDate(user?.created_at)"></span></p><p>内部 ID：<code x-text="user?.id || '-'"></code></p><p>网页端与 APP 使用同一账号、积分和角色库。</p></section>
           </div>
         </details>
