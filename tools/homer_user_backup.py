@@ -97,7 +97,7 @@ def export_data(store, user_id):
             if user is None:
                 raise BackupError('请先登录', 401)
             payload = {'persona': {'name': user[0] or '', 'description': user[1] or ''}, 'roles': [], 'tables': {}}
-            roles = conn.execute("select * from local_apps where owner_user_id=? and source='user' order by id", (user_id,)).fetchall()
+            roles = conn.execute("select * from local_apps where owner_user_id=? and source='user' and status<>'deleted' order by id", (user_id,)).fetchall()
             for row in roles:
                 role = clean_row(dict(row), ['id', 'current_version_id', 'created_at', 'updated_at'] + ROLE_FIELDS)
                 role['versions'] = []

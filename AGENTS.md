@@ -34,6 +34,8 @@
 
 ## Codebase Map
 
+- 2026-10-07 正式 1.18.1（354），Android PR #20 / `465e2a9`：用户本地备份入口 `/app/backup.html`（我的→设置），后端模块 `tools/homer_user_backup.py` 与主 backend 同批部署。ZIP/JSON 预览和导入只创建当前账号私有副本，人设可选恢复，积分/支付/权限不恢复；独立媒体保留引用。12 项后端回归、真实网页/Pixel 6 文件往返、353→354 覆盖升级及官网/GitHub 哈希通过；详见 `specs/user-backup-20261007/tasks.md`。本轮另存数据库单项备份 `E:/homer-backups/homer-prod-20261007-132412/`，不是媒体/runtime 全量备份。
+
 - 2026-10-07 正式发布 1.18.0（353），Android PR #19 合并 head `5e80a63`；Spine 依赖及注册/工坊隔离修复保留。新机 456 项代码校验、真实生成/切换、Pixel 6 282→353 覆盖升级及应用内更新检查通过，官网/GitHub APK 哈希一致。完整记录 `specs/pr19-integration-20261007.md`。R41 后端仅增量修改三处转换/解析边界并加入 `tools/homer_session_cards.py`，不要再次叠加累计补丁。
 
 - 2026-10-07 起正式运维目标统一为 `160.202.46.157`（Ubuntu 22.04，hostname `ser0YeymdcIz0pT`），SSH 使用原 `villainy_backup_ed25519` 公钥。`38.76.218.46` 已被用户弃用；它在本次备份中途失联，用户明确授权从本地旧备份恢复，不能再把旧 IP 当作当前目标。域名保持不变。迁移规范与验收：`specs/server-migration-20261007-*.md`；完整报告与私有证据 `E:/server-backups/server-20261007/`。
@@ -82,6 +84,11 @@
 - Before committing, check `git status --short` and avoid staging unrelated user changes.
 
 ## Reusable Pitfalls
+
+- Symptom: Web 浏览器能下载 Blob，Android 点击后却没有文件；改为外部浏览器下载又缺少应用登录 Cookie。
+  Cause: 原生 DownloadListener 原本只处理 HTTPS 外链且不共享浏览器登录态。
+  Fix: 备份页通过受限的 `HomerNative.downloadUserBackup()` 调用 DownloadManager，仅请求固定本站备份 URL、携带当前 Cookie；使用带时间的文件名作标题。导入走现有系统文件选择器。
+  Verify: Pixel 6 API 33 实际保存 ZIP、核对 backup.json、从系统选择同一文件并成功导入；桌面/390px 同流程和生产验收通过，详见 `specs/user-backup-20261007/tasks.md`。
 
 - Symptom: R353 累计补丁构建与资源枚举通过，但角色体验模块依赖缺失。
   Cause: 累计补丁误删仍被静态 import 的 `spine-portrait.mjs` 及其运行库/许可证；枚举当前目录无法检测源文件也被删除。

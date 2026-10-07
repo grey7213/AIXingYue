@@ -4,6 +4,8 @@
 
 ## 当前主要入口
 
+- 用户本地备份 / 1.18.1 (354)：`user-backup-20261007/requirements.md`、`user-backup-20261007/design.md`、`user-backup-20261007/tasks.md`（下载、预览、私有副本导入、Android 系统保存与文件选择、生产验收）。
+
 - 2026-10-07 用户数据回档排查：`data-rollback-incident-20261007.md`（确认历史恢复导致缺口、部署前后只读对照、恢复来源与黑屏待核对边界）。
 
 - PR #19 / R353 审查修复与 1.18.0 发布：`pr19-integration-20261007.md`（新机部署、真实生成/切换、正式覆盖升级、官网/GitHub 哈希与更新检查）。

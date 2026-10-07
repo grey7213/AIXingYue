@@ -120,6 +120,13 @@ class UserBackupTests(unittest.TestCase):
         row=backup.clean_row({'extra_settings':json.dumps({'api_key':'no','nested':{'password':'no','value':'yes'}})},backup.ROLE_FIELDS)
         self.assertEqual(json.loads(row['extra_settings']),{'nested':{'value':'yes'}})
 
+    def test_deleted_roles_are_not_exported_as_live_creations(self):
+        self.store.conn.execute("update local_apps set status='deleted' where id=?",(self.role['id'],))
+        self.store.conn.commit()
+        doc=backup.export_data(self.store,'alice')
+        self.assertEqual(doc['payload']['roles'],[])
+        self.assertEqual(len(doc['payload']['tables']['conversations']),1)
+
     def test_export_does_not_truncate_long_chats(self):
         c=self.store.conn
         c.executemany('insert into messages(id,conversation_id,user_id,role,content,created_at) values(?,?,?,?,?,?)',
