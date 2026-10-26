@@ -1,6 +1,6 @@
 r"""把仓库工作区的 frontend / runtime 同步到 APK 构建目录（纯 ASCII 路径）。
 
-构建目录 E:\homer-apk-1140 是从交接 ZIP 抽出来的，落在 HEAD~1；
+历史构建目录现统一放在 E:\HomerWorkspace\build，是从交接 ZIP 抽出来的；
 Gradle 的 syncHomerClientAssets 从它读 frontend/ 与 sillytavern-runtime/，
 所以出包前必须先把仓库的现行版本推过去，否则 APK 内置的是旧前端。
 
@@ -19,7 +19,7 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8")
 
 REPO = Path(r"E:\酒馆开发")
-WORKSPACE = Path(r"E:\homer-apk-1140")
+WORKSPACE = Path(r"E:\HomerWorkspace\build")
 SUBTREES = ("frontend", "sillytavern-runtime/public")
 SKIP_PARTS = ("node_modules", "__pycache__")
 

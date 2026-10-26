@@ -8,6 +8,8 @@
 2. 再读 `specs/README.md`：活动 SPEC、运维 runbook 和历史文档入口。
 3. Web 前端位于 `frontend/`，主后端位于 `tools/ai_fengyue_local_server.py`。
 
+本机 Android 源码、测试工作树、备份和构建统一放在 `E:\HomerWorkspace\`，目录映射见该目录的 `README.md`。新测试工作树使用 `tools\New-HomerWorktree.ps1`，不要在 E 盘根目录另建 `homer-*`。
+
 ## 当前主要模块
 
 - `frontend/app/`：用户 Web App、创作中心、聊天、角色卡、农场与账户页面。

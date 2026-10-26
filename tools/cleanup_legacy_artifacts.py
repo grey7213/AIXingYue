@@ -17,8 +17,8 @@ import sys
 from pathlib import Path
 
 REPO = Path(r"E:\酒馆开发")
-BACKUPS = Path(r"E:\homer-backups")
-BUILD_WS = Path(r"E:\homer-apk-1140")
+BACKUPS = Path(r"E:\HomerWorkspace\backups")
+BUILD_WS = Path(r"E:\HomerWorkspace\build")
 
 # 绝不能删：删了会让工具链或下一次出包直接失败。
 PROTECTED = {

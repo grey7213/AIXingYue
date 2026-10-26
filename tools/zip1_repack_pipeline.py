@@ -24,8 +24,8 @@ INJECT_DEX_DIR = WORK / "inject-build" / "dex"
 INJECT_DEX = INJECT_DEX_DIR / "classes.dex"
 INJECT_JAR = WORK / "inject-build" / "recharge-classes.jar"
 OUT = ROOT / "output" / "zip-1-repack"
-STAGE = Path("E:/z1")
-SRC_ALIAS = Path("E:/a")
+STAGE = Path("E:/HomerWorkspace/legacy-apk/stage")
+SRC_ALIAS = Path("E:/HomerWorkspace/legacy-apk/decoded")
 
 PACKAGE = "org.nebula.horizon.composeai"
 MAIN_ACTIVITY = "org.nebula.horizon.composeai.MainActivity"

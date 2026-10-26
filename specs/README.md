@@ -4,6 +4,8 @@
 
 ## 当前主要入口
 
+- 2026-10-26 E 盘根目录整理与固定工作区：`drive-cleanup-20261026/requirements.md`、`design.md`、`tasks.md`。当前本机路径为 `E:\HomerWorkspace\`，历史记录中的 `E:\homer-*` 不作为新任务的输出目录。
+
 - 用户本地备份 / 1.18.1 (354)：`user-backup-20261007/requirements.md`、`user-backup-20261007/design.md`、`user-backup-20261007/tasks.md`（下载、预览、私有副本导入、Android 系统保存与文件选择、生产验收）。
 
 - 2026-10-07 用户数据回档排查：`data-rollback-incident-20261007.md`（确认历史恢复导致缺口、部署前后只读对照、恢复来源与黑屏待核对边界）。

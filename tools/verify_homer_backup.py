@@ -5,7 +5,7 @@ The backup tool verifies its own work; this script re-checks it from the outside
 comparing archive *contents* against the live server rather than trusting the
 manifest. Run after a backup completes.
 
-  python tools/verify_homer_backup.py E:\\homer-backups\\homer-prod-YYYYmmdd-HHMMSS
+  python tools/verify_homer_backup.py E:\\HomerWorkspace\\backups\\homer-prod-YYYYmmdd-HHMMSS
 """
 import argparse
 import hashlib

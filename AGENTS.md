@@ -69,6 +69,11 @@
 
 ## Artifact Hygiene
 
+- 本机固定工作区为 `E:\HomerWorkspace\`（2026-10-26 整理）。禁止再在 E 盘根目录新建 `homer-*`、`r*-scratch`、APK 测试目录、补丁或一次性脚本。Web/backend 真源仍为本仓库，Android 真源已迁至 `E:\HomerWorkspace\android\`。
+- 新隔离工作树使用 `tools\New-HomerWorktree.ps1 -Name <任务名> -Repository web|android`，统一落在 `E:\HomerWorkspace\worktrees\`；`-WhatIf` 可预览，`-Branch` 可创建工作分支。任务完成后检查 Git 改动和 ignored 资料，再归档或用 `git worktree remove` 清理。
+- 本地生产备份统一在 `E:\HomerWorkspace\backups\`；历史构建工作区在 `build\`；签名交接在 `signing\`；正式包在 `releases\`；旧 CTF/逆向打包的 ASCII 临时目录在 `legacy-apk\`。备份、密钥、运行数据库和未提交改动不能按缓存删除。
+- 旧根目录名称的映射及恢复快照见 `E:\HomerWorkspace\README.md` 与 `archives\2026-10-26\`。下文及历史 SPEC 中的旧路径用于追溯，新命令必须使用当前固定路径；不要重新运行归档内的一次性改码脚本。
+- Android 的 `.web-cache/tree/` 是带本地补丁的嵌套 Git 工作树，即使外层 `git status` 干净也可能含未提交源码；不可因目录名含 cache 就删除。可重建缓存仅按精确清单处理，移动目录后修复 Git worktree 元数据和绝对 Junction。
 - Do not put temporary verification screenshots, one-off data files, browser traces, or throwaway scripts in the project root.
 - `sillytavern-runtime/` 是固定上游/公共扩展快照，根目录 `.gitattributes` 对该目录关闭 whitespace diff 检查；不要为了格式化而批量改写其历史尾随空格或 source map。
 - Put test screenshots under `output/playwright/` or a task-specific `output/<task>/` directory.
@@ -84,6 +89,11 @@
 - Before committing, check `git status --short` and avoid staging unrelated user changes.
 
 ## Reusable Pitfalls
+
+- Symptom: E 盘根目录积累多个版本/PR 测试副本，按前缀清理会误删未提交代码、签名或生产备份。
+  Cause: 临时工作树及部分备份/出包脚本使用分散的硬编码路径；Android 装配目录内另有嵌套 Git 与绝对 Junction。
+  Fix: 统一使用 `E:\HomerWorkspace\`；先保存带逐文件哈希的恢复快照，再清理可重建副本；用 `git worktree repair` 修复移位的工作树，并重建已核实的链接。
+  Verify: 整理记录、文件哈希、Git 状态与默认路径检查见 `specs/drive-cleanup-20261026/tasks.md`；清理后 E 盘根目录不得出现新的 `homer-*`。
 
 - Symptom: Web 浏览器能下载 Blob，Android 点击后却没有文件；改为外部浏览器下载又缺少应用登录 Cookie。
   Cause: 原生 DownloadListener 原本只处理 HTTPS 外链且不共享浏览器登录态。

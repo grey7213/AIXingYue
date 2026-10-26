@@ -46,7 +46,7 @@ import paramiko
 DEFAULT_HOST = "160.202.46.157"
 DEFAULT_USER = "root"
 DEFAULT_KEY = Path.home() / ".ssh" / "villainy_backup_ed25519"
-DEFAULT_DEST = Path("E:/homer-backups")
+DEFAULT_DEST = Path("E:/HomerWorkspace/backups")
 EXPECTED_HOSTNAME = "ser0YeymdcIz0pT"
 
 BACKEND_DIR = "/opt/ai-fengyue-backend"
