@@ -34,6 +34,8 @@
 
 ## Codebase Map
 
+- 2026-11-04 存储布局已调整：`160.202.46.157` 的 80 GiB ext4 数据盘以 UUID 挂载到 `/data`；`/opt`、`/var/lib/containerd`、`/var/lib/docker`、`/var/lib/homer-dialogue`、`/var/www` 均 bind mount 到数据盘对应目录，业务路径保持兼容。大型备份实际存于 `/data/backups/`，旧入口保留兼容链接。9 个相关服务已添加挂载依赖，数据盘不可用时不能退回系统盘写业务数据。容量检查必须同时看 `df -h / /data` 与 `lsblk -f`，备份暂存容量以实际数据盘为准。验收与保留规则见 `specs/server-storage-cleanup-20261104.md`。
+
 - 2026-10-07 正式 1.18.1（354），Android PR #20 / `465e2a9`：用户本地备份入口 `/app/backup.html`（我的→设置），后端模块 `tools/homer_user_backup.py` 与主 backend 同批部署。ZIP/JSON 预览和导入只创建当前账号私有副本，人设可选恢复，积分/支付/权限不恢复；独立媒体保留引用。12 项后端回归、真实网页/Pixel 6 文件往返、353→354 覆盖升级及官网/GitHub 哈希通过；详见 `specs/user-backup-20261007/tasks.md`。本轮另存数据库单项备份 `E:/homer-backups/homer-prod-20261007-132412/`，不是媒体/runtime 全量备份。
 
 - 2026-10-07 正式发布 1.18.0（353），Android PR #19 合并 head `5e80a63`；Spine 依赖及注册/工坊隔离修复保留。新机 456 项代码校验、真实生成/切换、Pixel 6 282→353 覆盖升级及应用内更新检查通过，官网/GitHub APK 哈希一致。完整记录 `specs/pr19-integration-20261007.md`。R41 后端仅增量修改三处转换/解析边界并加入 `tools/homer_session_cards.py`，不要再次叠加累计补丁。
@@ -89,6 +91,16 @@
 - Before committing, check `git status --short` and avoid staging unrelated user changes.
 
 ## Reusable Pitfalls
+
+- Symptom: 系统盘接近满盘，`df` 只看到约 49G，误以为服务器没有用户购买的 80G 存储。
+  Cause: 另有已格式化但未挂载的 80 GiB 数据盘；仅挂载新盘不会自动搬走系统盘上的目录。
+  Fix: 先用 `lsblk`/UUID 核实磁盘和现有内容，保存挂载与服务配置；在线复制、停写同步及数据库验证后，以原路径 bind mount 切换业务，并配置 systemd `RequiresMountsFor`。验收通过再删除旧副本，恢复写入后不可盲目回退旧库。
+  Verify: 本次 12 个容器、7 个服务、9 个内网及公网路由通过；5 个进程工作目录及 16 个容器挂载指向数据盘，9 个服务的挂载 Requires/After 已核对。`systemctl show` 中转义单元名要用 quoting 解析，bind 来源需结合生成单元与 `findmnt FSROOT`，不能只看运行态 What。
+
+- Symptom: 自定义 SSH 大文件下载显示远程退出码 0，本地文件却少最后一小段。
+  Cause: 远程进程退出状态到达时，SSH 通道的末尾数据可能尚未全部读取；`exit_status_ready()` 不能替代流结束。
+  Fix: 持续读取至 EOF 并排空缓冲，再检查退出码；断点续传先核对已有前缀，完成后核对总字节数和 SHA-256，数据库归档再真解压并做完整性检查。
+  Verify: 本次 327,465,539 B 数据库归档完整落地，远端/本地压缩与解压后哈希一致，SQLite quick_check/integrity_check 均为 ok，4 个归档独立检查 7/7 通过。
 
 - Symptom: E 盘根目录积累多个版本/PR 测试副本，按前缀清理会误删未提交代码、签名或生产备份。
   Cause: 临时工作树及部分备份/出包脚本使用分散的硬编码路径；Android 装配目录内另有嵌套 Git 与绝对 Junction。
