@@ -4,6 +4,8 @@
 
 ## 当前主要入口
 
+- 2026-11-04 网盘和续火花停运：`retire-share-spark-20261104.md`（最终备份、精确删除范围、其他业务保护与空间验收）；本机恢复材料放在 `E:/HomerWorkspace/backups/retired-share-spark-20261104/`。
+
 - 2026-10-26 E 盘根目录整理与固定工作区：`drive-cleanup-20261026/requirements.md`、`design.md`、`tasks.md`。当前本机路径为 `E:\HomerWorkspace\`，历史记录中的 `E:\homer-*` 不作为新任务的输出目录。
 
 - 用户本地备份 / 1.18.1 (354)：`user-backup-20261007/requirements.md`、`user-backup-20261007/design.md`、`user-backup-20261007/tasks.md`（下载、预览、私有副本导入、Android 系统保存与文件选择、生产验收）。

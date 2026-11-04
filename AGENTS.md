@@ -34,6 +34,8 @@
 
 ## Codebase Map
 
+- 2026-11-04 用户已停运并删除 `sharebox.villainy.top`（Seafile 网盘）和 `spark-flow.villainy.top`（续火花 / `spark-keeper`）：五个容器、两个专用网络、部署/数据目录及四个专用镜像已移除，当前保留七个业务容器、七个主机业务服务。后续整机恢复或批量 Compose 操作不得自动重新启用这两个项目；域名保留 HTTP 410 停运响应。最终恢复材料统一保存在本机 `E:/HomerWorkspace/backups/retired-share-spark-20261104/`；范围、删除与验收记录见 `specs/retire-share-spark-20261104.md`。下方 2026-10-07 的 12 容器记录是当时的迁移验收，不能当作当前应运行项目清单。
+
 - 2026-11-04 存储布局已调整：`160.202.46.157` 的 80 GiB ext4 数据盘以 UUID 挂载到 `/data`；`/opt`、`/var/lib/containerd`、`/var/lib/docker`、`/var/lib/homer-dialogue`、`/var/www` 均 bind mount 到数据盘对应目录，业务路径保持兼容。大型备份实际存于 `/data/backups/`，旧入口保留兼容链接。9 个相关服务已添加挂载依赖，数据盘不可用时不能退回系统盘写业务数据。容量检查必须同时看 `df -h / /data` 与 `lsblk -f`，备份暂存容量以实际数据盘为准。验收与保留规则见 `specs/server-storage-cleanup-20261104.md`。
 
 - 2026-10-07 正式 1.18.1（354），Android PR #20 / `465e2a9`：用户本地备份入口 `/app/backup.html`（我的→设置），后端模块 `tools/homer_user_backup.py` 与主 backend 同批部署。ZIP/JSON 预览和导入只创建当前账号私有副本，人设可选恢复，积分/支付/权限不恢复；独立媒体保留引用。12 项后端回归、真实网页/Pixel 6 文件往返、353→354 覆盖升级及官网/GitHub 哈希通过；详见 `specs/user-backup-20261007/tasks.md`。本轮另存数据库单项备份 `E:/homer-backups/homer-prod-20261007-132412/`，不是媒体/runtime 全量备份。
